@@ -1,3 +1,11 @@
+## A hook's OSC 7770 no longer corrupts the row it lands in (osc_interleave) — Rust restart required
+
+- [ ] After a manual `make dev` restart (or `make build`), start Claude Code in a fresh tab several times and confirm the bottom separator/prompt rows stay clean: no `──Try "edit …"` fragment, no stray `──` row, no orphan 1-3 character rows in scrollback. Check `GET /sessions/{id}/terminal/lines` for any `\u{FFFD}` in a separator row. The corruption only appears when the kernel happens to cut Claude's write inside a `─`, so it is intermittent: unit tests replay the exact captured split (and every 2- and 3-way read split), but only live runs show whether another interleaving source exists. Rust does not hot-reload.
+
+## tmux `respawn-pane -k` no longer interrupts a shell's own startup (direnv) — Rust restart required
+
+- [ ] After a manual `make dev` restart (or `make build`) and a rebuilt `tuic`/`tmux` shim, start a Claude Code Agent Teams swarm in a repo whose `.envrc` is slow (commerce-journal) and confirm each teammate pane prints `direnv: loading` / `direnv: export …` with no `^C` and no `direnv: error signal: killed`, and that `echo "${DIRENV_DIR:+set} ${ATLASSIAN_API_TOKEN:+set}"` inside a teammate prints `set set`. Unit tests cover the CLI decision and the topology flag (including a real running job); the live race needs a real slow `.envrc`. Rust does not hot-reload, and `tuic-cli` is a sidecar, so both must be rebuilt.
+
 ## Development backend staleness (2332-3eef) — Rust restart required
 
 - [ ] After an authorized rebuild/restart, confirm the debug warning stays quiet on an unrelated frontend-only edit, appears after editing a Cargo-listed backend or bridge input, remains after reverting that edit (mtime semantics), and is dismissible. Confirm a backend rebuild without restart also warns. The macOS copy runner must check its original Cargo executable and `.d`, not the protected copy. This peer does not restart the daily app.
@@ -627,6 +635,208 @@
 - [ ] [VISUAL] After the next `make dev` restart or rebuild, open a Markdown file with `- [ ]` items in the mobile PWA Files view: tap each checkbox (also just beside it) and confirm the file on disk toggles; tap a paragraph, press Comment, save, and confirm the desktop Markdown tab shows the highlight and comment. Edit the file on the desktop between opening and tapping on the phone and confirm the notice and reload appear with no overwrite. Take a mobile screenshot of the bottom comment bar. Rust does not hot-reload; no desktop instance was launched by this lane. _(NOT VERIFIED 2026-10-12: needs the desktop WebView/Tauri UI, which a headless tuic-remote does not have, and this lane may not launch a desktop. Isolated headless tuic-remote built from branch chore/1706-a443-to-test-runs (main 67ccd72c3) and run on the rb box; no desktop, no Boss instance.)_ _(audit 2026-10-13: HUMAN — phone/PWA + screenshot)_ _(triage 2026-10-14: WAITS — Needs Boss’s phone/tablet or installed PWA for the specified device behavior.)_
 ## Paged MCP terminal output (1551-5fa4) — Rust restart required
 
+## Socket roots under TMPDIR (tmp-dir-cleanup phase B, 2026-10-09) — Rust restart required for the IPC log
+
+Unit and shell tests cover the budget, the resolver, relative binds and the fixture launcher; these need a full or unsandboxed run.
+
+- [ ] **Full gate, sandboxed and not.** `./scripts/check-gate.sh` inside the agent sandbox (72-byte
+  `TMPDIR`) and once outside it (~49 bytes): the socket tests pass, `named_instance.rs` (tuic-cli,
+  tuic-bridge) passes under nextest, and afterwards nothing new exists under `/tmp`,
+  `/private/tmp` or as a `t.XXXXXX` dir in `$TMPDIR`. Inside the sandbox
+  `mdkb_reports_symbol_lines_zero_based` and `named_local_identity_requires_that_instances_socket`
+  print `UNCHECKED` (expected); outside it they run for real.
+- [ ] **Named instance with a long TMPDIR.** Start a second `make dev` of the same named instance
+  from inside the sandbox: its log says the `tuic-mcp-<hash>-<pid>.sock` path is over the
+  103-byte limit and names `TMPDIR`/`TUIC_SOCKET`, instead of three opaque SUN_LEN bind failures.
+
+## Private temp dir for mdkb install (tmp-dir-cleanup phase A, 2026-10-09) — Rust restart required
+
+Unit tests cover the staging helpers with fake files; this needs the real tool.
+
+- [ ] **mdkb install with elevation.** With `/usr/local/bin` not writable by you, Settings → install
+  mdkb: the admin prompt appears, mdkb lands in `/usr/local/bin/mdkb` and runs, and afterwards no
+  `mdkb-install*` directory is left in `$TMPDIR` (on Linux with `TMPDIR` unset: none in `/tmp`, and
+  a pre-created `/tmp/mdkb-install` owned by another user is ignored).
+
+## Test scratch without `~/Gits` (gits-dir-cleanup, 2026-10-09) — no app restart needed
+
+Unit and shell tests cover the resolvers; these need a real, unsandboxed run.
+
+- [ ] **Full gate inside the agent sandbox.** `./scripts/check-gate.sh` from a sandboxed agent
+  session (no write access to `~/Gits`) gets past `test-shell` and the `tuic-cli` socket tests no
+  longer fail with EACCES. Afterwards nothing new exists under `~/Gits/.tmp` or
+  `<checkout>/.tmp/tuic-tests`, and no `t.XXXXXX` socket root is left in `$TMPDIR`.
+- [ ] **Exec-scan timing on macOS.** Time `make check` twice with the new default
+  (`$TMPDIR/tuic-tests`) and twice with the opt-in `TUIC_TEST_TMP_BASE=<checkout>/.tmp/tuic-tests`,
+  outside the sandbox, on a quiet machine (the in-checkout base is unsafe wherever writes to the
+  checkout's `.git/hooks`/`.git/config` are denied, as in the sandbox, so never recommend it as a
+  default). If the default is noticeably slower or a first-exec timing test
+  flakes, record the numbers in `src-tauri/AGENTS.md`'s exec-scan bullet and consider a
+  private, `$TMPDIR`-independent base you own (never a literal `/tmp`, which
+  `scripts/check-no-hardcoded-tmp.mjs` rejects) as the opt-in mitigation.
+- [ ] **Remote fixture client.** `scripts/run-remote-fixture.sh <test-support tuic-remote>` prints
+  `Fixture TMPDIR: …`; a separate shell with that `TMPDIR` exported reaches the fixture with
+  `tuic ls`.
+
+## Native process inspection (ps-exec-removal, 2026-10-09) — Rust restart required
+
+`ps` could not run in the sandbox where this was built, so native vs `ps` parity was never compared on a real machine.
+
+- [ ] **Process monitor.** Open the process manager with a few agent tabs busy (`cargo build`): every session lists its descendants, RSS is plausible, CPU% is non-zero for the busy ones (now a lifetime average on macOS, so lower than Activity Monitor's instant value).
+- [ ] **Background work.** In a Claude/Codex tab start `sleep 300 &` via a tool call and end the turn: the tab stays Working until the sleep exits; integration daemons (`mdkb`, `tuic-bridge`, `codex-code-mode-host`) still do not count.
+- [ ] **Nested prompt + sudo.** In a plain shell tab run `sh`: after the prompt-probe silence the tab returns to idle. Then `sudo -s` (or `sudo su`): with `ps` available the tab returns to idle and the log shows ONE `process_snapshot ... falling back to ps` warning; `sudo bash -c 'sleep 60'` stays busy.
+- [ ] **Codex idle in a sandbox.** Run Codex with its sandbox on in a TUIC tab: `state=idle` arrives at the end of each turn (the notify script now writes to `$TUIC_PTY_TTY`).
+- [ ] **Diagnostics.** `POST /diagnostics {"enabled":true}`, wait 30s: the HEALTH line shows a real thread count and `children_cpu=` naming a busy child.
+
+## Dropped-items actions batch 2 (dropped-items-review #16/#22/#23/#31/#41-#44, #21 fix, 2026-10-09) — Rust restart required
+
+Unit/integration tests cover the logic; these need a running app (isolated `make dev`) and real agents.
+
+- [ ] **Injected text is appended, never cleared (#16).** In a Claude Code tab type `half` in the
+  composer (don't press Enter), then click a suggestion chip / run a "send immediately" Smart
+  Prompt: the composer shows `half` + the injected text (nothing wiped), and Enter submits the
+  combined line. Repeat in a zsh tab and in Codex. `session action=submit` / `tuic agent type`
+  against a composer holding text is still refused ("partial_composer"), and
+  `tuic agent type --no-clear` appends. On Windows (cmd/PowerShell) a Smart Prompt no longer
+  shows a literal `^U`/`§`.
+- [ ] **Renames are live in other windows/clients (#22).** Open the same instance in the desktop
+  window and a browser tab (`http://127.0.0.1:9877/`). Rename a tab in the desktop window: the
+  browser tab bar/sidebar update within a second, and vice versa. No flicker/ping-pong (watch
+  the tab title for 10 s and CPU stays flat); an agent's OSC title still renames an unpinned tab.
+- [ ] **tmux shim title clearing (#23).** In a Claude swarm (tuic-as-tmux), `tmux select-pane -t
+  %N -T build` names the teammate tab live in both clients; `tmux select-pane -t %N -T ""` drops
+  the pin (the agent's own OSC title can rename it again); a plain `tmux select-pane -t %N`
+  changes nothing. A tab you renamed yourself survives `-T ""`.
+- [ ] **Agent spawn pixel size (#31).** Spawn an agent via MCP/`POST /sessions/agent` running
+  `sh -c 'stty size; printf "\e[14t"; sleep 5'` or a Kitty-graphics tool (`timg`, `kitten icat`)
+  before any client attaches: the tool sizes its image instead of reporting a 0x0 window.
+- [ ] **Session Diff "ask" toast (#41).** With Settings › General › Diffs › Auto-open = Ask, let a
+  Claude session edit a file: a "Session made changes" toast appears (above the terminal input,
+  not over it) with "Open Session Diff", and the same notice is in the bell once; several
+  sessions at once collapse into at most two cards.
+- [ ] **Ask AI with AI Chat disabled (#42).** Turn experimental AI Chat off, Alt+double-click a
+  match whose rule's default action is Ask AI: a warning toast "AI Chat is disabled", no panel
+  flag flips (turning AI Chat back on does not pop the panel open).
+- [ ] **Fold at viewport after eviction (#43).** Fill scrollback past the cap with long command
+  output so the oldest block's prompt is evicted; scroll to the top and press Cmd+Shift+.: it
+  folds the first visible block (or nothing), never an invisible evicted one.
+- [ ] **Native dialogs (#44).** A plugin with `ui:file-picker` (`host.pickFile`) and Settings ›
+  Smart Selection/Smart Prompts › Export… open the native Open/Save panels (filter "JSON",
+  suggested file name pre-filled); after a sleep/wake cycle they still open without crashing.
+- [ ] **Wrap after a dismiss (#21 fix).** Define `claude() { command claude "$@"; }` in `.zshrc`;
+  open a terminal, dismiss the wrap prompt; set Settings › Agents › Claude › "If your shell
+  already defines its own function" to Wrap; open a new terminal: the prompt appears again and
+  "Wrap my function" wraps it (the launched claude carries TUIC's `--settings`).
+
+## Dropped-items actions batch 1 (dropped-items-review D1/#2/#4, 2026-10-09) — Rust restart required
+
+Unit/integration tests cover the logic; these need a running app (isolated `make dev`).
+
+- [ ] **Remote Server honours StrictHostKeyChecking=Yes (D1).** Edit a Remote Server — SSH
+  connection: the StrictHostKeyChecking select is enabled and offers AcceptNew and Yes (a new
+  server starts at AcceptNew). Save `Yes` for a host already in `~/.ssh/known_hosts`: Connect
+  works. Point it at a host NOT in known_hosts (or temporarily move the entry): Connect fails
+  with ssh's host-key error instead of silently pinning the key; switching back to AcceptNew
+  connects and adds the entry. Reopening the editor still shows the saved value.
+- [ ] **Warm badge after a reload (#2).** Create a worktree in a repo with large git-ignored
+  build dirs (warm enabled); while the sidebar shows "Warming x/y", reload the window: the
+  badge is back on the next refresh and keeps updating; after the copy finishes it clears. A
+  reload after the warm finished shows no badge (allow up to ~60 s of git-cache staleness).
+- [ ] **Configured script timeouts (#4).** In the instance's `repo-defaults.json` set
+  `"setup_script_timeout_secs": 5` and `"archive_script_timeout_secs": 5`, use `sleep 30` as
+  Setup and Archive Script: the setup fails after ~5 s ("Script timed out after 5s"), and
+  removing/archiving the worktree is refused after ~5 s. Change any Settings › Worktrees
+  default and confirm both keys are still in `repo-defaults.json`.
+
+## Test Connection + one-shot ssh fixups (tunnel-session-review R1/R2/R3/R5, 2026-10-09) — Rust restart required
+
+Unit/integration tests cover the logic (real TLS server, real fake-ssh processes);
+these are the end-to-end checks through the editor UI against real daemons.
+
+- [ ] **Test Connection honours a Direct pin.** Against a remote daemon serving its
+  self-signed certificate: before pinning, Test Connection says "certificate not trusted
+  (SHA-256 …)"; after Connect → Accept pins it, Test Connection says Reachable; after the
+  remote certificate is regenerated, it says "certificate changed" (and Connect refuses).
+- [ ] **Blank-credential Test Connection against a protected daemon.** With a Direct or Local
+  connection to a daemon that has a username/password set, leave both credential fields
+  empty and press Test Connection: it says "requires a password", not "not configured
+  yet". Against a daemon with no credentials it still says "not configured yet".
+- [ ] **SSH Test Connection checks the daemon (real sshd).** For a Remote Server — SSH
+  connection to a real host: with the daemon running, Test Connection says Reachable and
+  returns within a second or two (proves ssh's `-W` forward ends by itself when the daemon
+  closes the connection, with stdin held open); with the daemon stopped it says "SSH works,
+  but nothing listens on the remote host's port …"; with a wrong SSH key it still says
+  authentication failed. An SSH Tunnel profile's Test Connection is unchanged (SSH only).
+- [ ] **No leftover ssh after a timed-out Test Connection.** Point a Remote Server at a host
+  whose `ProxyCommand` hangs (e.g. `ProxyCommand sleep 60`), press Test Connection, wait
+  for the timeout: `pgrep -fl 'sleep 60'` shows nothing left behind.
+
+## Post-rebase fixups B1/B2/C (2026-10-08) — Rust restart required
+
+Code-level tests exist for each item (see the fixup commits after `ece9b8314`);
+these are the end-to-end checks only a running app can answer. Use an isolated
+`make dev` (per-checkout `TUIC_APP_INSTANCE`) and throwaway repos.
+
+- [ ] **Shell readiness gate.** MCP `session action=create`, `repo action=worktree_create
+  spawn_session=true`, `POST :9877/sessions` and `POST :9877/sessions/worktree` return
+  only once the new shell shows its prompt (at most ~5 s, then the id comes back anyway
+  with a warning log): a command sent right after create runs in a ready shell (no
+  swallowed keystrokes, no p10k wizard answered by it). `tuic new` still succeeds.
+  Agent spawns are not gated.
+- [ ] **`userwrap` consent prompt is bound to its terminal.** In zsh with your own
+  `claude` function and the wrap setting on "ask", the "wrap your claude function?"
+  question still appears once for the real shell. Output that forges the request raises
+  nothing: `printf '\e]7770;userwrap=claude:1-2:%s\a' "$TUIC_SESSION"` run as a command
+  (ignored while a command runs), and the same with another terminal's session id or the
+  old two-part `claude:1-2` form even when emitted from the prompt (e.g. put into
+  `PROMPT`).
+- [ ] **Standby again for hidden clients.** Minimise the window (or background the browser
+  tab) for over 30 s: the session can go to standby; bringing it back to the front wakes
+  it. A visible, focused tab keeps refreshing as before.
+- [ ] **Add Terminal from the Global Workspace keeps the other branch's split.** With a
+  split on branch A, activate the Global Workspace, use Add Terminal for branch B, then
+  go back to A: A's split is intact.
+- [ ] **Double-click a Smart Prompt into a busy agent** (and Execute in its variables
+  dialog): it is held back like a single click, not submitted.
+- [ ] **Six key-bound actions run from their key:** bind keys to Explain session state,
+  Toggle diagnostics capture, SSH Tunnels, Process Manager, Generators and Show remote QR;
+  each key opens/does its action.
+- [ ] **Timed-out Setup/Archive/Run Script stops everything it started.** A Setup Script
+  `sleep 1000 & sleep 1000` hit by the timeout leaves no `sleep` behind (`pgrep sleep`);
+  a script that backgrounds a child holding stdout returns within ~2 s of its own exit.
+- [ ] **SSH provisioning hardening** (disposable SSH host): deleting a connection stops
+  only that connection's own daemon instance; a provisioned daemon with live sessions is
+  left running on disconnect (warning in the log); clicking Start/Stop/Update quickly
+  serialises (no interleaved runs); the stop route refuses a daemon this app did not
+  start in this run.
+- [ ] **Mobile still switches language** after the `i18n/locale.ts` split: on the phone
+  PWA change the language in Settings; strings update without a reload error.
+- [ ] [HUMAN] **UX decision: right-click on ANY word opens the Smart Selection menu.**
+  wip's default "Word bounded by whitespace" rule has a Copy action, so right-clicking any
+  plain word in a terminal now shows the smart menu instead of the app's terminal context
+  menu (same on the wip tip; test c8e7d4fc7). Decide whether that is wanted, or the word
+  rule should lose its default action so the normal context menu shows for plain words.
+
+## Security hardening batch A (post-rebase fixups) — Rust restart required
+
+- [ ] After Boss's next planned backend restart: `kitty +kitten icat --transfer-mode=file` and `--transfer-mode=memory` (or `timg -pk`) still display and leave no `tty-graphics-protocol*` temp file or shm segment behind; a `t=t` file without that name is not deleted. A Remote Server — Local Connect/Test Connection to a real second instance (isolated `TUIC_APP_INSTANCE`) still succeeds, and fails "could not be verified" when the port is held by something else. Settings → Terminal → Custom Environment Variables is hidden in basic mode while empty and refuses `TUIC_*`/`ZDOTDIR`/`LD_*`/`DYLD_*`. `tuic agent type <agent> "x"` submits, and is refused (exit 1) while the agent's input box holds text. Session Diff revert of a repo file and of a `~/.claude/plans/` file still works. Rust does not hot-reload; this lane launched no desktop instance.
+
+## !! Deferred initial prompt — known 500+ s hang risk (wip), now mitigated by a watchdog — Rust restart required
+
+- [ ] **Read first.** Every interactive Claude spawn (MCP `agent action=spawn`, HTTP `POST /sessions/agent`, the desktop agent menu) withholds the prompt from argv and delivers it through the mailbox after the child's MCP bind (kept from wip by user decision). Pre-rebase wip recorded real-task spawns hanging **500+ s** on this path: the forced "[TUIC] message available" write could land before the Claude TUI was ready (or in its trust dialog), still count as a submitted turn, and nothing retried. Fixup B2.2 adds: a peer row at spawn on the HTTP and desktop paths (their prompt was LOST when the bind outlived 5 s), ~500 ms of PTY quiet before the forced write, and a 20 s watchdog that types the prompt itself when the inbox is still unread and no new turn started. After Boss's next planned restart, in an isolated `TUIC_APP_INSTANCE`: spawn a real Claude three ways (MCP `agent spawn`, the agent menu, `POST /sessions/agent`) with a short real task, including once in a not-yet-trusted folder; each must start working within ~25 s (log line `deferred initial prompt was still unread … typed it directly` means the watchdog saved it). A desktop spawn that restores a persisted tab identity must also get its prompt. If any spawn still sits idle with the prompt unread, capture `explain-state` and the hook log before restarting. Rust does not hot-reload; this lane launched no desktop instance.
+
+## Exit of a tab no window rendered (Batch 47 review) — frontend only
+
+- [ ] With two windows (or the desktop app plus a browser tab on the same instance), open a plain shell tab in window A on a branch window B is NOT showing, then `exit` it in A. Window B's copy of that tab must close too (an agent tab must turn grey "exited") without first switching B to that branch. A tab B is showing must still close exactly once. Frontend only (HMR).
+
+## SSH daemon provisioning, confirmed (wip 2ba33a3f5 replay) — Rust restart required
+
+- [ ] After Boss's next planned backend restart and a matching `tuic-remote` release for this version, against a disposable SSH host in an isolated `TUIC_APP_INSTANCE`: a Never-deploy "Remote Server — SSH" with "Offer to start the remote daemon if it is not running" and no daemon running shows **Start remote daemon…**; the dialog lists the exact commands; Cancel runs nothing; Accept starts it (with Instance ID: `tuic-remote --instance <id>`, `tuic-remote-<id>.pid`) and connects; Disconnect stops it (unless "Leave it running" is checked). Against a daemon with no password, **Set remote password…** sets the saved one, a second attempt reports "already has credentials; nothing was changed", and the daemon needs a restart to use it. No desktop instance or SSH host was used by this lane; Rust does not hot-reload.
+
+## Nested SSH model migration (wip afc10a2c9 replay) — Rust restart required
+
+- [ ] On Boss's next planned backend restart, check `<config_dir>/connections.json` and `<config_dir>/tunnels/*.toml`: each SSH entry now has a nested `ssh` block, and a `*.pre-nested-ssh-<timestamp>.bak` beside each rewritten file holds the original bytes. Then Connect an existing SSH remote machine and start an existing tunnel — both must behave exactly as before (same host, port, identity, compression). A second restart must create no new `.bak`. Rust does not hot-reload; this lane did not restart the live app.
+
 ## Progress blocked badge supersede (1537-6c4b) — Rust restart required
 
 ## AI Chat provider retry line (1536-1c9c, ego 288-f994)
@@ -1189,6 +1399,1830 @@ test can reach is the live process: these are the checks that need one.
 
 - [ ] Set the path, open the panel on a repository, send a turn. The answer must stream in, reasoning must fold into a *Thinking* disclosure, and tool calls must stay one card each as their status changes. _(NOT VERIFIED 2026-09-29: Needs real ego streaming a turn with reasoning and tool calls.)_ _(audit 2026-10-13: HUMAN — Requires interaction with Boss-owned active app/repository or vendor/provider process; no ownership of that state. Contract test/source search performed…)_ _(triage 2026-10-14: WAITS — Production stream/thought/tool-card component checks passed in core-ui-tests.log; actual vendor stream requires owned ego/backend runtime, currently unavailable.)_
 - [ ] A live prompt: check whether ego echoes the user message back as `user_message_chunk`. _(NOTE: the panel now renders server `promptSent` rather than a local optimistic message; if ego also sends a live user chunk, the two sources could duplicate it.)_ _(audit 2026-10-13: HUMAN — Requires interaction with Boss-owned active app/repository or vendor/provider process; no ownership of that state. Contract test/source search performed…)_ _(triage 2026-10-14: WAITS — Recorded ACP echo/de-duplication component behavior retained; requested fresh live echo observation needs real ego conversation on owned runtime. rb unavailable.)_
+
+## Split panes survive repo switches; tmux swarm splits land in their own branch (2026-10-06)
+
+Frontend only (vitest-covered, not yet seen in the real app). With a swarm of 3-4 tmux-shim
+terminals in repo A: (1) split them, click a terminal under repo B in the sidebar, open and
+switch branches in B, then click back into A — the split should still be there. (2) Close one
+of the four while viewing B, return to A — the other three stay split. (3) While viewing repo B,
+let an Agent-Teams lead in repo A spawn teammates — B's layout must not change, and A shows the
+tiled split when you open it. [HUMAN] only for the live swarm in (3); (1)/(2) can be driven
+via `make dev` + `:9877` with throwaway sessions.
+
+## An idle Agent-Teams teammate no longer holds its lead "working" (2026-10-01)
+
+Rust change, needs a `make dev` restart. Claude Code lists a teammate as `running` in every
+`Stop` payload until it is shut down, so a lead with any teammate used to stay
+`declared_background_work=true` forever (and the tab read "working", with completion/suggest/
+standby held). The lead now counts as working only for non-teammate background work, or while a
+teammate it owns (tmux pane `lead_session_id`, sent by `tuic-cli` as `origin_session_id`) has a
+busy terminal. Needs the rebuilt `tuic-hook` sidecar (it now also emits `bgtasksummary`): run
+`cargo build --package tuic-hook` and let the app re-install hooks.
+
+- [ ] Spawn an Agent Teams swarm from a Claude Code lead, let every teammate finish and go idle.
+  Once the lead's own turn ends, the lead's tab reads **idle** (not "working"); before this
+  change it stayed working until the next prompt.
+- [ ] While a teammate is actually working, the lead's tab reads **working**; the moment that
+  teammate finishes it returns to idle without any input in the lead.
+- [ ] A lead with a teammate idle AND a `run_in_background` shell task still running reads
+  working; it goes idle when the shell task's completion ends the turn.
+- [ ] `GET /sessions/{lead}/explain-state`: `epoch_flags.declared_background_work` shows
+  `breakdown_source: "summary"`, `teammate_running`, `teammates_busy`, `counts_now`, `age_ms`,
+  and a `swarm.teammates` list with each teammate's `shell_state`. On a teammate's session,
+  `swarm.lead_session_id` names the lead.
+- [ ] Explain-state modal (tab context menu) on a lead with teammates: a **Declared background work**
+  section (counts_now, age, breakdown, teammates busy, unlinked) and a **Swarm** section (lead and each
+  teammate's state) appear; on a teammate, the Swarm section names its lead. Leave the modal open while a
+  teammate goes busy -> idle and re-open: values follow. With the modal open, make the tab's badge and the
+  backend disagree (e.g. let the agent finish) and confirm the mismatch banner appears/clears without
+  closing the modal.
+- [ ] Close a teammate's terminal while the lead's last Stop still lists it: the lead keeps reading working
+  until its next Stop (expected trade-off), and the explain payload shows it as unlinked, not as a listed
+  teammate.
+- [ ] Smart Prompt injection into a lead whose only remaining work is an idle teammate works (no
+  "Agent is busy").
+- [ ] Old `tuic` binary on PATH (no `origin_session_id`) or a plain `tuic alias` swarm: the lead
+  still reads working while a teammate exists (fail-safe, the old behavior) and `explain-state`
+  shows `unlinked_teammates > 0`. It must never read idle while a teammate is working.
+- [ ] Older installed `tuic-hook` (no `bgtasksummary`): the lead still reads working while a
+  teammate exists (old behavior, not worse). `explain-state` shows `breakdown_source:
+  "statuses_only"`.
+
+## `is_remote` now means "created by an agent", not "created via HTTP/MCP" (2026-09-30)
+
+Every `POST /sessions`/`/sessions/worktree` call from our own HTTP client (the browser UI's
+`usePty.ts`) and mobile's `NewSessionSheet.tsx` agent launch (`POST /sessions/agent`) now send
+`user_initiated: true`, which registers
+`is_remote: false` — the goal being that a terminal a human starts from the browser and later
+continues in the desktop app no longer shows the `PTY · ` badge/remote styling, and survives a
+browser close exactly like an app-created tab (closing the browser must never close it — verify
+this specifically). A raw `curl` caller or an MCP/tmux-shim spawn needs no changes and stays
+`is_remote: true`.
+
+- [ ] Create a terminal from the browser UI ("+" button). Confirm in the desktop app: no `PTY`
+  badge, `remoteTab` styling absent, tab does NOT auto-close when its shell exits (behaves like a
+  normal app-created tab).
+- [ ] With that browser-created terminal still open, close the browser tab/window. Confirm the
+  terminal is still visible and usable in the desktop app afterward.
+- [ ] Create a session via a raw HTTP call with no `user_initiated` field (e.g. `curl -X POST
+  .../sessions -d '{}'`). Confirm it IS badged `PTY · ` (once it also has an `agent_type`) and gets
+  the auto-close countdown on exit — unchanged from today's behavior.
+- [ ] Have an agent (MCP `agent action=spawn`, or a swarm/tmux-shim pane) spawn a session. Confirm
+  unchanged remote/auto-close/notification-muting behavior end to end.
+
+## `debug action=explain_state` now surfaces `agent.agent_session_id` (2026-09-30) — **Rust, needs a `make dev` restart**
+
+Added while investigating why a "why is this session busy" report took a pid-registry detour
+to find the right hook transcript: `AgentExplain` (`pty/explain.rs`) gained an
+`agent_session_id: Option<String>` field, mirrored straight from
+`SessionState.agent_session_id` (already tracked for hook-instrumented Claude sessions, per
+the exit-time resume banner feature — just never surfaced in this diagnostic before). A
+pasted `explain_state`/`GET /sessions/{id}/explain-state` snapshot can now be joined directly
+against `hook-debug.log` by this id, with no need to resolve `child_pid` →
+`~/.claude/sessions/<pid>.json` first. Unit-tested
+(`explain_session_state_surfaces_the_hook_reported_agent_session_id`); needs a rebuild to
+confirm the live MCP `debug action=explain_state` / HTTP response actually includes the new
+field for a real hook-instrumented session (`[HUMAN]` not attempted — the orchestrator
+instance this would be checked against is a separately-launched release build per this
+repo's own "Test instance vs orchestrator instance" rule, so it can't observe this source
+change until a real rebuilt binary replaces it).
+
+## Three desktop PTY-creation commands sized their VT screen at a hardcoded 24x220 instead of the real pane (2026-09-30) — **Rust, needs a `make dev` restart**
+
+Found while investigating a user report ("pane size and not showing the bottom of the
+screen" — previously fixed in HTTP client mode, starting to recur in the desktop app).
+`register_pty_session` (`mcp_http/session.rs`) already builds the VT screen at the PTY's real
+geometry for the shared spawn paths (`spawn_pty_session`, MCP `agent spawn`, `POST /agents`),
+but the three desktop commands that build their own `VtLogBuffer` —
+`pty::commands::create_pty`/`create_pty_with_worktree` (behind **every** plain new terminal
+tab, worktree tab included) and `agent::spawn_agent` (desktop "New Agent" launch) — opened the
+real PTY at the caller's `rows`/`cols` but built the screen model (what agent-state detection,
+choice-prompt parsing and the chrome cutoff read) at a hardcoded `24x220`. Any pane taller than
+24 rows had its bottom rows (input box, dialog footer, Enter-to-select line) invisible to
+detection.
+
+Fixed by building the VT screen at exactly the PTY's `rows`/`cols` at all three sites — the
+same contract as `register_pty_session`, which on main has no 220-column floor any more (#1413-7dcc
+removed it; wip's version of this fix still floored the width through a `vt_screen_size_for`
+helper, which was not carried over). Tests in `mcp_http/session.rs`:
+`registration_sizes_the_vt_screen_to_the_real_pty_height` (40x300 PTY => 40-row, 300-column
+screen) beside main's `headless_registration_and_same_size_resize_preserve_requested_width`,
+and `desktop_spawn_commands_size_the_vt_screen_to_the_real_pty` (a source guard: the three
+desktop commands are `#[tauri::command]`s with no `tauri::test` scaffolding, so no hardcoded
+`new_vt_log_buffer(24, 220` may remain in `pty/commands.rs` or `agent.rs`).
+
+- [ ] [HUMAN] After restarting `make dev`, open a **plain new terminal tab** (not an agent
+  launch) in a tall pane (more than 24 rows — e.g. a maximized window), run something that
+  fills the bottom rows (e.g. `htop`, or any TUI with a footer), and confirm the full screen —
+  including the bottom rows — is captured correctly via `ai_terminal_read_screen`/`debug
+  explain_state` or an HTTP screen read for that session. This is the most commonly-hit of the
+  three fixed sites.
+- [ ] [HUMAN] Repeat the same check for a **worktree tab** created via "Create Worktree" (exercises
+  `create_pty_with_worktree` specifically).
+- [ ] [HUMAN] Spawn a new agent from the desktop app in a tall pane with a task that triggers a
+  choice prompt (`AskUserQuestion`) or a plan-approval dialog. Confirm the awaiting/badge
+  detection fires correctly and the dialog's footer/options are recognized (`agent::spawn_agent`).
+- [ ] [HUMAN] Open a narrow pane (fewer than 220 cols) and a very wide one (more than 220 cols)
+  with any of the three commands and confirm no truncation or misdetection at the right edge —
+  the screen now starts at the PTY's real width with no 220-column floor, and grows/shrinks with
+  each resize.
+
+## `agent action=spawn` defers a Claude prompt until MCP identity binds (2026-09-29) — **Rust, needs a `make dev` restart**
+
+**REGRESSION FOUND live-testing this against the orchestrator instance (v1.7.7-nightly.20260930.b32b2990f) on 2026-09-30 — the prompt is never delivered at all, not just raced.** 4/4 deferred-path spawns (`agent_type: "claude"`, no `print_mode`) reproduced the same hang: `spawn` returned immediately with `prompt_delivery: "queued — withheld..."` as documented, and `wait_for_mcp_identity_bound` bound in ~400-1200ms (well inside the 5s fail-open window, confirmed via `debug logs` `mcp_initialize` entries matching the session's `tuic_session`) — but the composer stayed permanently empty (just the rotating placeholder hint) for 3-6+ minutes, `session status` showed `shell_state: "busy"`/`agent_state: "working"` the whole time with `busy_duration_ms` climbing unbounded, and `debug explain_state` showed `queued_commands: 1` that never drained, with the busy evidence pinned at `rank: "protocol", source: "hook-busy"` from the instant of spawn and never cleared. A 5th spawn using explicit `args: ["--verbose", "{prompt}"]` (the bypass path, item 16 below) worked perfectly — delivered via argv, replied and completed in ~5s — confirming the bypass path is fine and the bug is isolated to the deferred-delivery mechanism itself.
+
+Root cause (from reading `mcp_transport.rs`'s `spawn_deferred_prompt_delivery` and `pty.rs`'s `deliver_notice_to_pty`/`deliver_notice_to_managed_pty`): delivery doesn't type the prompt directly — it files the prompt as an `AgentMessage` in the recipient's inbox, then delivers `PEER_MAIL_WAKE` via the same queued-injection mechanism `agent action=send` uses for any managed peer, which only flushes into the composer on that session's own BUSY→IDLE transition (`flush_pending_injections_blocking`/`should_inject_now`). A freshly spawned `claude` process launched with **no prompt in argv at all** (the new case this feature introduces — every prior spawn path always had a real task immediately) reaches its real interactive welcome screen and is genuinely idle for input, but `tuic-hook`'s own busy/idle signal for that session appears to have gone busy at spawn (`hook-busy`, protocol rank) and never sent whatever event would clear it — plausibly because Claude Code's hook lifecycle for a "launched with nothing to do" session never fires the turn-boundary event the busy→idle clear depends on. Since the injection queue only flushes on that transition, the wake notice (and therefore the real prompt) never reaches the terminal — a real deadlock, not the documented 5s-worst-case race.
+
+**FIXED 2026-09-30 (`f749c2098` + fixup `c2687d405`):** added `pty.rs::stuck_on_pre_first_turn_session_start` (true when `turn_epoch == 0` AND the busy evidence is Protocol-rank `hook-busy` — the unambiguous signature of a session that has never had a real turn submitted, per that function's own doc comment) and wired it into `deliver_notice_to_pty`: when this specific deadlock shape is detected, write the wake notice directly via `write_claimed_agent_command` instead of queuing for a BUSY→IDLE transition that can structurally never arrive. Two new regression tests pass against a real recording PTY: `pty::tests::deliver_forces_injection_when_stuck_on_pre_first_turn_session_start` (asserts the forced write actually reaches the pty and `turn_epoch` becomes 1) and `pty::tests::deliver_does_not_force_injection_once_a_real_turn_has_started` (asserts a genuinely mid-turn busy session is never force-injected).
+
+**Live re-verification attempted 2026-09-30, partially confirmed, not fully clean.** Spawned a real `claude` process via a standalone `make dev` instance's `POST /sessions/agent` (the orchestrator was intentionally not used this pass). Confirmed via `explain-state`: `turn_epoch` advanced `0 → 1` with a real `user_submit` trail event recorded — this is the exact forced-injection code path firing in a live process, and a concrete, measurable difference from the pre-fix behavior (which kept `turn_epoch` pinned at 0 and `queued_commands` at 1 forever). Could not cleanly confirm the agent visibly replying end-to-end, because testing this mechanism against a **named** standalone instance requires two manual workarounds neither present in production: (1) named instances deliberately skip MCP-bridge auto-install (see `src-tauri/AGENTS.md`), so reaching a real MCP bind at all requires hand-writing a project-local `.mcp.json` with `TUIC_SOCKET` pointed at the instance's actual (hashed, `$TMPDIR`-based) socket path — `tuic-bridge`'s own discovery has no named-instance awareness and would never find it otherwise; (2) a freshly-trusted MCP server needs an interactive "Use this MCP server?" approval Enter/arrow-key sequence sent before it starts accepting tool calls, which is not present on a production instance where the bridge is pre-installed/pre-trusted, and which raced against the automatic deferred-delivery write in this session's attempt, muddying the very end of the trace. The core deadlock (message queued forever, `turn_epoch` never advancing) is disproven live; full "agent completes and replies" needs either a cleaner standalone rig (script the trust-approval before the deferred delivery fires) or a confirmed-rebuilt orchestrator to test against next.
+
+- [x] [HUMAN] ~~After restarting `make dev`, use `mcp__tuicommander__agent action=spawn` with `agent_type: "claude"`, no `print_mode`, and a deliberately trivial, no-tool-needed prompt (e.g. "Reply with literally just the word ALIVE, no tool calls.") several times in a row. Confirm the spawned session reliably reports having live `mcp__tuicommander__*` tools (e.g. ask it to list its own `mcp__` tools) instead of intermittently seeing zero — this is the exact race reproduced live in the session that motivated this fix (a fast-answering agent could see its own MCP handshake still in flight).~~ Superseded by the regression/fix above — the tool-list race can't even be evaluated until delivery itself works. _(2026-09-30: forced-injection path confirmed firing live per the note above; full tool-list re-check still needs a clean rig or the orchestrator.)_
+- [x] [HUMAN] Confirm `agent action=spawn` itself still returns immediately (no added latency) — the wait for MCP identity binding happens in a detached background task, not before the tool call returns. _(verified 2026-09-30: all 5 spawns returned in well under 1s with `prompt_delivery`/no-field as appropriate; the latency contract holds even though delivery itself hangs afterward)_
+- [ ] [HUMAN] Spawn a normal, real-task Claude agent (something that needs at least one tool call) and confirm it behaves exactly as before — the deferred-delivery path should be invisible for real work, since MCP binding reliably completes well before a real task's first tool-call attempt. **Still needs re-verification post-fix** (2026-09-30's live pass above only exercised a trivial no-tool prompt and hit the trust-dialog-race ambiguity described above before reaching a real task).
+- [x] [HUMAN] Spawn with explicit `args` (e.g. `args: ["--verbose", "{prompt}"]`), and separately via a named run config whose own `args` are configured in Settings → Agents, and confirm both still deliver the prompt directly in the launch argv, unchanged — this fix is deliberately scoped to the plain `agent_type: "claude"` (no explicit `args`, no run config that defines its own `args`) shape only. A run config that matches by name but defines no `args` of its own (the ordinary passthrough case) IS covered by the fix, same as omitting `binary_path` entirely. _(verified 2026-09-30 for the explicit-`args` case: spawn response had no `prompt_delivery` field, prompt landed in argv, agent replied "ALIVE" and completed in ~5s. Did not test the named-run-config-with-own-`args` variant — the explicit-args case already proves the bypass branch works, and the stuck deferred path above is the actionable finding.)_
+- [ ] **Still do not delete this section — the fix has landed and is unit-tested, but the live end-to-end path (agent visibly completing a real turn after forced delivery) has not been cleanly confirmed yet.** See the 2026-09-30 re-verification note above for exactly what was and wasn't confirmed, and the two options for a cleaner follow-up pass (scripted trust-approval on a standalone instance, or a confirmed-rebuilt orchestrator).
+- [ ] **NEW REGRESSION found 2026-09-30, live against the orchestrator (confirmed running `2c3bda965`, which has `f749c2098`+`c2687d405` in its ancestry) — a real-task deferred spawn (`agent_type: "claude"`, no `print_mode`, cwd a throwaway scratch dir, a trivial-but-real tool-call prompt) hung for 520+ seconds: `turn_epoch` advanced 0→1 (the forced-write path fired and registered as a submission — the *original* queued-forever shape is NOT reproduced) but the screen stayed frozen on the wake notice with an empty composer the whole time, zero further hook/OSC133 log events for that session id while three other concurrently-running sessions produced plenty, and the child process stayed alive at ~0.4% CPU. This is a different failure mode from the original bug — plausibly a startup race where the forced write lands before Claude Code's TUI is actually ready to accept a real keystroke+Enter (see `plans/deferred-prompt-forced-write-startup-race.md` for the full evidence, root-cause hypothesis, and why this needs a dedicated investigation session rather than a same-pass fix). Needs a byte-level trace of the actual write timing before a fix can be designed.**
+
+## `POST /sessions/agent` + desktop `spawn_agent` command close the same MCP handshake race (2026-09-29) — **Rust, needs a `make dev` restart**
+
+Follow-up to the entry above: the same race, closed for two more spawn paths that were
+originally left as "known unfixed gaps" — turned out one (`POST /sessions/agent`) was worse
+than described (it never set `$TUIC_SESSION` at all) and the other (`pty::spawn_session_for_agent`,
+used by cron/PR-review) never actually had this race in the first place (see
+`src-tauri/AGENTS.md`'s updated section — no action needed there).
+
+- [x] [HUMAN] After restarting `make dev`, trigger `POST /sessions/agent` directly (no
+  frontend needed): `curl -s -X POST http://127.0.0.1:9877/sessions/agent -H 'Content-Type:
+  application/json' -d '{"prompt": "Reply with literally just the word ALIVE, no tool calls."}'`
+  against the running test instance. Confirm the response includes a `prompt_delivery` field
+  (proving the prompt was deferred), and that the resulting session — once its own MCP bridge
+  connects — reliably reports having live `mcp__tuicommander__*` tools rather than intermittently
+  seeing zero. _(verified 2026-09-30 against a standalone instance: response carried the
+  `prompt_delivery` field as documented; see the sibling entry above for the deeper
+  forced-injection-fix re-verification done via this exact route, and its trust-dialog-race
+  caveat on the "agent visibly replies" half.)_
+- [x] [HUMAN] Confirm the same curl call returns immediately (no added latency from the
+  identity-bind wait, which runs detached). _(verified 2026-09-30: response landed in well under
+  a second)_
+- [ ] [HUMAN] From the desktop app's UI, spawn an agent tab the normal way (the path that calls
+  the `spawn_agent` Tauri command) with a similarly trivial prompt, and confirm the same
+  reliability — this path has no automated test today (see `src-tauri/AGENTS.md`'s
+  "Test-coverage asymmetry, on purpose" note for why).
+- [ ] [HUMAN] Spawn a normal, real-task agent through both paths (something needing at least one
+  tool call) and confirm both behave exactly as before — invisible for real work.
+  **Not independently re-tested 2026-09-30 — code-confirmed to share the exact same
+  regression found testing the sibling entry above.** All three spawn paths (`agent
+  action=spawn`, `POST /sessions/agent`, and the desktop `spawn_agent` command) call the
+  identical shared `spawn_deferred_prompt_delivery` (`mcp_transport.rs:2566`, referenced from
+  `agent.rs:1132`, `agent_routes.rs:474`, and `mcp_transport.rs:4727`) → `deliver_notice_to_pty`
+  forced-write path — there is no path-specific divergence, so a real-task spawn through this
+  route would reproduce the same 500+s hang documented in
+  `plans/deferred-prompt-forced-write-startup-race.md` rather than exercising anything new.
+  Re-verify this bullet once that plan's investigation lands a fix.
+- [ ] Delete this section once verified — `agent_routes.rs` has full unit + real-child-process
+  test coverage (`spawn_agent_session_defers_claude_prompt_until_mcp_identity_binds`,
+  `spawn_agent_session_does_not_defer_a_print_mode_claude_prompt`,
+  `spawn_agent_session_binds_tuic_session_identity_on_the_real_child`); the desktop command does
+  not (see the asymmetry note above) — leave that one `[HUMAN]` item in place even after the
+  others are checked off, until it's actually been verified live.
+
+## Per-session overload watchdog + WS/SSE lag-disconnect fix (2026-09-29) — **Rust, needs a `make dev` restart**
+
+- [x] [HUMAN] After restarting `make dev`, open several terminal tabs and generate a burst of
+  output/events in one of them (e.g. `yes | head -c 5000000` or spawn several nested test agents
+  the way the original incident did). Watch `GET /logs?source=diagnostics` (or the app log) for a
+  `SESSION OVERLOAD` warning naming the hot session specifically, even if total process CPU never
+  crosses 80% — this is the new independent trigger and can't be exercised by a unit test since it
+  needs a real busy session under real load. _(verified 2026-09-30 against a standalone instance:
+  `yes hello | head -c 10000000` into a plain shell session produced
+  `SESSION OVERLOAD: <session_id> crossed output_bytes_per_tick = 5834608 in one tick` in the
+  diagnostics log, naming the session specifically.)_
+- [x] [HUMAN] While that burst is running, `curl http://localhost:9876/diagnostics/sessions` and
+  confirm the hot session shows a nonzero `events_since_last_tick`/`output_bytes_since_last_tick`,
+  and that a second immediate call shows the SAME numbers (the read must not reset what the
+  watchdog's own next tick needs). _(verified 2026-09-30: two immediate back-to-back calls both
+  returned `output_bytes_since_last_tick: 3500930` for the hot session; a later poll after the
+  watchdog's own tick correctly showed it reset to 0 — peek vs. drain both behave as designed.)_
+- [ ] [HUMAN] Open a session's grid WebSocket in a browser tab (`?format=grid`), then artificially
+  starve it (e.g. background the browser tab or pause its JS) while generating a large burst of
+  output on that same session — confirm the tab's connection actually drops/reconnects rather than
+  the grid silently going stale forever. This is the real-world shape the `0b421c3a` incident had;
+  the automated tests prove the mechanism in isolation but not against a real browser client.
+  **Genuinely needs a real browser** (2026-09-30: confirmed the underlying mechanism itself is
+  solid — `mcp_http::session::tests::a_grid_ws_that_lags_past_the_cumulative_bound_disconnects`,
+  `::a_session_ws_that_lags_past_the_cumulative_bound_disconnects`, and
+  `mcp_http::sse_routes::tests::a_stream_that_lags_past_the_cumulative_bound_closes_instead_of_looping_forever`
+  all pass against a real network socket — but faithfully reproducing an OS-level backgrounded/
+  throttled tab, rather than a scripted approximation, is exactly the timing-sensitive case the
+  escalation ladder reserves for a real human check.)
+- [ ] Delete this section once verified — the underlying mechanism has full unit + real-network
+  test coverage (`cpu_watchdog.rs`, `mcp_http/session.rs`, `mcp_http/sse_routes.rs`); only the
+  real-browser-backgrounding bullet above still needs a human.
+
+## Consent prompt for wrapping your own claude/codex/goose function (2026-09-25) — **Rust + frontend, needs a `make dev` restart**
+
+- [ ] [HUMAN] After restarting `make dev`, open a new terminal tab in a repo whose `.zshrc.d` defines a `claude()` (or `codex()`/`goose()`) function, with that agent's "wrap-user-function" setting still undecided. Confirm the dialog appears exactly once (not once per tab if you open several), explains the flag purpose and the duplicate-flag caveat, and that the three buttons ("Wrap my function" / "Leave it alone" / "Not now") do what they say: Wrap makes the next new tab's `claude` invocation get the flag (and nothing is wrapped before you click it); Leave alone persists and never re-prompts for that function; Not now dismisses but re-prompts on the next app restart (not on the next tab, within the same run). Then EDIT the function body and open a new tab: the prompt must come back and the edited function must not be wrapped until you answer.
+- [ ] [HUMAN] Confirm Settings → Agents → expand Claude/Codex/Goose shows the "If your shell already defines its own ⟨agent⟩ function" control (expert setting — visible in expert mode or once changed), that "Leave my function alone" takes effect on the next new tab without a prompt, that "Wrap my function" picked there still shows the prompt before wrapping a function you never approved, and that "Ask when detected" re-arms the prompt.
+- [ ] [HUMAN] With two windows/clients open (e.g. desktop + a browser tab at the same instance), trigger the prompt, then answer it from one client — confirm the other client's dialog also closes (the `agent-wrap-prompt-resolved` broadcast).
+- [ ] [HUMAN] With BOTH claude and codex undecided in the same repo, open a tab so both prompts appear at once — confirm pressing Enter resolves only the top (most-recently-opened) dialog's default action, leaving the other one still open. (Regression fix for a bug where Enter fired both simultaneously-open `ConfirmDialog`s at once; covered by an automated test in `AgentWrapPromptHost.test.tsx`, but worth one live confirmation since it's a real keyboard-focus interaction.)
+
+## Zsh agent wrappers load after `.zshrc.d`, not before (2026-09-25) — **Rust, needs a `make dev` restart**
+
+- [ ] [HUMAN] After restarting `make dev`, open a new terminal tab in a repo whose `~/.zshrc` (or `.zshrc.d/*`) gates a block of exports behind `if [[ -x $(command -v claude) ]]` (or similar) — confirm that block now runs (it silently didn't before this fix, since TUIC's own `claude`/`codex`/`goose` wrapper functions used to load eagerly, before `.zshrc` got a chance to run, and `command -v` on an existing function returns a bare name, not a path). Also confirm `claude`/`codex`/`goose` (and `grok`/`opencode`) invoked from that same tab still get TUIC's auto-injected `--settings`/`--name`/`notify`/screen flags (the fix defers *when* the wrapper loads, not whether it's active) — see `src-tauri/src/shell_integration.rs`'s module doc comment for the full mechanism. Covered by two new real-PTY tests (`zsh_deferred_load::*`) that already pass in this worktree; this item is for a live app confirmation, delete it once verified.
+- [ ] [HUMAN] In that same restarted tab, run `tuic_state busy` (or `tuic_suggest`/`tuic_intent`) directly from a command typed in `~/.zshrc`/`.zshrc.d` itself (not from the interactive prompt) — confirm it runs with no "command not found" error. These three are general-purpose helpers with no shadowing risk, so they were moved back to zsh's EAGER integration script (a code-review pass caught that an earlier version of the deferred-loading fix had bundled them in with `claude`/`codex`/`goose`, which broke calling them from a user's own startup scripts).
+
+## Diagnostics-capture Command Palette action + live tab badge (2026-09-24) — **Rust, needs a `make dev` restart**
+
+- [ ] [HUMAN] **Confirmed desktop-only, cannot be tested via a browser client** (2026-09-30: `toggle-diagnostics-capture` is absent from `CommandPalette/CommandPalette.tsx`'s `BROWSER_ACTION_IDS`/`BROWSER_ACTION_PREFIXES`, so `isBrowserCommandPaletteAction` filters it out of the palette in web mode regardless of `isPerfDebug()` — this is a genuine, source-confirmed gate, not a test-harness limitation). After restarting `make dev`, with `isPerfDebug()` on (dev default), open the Command Palette on a terminal tab and confirm "Toggle diagnostics capture (active tab)" is listed, and that running it starts a capture on the active tab (matching the existing "Capture Session" tab context-menu item's behavior) — a small red dot should appear on that tab immediately, with no context-menu open needed to trigger a refresh.
+- [x] [HUMAN] With the app running, from a terminal outside the app: `curl -k -X POST https://localhost:9876/diagnostics/capture -d '{"enabled":true}'` (no `session_id` — records every session). Confirm the red dot appears on **every** open tab live, with no click inside the app at all. Then `curl -k -X POST https://localhost:9876/diagnostics/capture -d '{"enabled":false}'` and confirm every dot clears live. _(verified 2026-09-30 against a standalone instance via a real browser tab (agent-browser) pointed at its web UI: the red dot appeared on the one open tab immediately after the enable curl, with zero clicks inside the app, and cleared immediately after the disable curl — both via screenshot comparison.)_
+- [ ] [HUMAN] Toggle capture on via the Command Palette action on tab A, then via the tab context-menu's "Capture Session" on tab B (which narrows the filter to B). Confirm the dot moves from A to B live in both directions, with no manual refresh. **Also needs the real desktop app** — the Command Palette action half is the same desktop-only gate as the first bullet above.
+- [ ] Set `isPerfDebug()` off (`window.__TUIC__.setPerfDebug(false)`) and confirm the Command Palette action disappears from search (it should — same gate as the context-menu item), while an already-showing badge (if capture is still active from before) is unaffected, since the badge only reads `ptyCaptureStore`, not the debug flag. _(Second half verified 2026-09-30 via browser: with `setPerfDebug(false)` and capture re-enabled via curl, the badge still appeared exactly as before — confirming it doesn't read the debug flag. First half — action disappearing from search — needs the real desktop app, same gate as above.)_
+
+## Tab-title flicker / CPU fix from uncached `agents.json` reads on every OSC title repaint (2026-09-24) — **Rust, needs a `make dev` restart**
+
+- [ ] [HUMAN] After restarting `make dev`, run an agent whose CLI repaints its OSC 0/2 title frequently (pi is the confirmed ~8Hz repainter; a Claude Code session with an active intent + a busy shell prompt repainting title is the other combination that hits `osc_title::should_skip`) with intent-tab-title on. Confirm the tab title settles and stops visibly flickering between the OSC-cleaned title and the intent title, and that CPU (Activity Monitor / `top`) for the TUICommander process stays low while that session is busy. Root cause: `osc_title::should_skip` (`src-tauri/src/osc_title.rs`) called `config::load_agents_config()` — a blocking `read_to_string` + JSON parse of `agents.json` — on every OSC title write for any session with an active agent intent, with no caching; at a repainting agent's repaint rate this was real, unbounded CPU cost on the PTY reader thread, and the added synchronous latency plausibly widened the window in which the backend's OSC-title path and the frontend's independently-applied intent-title echo (`src/components/Terminal/intentTitle.ts` → `terminalsStore.update` → `set_session_name`) could race and repaint the tab as two different titles in quick succession. Fixed by caching `load_agents_config()`'s result keyed on `(path, mtime, len)` (`config.rs`), so a repeat call is a single `fs::metadata` stat instead of a full read+parse — this cannot be verified by a unit test since the bug is about repaint-rate CPU cost and race timing under a real running agent, not `load_agents_config`'s return value (already covered by existing tests, which still pass).
+
+## tmux-shim swarm cwd resolution fix (2026-09-23) — **Rust, needs a `make dev` restart**
+
+- [ ] [HUMAN] From a TUICommander-managed Claude Code agent shell, run a one-off command in an unrelated directory (e.g. `cd ~/bin && ls`), then — WITHOUT `cd`ing back — trigger Claude Code's Agent Teams feature to spawn 2+ teammates in one swarm. Confirm every teammate pane lands in the agent's real repo (not the transient directory), including the very first pane (materialized via `respawn-pane` off `new-session`'s initial pane, not `split-window`). This exercises `resolve_cwd()`'s new env-var-over-`current_dir()` preference and `materialize()`'s topology-cwd fallback — neither can be driven by a unit test since both need a real Claude Code agent-teams spawn sequence through the live `tmux` shim.
+- [ ] [HUMAN] Confirm a plain `tuic alias` general-purpose `tmux` user (not agent-teams, no TUIC_* env present — e.g. a shell not spawned by TUICommander) still resolves `new-session -c <path>`/`split-window` cwd correctly via the `current_dir()` fallback, unaffected by this change.
+
+## Tunnel process-group kill + wait-based shutdown on real app exit (2026-09-23) — **Rust, needs a `make dev` restart**
+
+- [ ] [HUMAN] After restarting `make dev`, connect a real (or throwaway VM) SSH tunnel or "Remote Server — SSH" connection so it's actively `Connected`, then quit the app (not just close the window — a real process exit via Cmd+Q or the menu). Confirm via `ps aux | grep ssh` on the host that the `ssh` process (and, if the remote command was a shell script rather than a single binary, any child it forked) is actually gone within a couple seconds of the app closing — not just that the app's own window disappeared. This exercises `RunEvent::Exit`'s new `shutdown_all_and_wait()` call, which cannot be verified by any unit test (there is no way to drive a real Tauri process-exit event from `cargo test`).
+- [ ] [HUMAN] With the same tunnel connected, force the app to become unresponsive or kill it via `kill -9` (simulating a crash rather than a clean quit) and confirm the `ssh` process is orphaned but eventually reaped by the OS (expected — `shutdown_all_and_wait` only runs on a clean `RunEvent::Exit`, never on a hard kill; this just confirms the fix doesn't change that pre-existing, accepted behavior).
+
+## SSH remote daemon "unconfigured" classification (2026-09-23, security review follow-up) — **Rust, needs a `make dev` restart**
+
+- [ ] [HUMAN] Against a real (or throwaway VM) host running `tuic-remote` with a password ALREADY set, connect a "Remote Server — SSH" connection with an `auth_username` configured but whose saved keyring password does NOT match the daemon's real one. Confirm the connection row does NOT offer "Set remote password…" (a configured daemon must never be classified as unconfigured and offered a password overwrite). The classification is in Rust: `remote_connection::request_session_token` always sends a Basic header, so only a daemon with no credentials answers "Scan the QR code" (`REMOTE_PASSWORD_NOT_CONFIGURED`), and `remote_runtime::password_offer` acts only on that. Unit-tested (`session_token_request_names_a_rejected_password`, `session_token_request_tells_an_unconfigured_daemon_apart`, `a_password_is_offered_only_to_an_unconfigured_daemon`); this confirms the real daemon's `validate_basic_auth` bodies match what the tests assume.
+
+## Finder Service ad-hoc code signing fix (2026-09-14, **Rust change — needs `make dev` restart or a real reinstall**)
+
+Boss reported the "New TUICommander Tab Here" Finder Service failing with
+"The Service cannot be run because it is not configured correctly." Root
+cause confirmed empirically: the installed `~/Library/Services/New
+TUICommander Tab Here.workflow` had **no code signature at all**
+(`codesign -dv` → "code object is not signed at all"), and Gatekeeper
+assessments are enabled (`spctl --status`) — the documented failure mode for
+third-party Automator "Run Shell Script" Services. `finder_service.rs`'s
+`install_into` now ad-hoc signs the bundle after copying it
+(`/usr/bin/codesign --force --deep --sign -`), best-effort so it never fails
+the install if `codesign` is unavailable. A follow-up `/code-review` pass
+caught two real gaps in the first version, both fixed: it used a bare
+`codesign` (PATH-dependent) instead of the absolute path the sibling `pbs`
+call in this file already uses; and a signing failure was only a separate,
+easy-to-miss warning log, now surfaced in the same log line as "Finder
+Service installed" (`signed: false`). The review also suggested dropping
+`--deep` per Apple's TN2206 guidance — tested against a fresh copy of the
+real bundle and found this actually breaks signing outright (`codesign`
+refuses `Contents/document.wflow` as an unsigned "subcomponent" without it),
+so `--deep` was kept; see AGENTS.md's Finder Service section for the
+verified reason.
+
+Manually reinstalling a freshly ad-hoc-signed copy on Boss's machine did not
+error and `codesign -dv` now shows `Signature=adhoc`. `spctl -a -t execute`
+still reports "rejected" for the signed copy, but that assessment type is for
+Mach-O executables — a `.workflow` bundle has none, so it's unclear whether
+that's meaningful for the real Finder→Services-menu dispatch path. **Needs a
+real right-click-in-Finder test** to confirm the dialog is actually gone —
+uninstall + reinstall via the app's Settings UI (or `make dev` + a fresh
+"Install Finder Service" click) after the rebuild, then right-click a folder
+in Finder and pick "New TUICommander Tab Here."
+
+**Separately, `tuic open-here`/any `tuic://` deep link fired while the app is
+already running currently does nothing visible.** **Re-checked 2026-09-30: the
+original two-`/Applications`-copies cause is stale — `/Applications/TUICommander.app`
+no longer exists on this machine — but the bug itself is still live.** Empirical
+re-test: `tuic open-here /tmp/<scratch-dir>` printed "Opening 1 terminal(s)" (no
+client-side error) but `session action=list` before/after showed the exact same 5
+sessions — no new tab materialized in the running orchestrator. New suspected root
+cause: `lsregister -dump | grep -i tuicommander.app` shows **dozens** of stale
+`/Volumes/dmg.<random>/TUICommander.app` Launch Services registrations for the same
+bundle id `com.tuic.commander` — leftover from previously-mounted, now-unmounted DMG
+installers — which could easily make `open 'tuic://...'`'s bundle-id resolution land
+on a nonexistent volume path instead of the real running app. Likely fix is
+`lsregister -kill` (forces a full Launch Services database rebuild) — **not run
+this session**: it's a system-wide operation affecting every app's registered
+file-type/URL-scheme associations on this machine, not scoped to TUICommander, so it
+needs Boss's own OK the same way the original `/Applications` cleanup did.
+
+## Markdown Kanban plugin (`md-kanban`, 2026-09-14, **new plugin — not auto-loaded, install first**)
+
+Kanban board over checkbox tasks in a plain markdown file, plus two new
+PluginHost capabilities (`ui:external-link`, `ui:file-picker`). Frontend-only
+change (no Rust), so it's picked up by the existing `make dev`/Vite HMR — no
+restart needed for the two new host methods themselves.
+
+**Not auto-discovered**: unlike a built-in plugin, `plugins/md-kanban/` in
+this repo's `plugins/` submodule is only the *source/distribution* copy
+(mirrors what ships to `tuicommander-plugins` on GitHub) — a running instance
+loads plugins from `{config_dir}/plugins/{id}/`, not from the repo checkout.
+To test, use Settings → Plugins → "Install from folder" and point it at
+`plugins/md-kanban/` (or copy the directory into the config dir's `plugins/`
+folder yourself), then enable it.
+
+Parsing/rewrite/dependency-graph/rendering logic is unit-tested (92 automated
+tests: 77 vitest + 15 node:test lifecycle). What's NOT machine-verifiable:
+
+- [ ] "Add Board" opens the real native "Open file" dialog (not a stub), and
+      picking a `.md` file with checkbox tasks renders a 6-column board.
+- [ ] Drag a card between columns — the underlying file's status character
+      updates (open it in the markdown editor to confirm), and dragging to
+      Done/Won't Fix adds a `[completion::]`/`[cancelled::]` field with
+      today's real date; dragging back out removes it.
+- [ ] A plain click on a card body does nothing; clicking a `[label](path)`
+      link inside a card's text opens that file in a new markdown tab (or,
+      for an `http(s)://` link, opens the system browser).
+- [ ] Hovering a card's `<`/`>`/`!` dependency badge visually highlights the
+      right upstream/downstream card(s) elsewhere on the board, with no
+      flicker or missed hover due to iframe focus quirks.
+- [ ] The "Get ID" `#` button on an id-less card assigns an id, and the id is
+      actually on the OS clipboard afterward (paste it somewhere to confirm)
+      — `tuic.clipboard()` round-tripping through the real app, not just the
+      plugin's own postMessage call.
+- [ ] Add a second board via the tab strip, switch between them, and confirm
+      each keeps its own "Hide archived" checkbox state across a switch and
+      an app restart (persistence via `read_plugin_data`/`write_plugin_data`).
+- [ ] Close the last remaining board — the panel should stay open on the
+      empty "Add Board" state, not close the tab itself.
+- [ ] Edit the board's markdown file in an external editor while the panel is
+      open and visible — the board should pick up the change within ~1s
+      (fs:watch debounce) without any manual refresh.
+- [ ] "Open file" button opens the real underlying markdown file in
+      TUICommander's own markdown viewer/editor.
+- [ ] Browser/PWA mode (`:9876`/`:9877` in a real browser): `pickFile`
+      documented to resolve `null` there (no native dialog) — confirm "Add
+      Board" fails gracefully (a toast or no-op) rather than throwing.
+
+## Session Diff Review — step-by-step review of a Claude Code session's edits (2026-09-14, **Rust change — needs `make dev` restart**)
+
+New tab (Command Palette: "Session diff review") reconstructing a session's
+edit timeline from its transcript (`~/.claude/projects/`) and, where
+available, `~/.claude/file-history/` backups. Rust: new `session_review.rs`
+(transcript parser, base resolution, revert commands), `git.rs`
+(`apply_reverse_patch_impl` extraction, `bump_working_tree_epoch` made
+`pub(crate)`), Cargo.toml (`gix-imara-diff` added directly for its
+`unified_diff` feature). Frontend: `src/components/SessionDiffTab/` tree,
+`diffTabsStore`/`useRepository`/`transport.ts` extensions. Transcript
+parsing, base-resolution tiers, revert mechanisms, and the frontend
+orchestration are all unit-tested (44 Rust tests, ~50 vitest tests across
+`buildRows`/`SessionPicker`/`SessionDiffTab`/`StepCard`/the extracted DiffTab
+helpers) — `DiffViewer`/`SessionDiffList`'s own rendering is stubbed in those
+tests since `@git-diff-view/solid` needs a real Canvas and
+`@tanstack/solid-virtual` can't measure rows in jsdom/happy-dom (both
+pre-existing, documented environment limitations — see
+`DiffViewer.test.tsx`/`DiffFileList.test.tsx`).
+
+**Post-implementation code/security review (2026-09-14)** found and fixed a
+path-traversal gap (`session_id` wasn't validated as a bare UUID before being
+joined into a filesystem path — closed with `validate_session_id`), a data
+corruption bug (`str::find("")` always matches at offset 0, so reverting a
+pure-deletion edit could silently reinsert text at the wrong location instead
+of failing cleanly), two review-cache staleness bugs (never invalidated after
+a revert; didn't include `include_subagents` in its key), a `classify_path`
+misclassification for a since-deleted in-repo file behind a symlinked root,
+and a frontend bug where the live-session poll refresh reset every manually
+collapsed file back to expanded. All have regression tests; see
+`AGENTS.md`'s "Session Diff Review — Replay Semantics and Cache-Invalidation
+Gotchas" section for the two replay/cache gotchas in case they recur
+elsewhere.
+
+**Fixed in a follow-up pass (2026-09-14):** `revert_step_via_substitution`'s
+Edit arm now delegates to `apply_reverse` instead of re-deriving the same
+find/replace-backward logic, so a future correctness fix only needs to land
+in one place; `list_review_sessions(include_counts: true)` now fans its
+per-session transcript scans out across `std::thread::scope` threads instead
+of running them one after another, so picker load time no longer scales
+linearly with session count. Both covered by new/extended tests
+(`revert_out_of_repo_replace_all_step_reverses_every_occurrence`,
+`include_counts_true_reports_each_of_several_sessions_correctly`).
+
+**Known gaps from the same review, still deliberately not fixed**
+(neither rises to data-corruption-in-the-common-case the way the fixed ones
+did):
+
+- Binary detection (`is_binary_str`/`is_binary_bytes`) only checks for a NUL
+  byte in the first 8000 bytes (git's own heuristic) — a non-UTF-8 text file
+  (e.g. Latin-1/Shift-JIS) with no NUL in that window is treated as text,
+  lossily converted via `String::from_utf8_lossy`, and that lossy text can be
+  written back to disk on a whole-file revert. Narrow edge case; would need a
+  real encoding-detection pass to fix properly.
+- `apply_forward`/`apply_reverse` (and, transitively now,
+  `revert_step_via_substitution`) locate a substitution via the *first*
+  occurrence of the old/new text (`str::find`, not `rfind` or
+  hunk-anchored) — if a file has duplicated text (e.g. a repeated license
+  header) and the real edit targeted a later occurrence, replay can silently
+  touch the wrong one. Needs hunk/line-context anchoring to fix correctly,
+  which is a bigger change than this pass's scope — but now only needs
+  fixing in one function instead of two, thanks to the delegation above.
+
+What's NOT machine-verifiable:
+
+- [ ] Open the tab against a real, past Claude Code session for this repo (not a
+      synthetic fixture) and confirm the grouped-by-file view's cumulative diffs
+      and the chronological view's step order both look right, including at
+      least one session with a subagent edit and one with a file the session
+      created. **Backend half confirmed 2026-09-30** via a direct `GET
+      /repo/session-review` call (real session, this repo, no UI): step order
+      was chronological, the grouped-by-file view produced a correct cumulative
+      unified diff with matching additions/deletions counts,
+      `base_source: "backup"` resolved correctly against a real file-history
+      backup, and `in_repo: false` correctly flagged an out-of-repo file. Still
+      open: the actual tab rendering (visual), and this specific sample had no
+      subagent edit or session-created file — needs a session with those to
+      close fully.
+- [ ] Drag-select lines in a rendered step/file diff and send a comment — confirm
+      it lands in the terminal in the same format the regular Diff tab's
+      selection-comment feature produces.
+- [ ] Revert a single step on a real file, confirm only that edit is undone and
+      later edits survive; revert a step whose region a later edit already
+      touched and confirm it fails with a clear message instead of partially
+      applying.
+- [ ] Revert a whole file to session start on a real file with a `file-history`
+      backup (byte-exact restore) and on one without (reconstructed write);
+      revert a session-created file and confirm it's deleted.
+- [ ] Hand-edit a file outside the session, then try to revert it — confirm the
+      drift refusal appears and the "Force revert anyway" toast action works.
+- [ ] Revert a single step whose edit was a pure deletion (the `new_string`
+      Claude Code recorded was empty) — confirm it reports "not found" rather
+      than corrupting the file (this can no longer be located unambiguously
+      from content alone; see AGENTS.md's Session Diff Review section).
+- [ ] Visual check: file/step header layout, badges (drifted / outside repo /
+      unknown base), and the warnings banner render correctly in both light and
+      dark theme, matching `docs/frontend/STYLE_GUIDE.md`.
+- [ ] Screenshot for `docs/FEATURES.md` / release notes.
+
+## Customizable notification sounds — per-event preset/custom-file picker (2026-09-11, **Rust change — needs `make dev` restart**)
+
+Settings > Notifications: each event's row gains a `<select>` next to its
+enable checkbox — Default, another event's tone borrowed as a preset (Chime /
+Arpeggio / Low Tone / Double-Tap / Pluck / Callback), or "Custom file…"
+(desktop only). Rust changes: `notification_sound.rs` (`resolve_sequence`,
+`open_custom_sound`, rodio `Decoder`/`amplify`), `config.rs`
+(`NotificationSoundChoices`/`SoundChoice`), Cargo.toml (`rodio` gained `wav`,
+`mp3`, `vorbis`, `flac` decoder features). Sequencing/decoding/config
+round-trip/merge logic is unit-tested (Rust + vitest) — what's NOT
+machine-verifiable:
+
+- [ ] Pick a real `.wav`/`.mp3`/`.ogg`/`.flac` file via "Custom file…" for at
+      least two different events and confirm it actually plays through Test —
+      and sounds like the chosen file, not a built-in tone.
+- [ ] Pick a preset borrowed from another event (e.g. set "Warning" to
+      "Callback") and confirm Test plays that OTHER event's tone, not
+      Warning's own.
+- [ ] Point a sound at a file, then delete/rename the file on disk and hit
+      Test again — should silently fall back to the default tone (a warning is
+      logged, not surfaced in the UI) rather than staying silent or erroring.
+- [ ] Confirm the native file picker itself opens (Tauri dialog, not a stub)
+      and that canceling it leaves the dropdown showing the previous choice,
+      not stuck on "Custom file…" with nothing set.
+- [ ] Reset Defaults clears every custom file / borrowed preset back to
+      Default across all six events.
+- [ ] Browser/PWA mode (`:9876` in a real browser, not the desktop app):
+      confirm a borrowed preset still plays the right Web Audio tone, and that
+      picking "Custom file…" is not offered at all (no filesystem access
+      there).
+
+**Also fixed as part of this pass:** in-app toasts (`toastsStore.add(..., sound=true)` —
+failed stage/unstage/discard/merge in the Git panel, plugin `tuic.toast()`, etc.)
+used to play a separate hardcoded synth with no connection to these settings.
+They now route through `notificationManager.playInfo/playWarning/playError()`
+matched by toast level. Unit-tested (spy assertions on the right method being
+called), but the actual audible result needs a real check:
+- [ ] Disable the "Error" sound in Settings > Notifications, then trigger a
+      failed git operation (e.g. discard a file that's locked/in-use) — should
+      stay silent. Re-enable it and confirm the beep returns.
+- [ ] Set a custom file or borrowed preset for "Warning", then trigger a
+      warning-level toast (e.g. "Path does not exist" from a shortcut) —
+      should play that chosen sound, not the old fixed double-beep.
+
+## Ghost/stale terminal ids inflating the removal dialog + sidebar dot, chevron auto-spawn (2026-09-10, frontend only — no rebuild/restart needed)
+
+Fixes three related sidebar/worktree-removal bugs Boss reported live:
+
+1. **"N terminal(s) attached" removal dialog inflated by exited terminals,
+   some showing `terminal — —`.** `branchActivitySummary`'s `isBusy`
+   (`activitySnapshot.ts`) used to count ANY attached id — including an
+   agent-owned terminal/session that exited on its own (rather than the user
+   closing its tab), both the in-process agent-exit path (`Terminal.tsx`) and
+   the remote/tmux-swarm-shim sub-pane path (`useAppInit.ts`'s
+   `session-closed` listener, the one behind the `(9s)`/`(30s)` auto-close
+   countdown tab names) — as "busy" forever. It now excludes ids it can see
+   have `shellState === "exited"`, so the busy-dialog (with its scary
+   terminal list) simply doesn't appear once every attached terminal has
+   exited; the plain confirm is used instead. **`branch.terminals` itself is
+   deliberately left untouched** — an earlier version of this fix tried
+   pruning the array directly on exit, but an independent code review caught
+   that this broke worktree teardown (`closeTerminalsForBranch` iterates
+   `branch.terminals` to close every terminal, including exited ones, before
+   a merge/archive/removal — a pruned id was silently never closed) and the
+   sidebar's own expandable tab list (which also renders straight from
+   `branch.terminals`). See AGENTS.md's "`branch.terminals` Membership Must
+   Never Be Pruned On Terminal Exit" for the full writeup — don't re-attempt
+   array pruning if this class of bug resurfaces.
+2. **A present-but-exited terminal showed the confusing generic `"—"`
+   label** (same as a genuinely-missing/unknown id) in the removal dialog's
+   terminal list. `branchActivitySummary` now labels it `"Exited"` instead —
+   scoped locally to this function, not by changing the shared
+   `terminalStatusLabel`/`effectiveActivityState` used by the Activity
+   Dashboard (which has its own existing, tested `"—"`-for-exited contract,
+   deliberately left alone).
+3. **Sidebar dot stayed green for a branch with zero *live* open
+   terminals.** `RepoSection.tsx`'s `BranchIcon` only checked
+   `branch.terminals.length > 0`, never whether those ids were actually
+   still live. A new `hasLiveTerminals()` mirrors the same "present +
+   `shellState !== 'exited'`" logic as `isBusy` above (array membership
+   itself still untouched).
+4. **Clicking the expand chevron sometimes spawned a new terminal.** The
+   chevron had no click handler of its own — it bubbled into the row's
+   `onClick`, which always calls `onSelect()`, and first-ever branch
+   selection in a session auto-spawns a terminal if none exists. The chevron
+   now has its own handler (`stopPropagation`, toggles the list only).
+
+Covered by unit tests (`activitySnapshot.test.ts`, `useAppInit.test.ts`,
+`Sidebar.test.tsx`, `WorktreeManager.test.tsx`) that render real DOM and fire
+real click events / exercise the real store functions, including a
+regression guard that `branch.terminals` is NOT pruned on exit (the
+mistake the code review caught). A full end-to-end live repro (spawn an
+agent sub-pane, kill it, watch the sidebar dot and the removal dialog
+settle) wasn't done: this test instance shares Boss's real config/MCP-
+registration state with the running app (see "Test instance vs orchestrator
+instance" above), and reproducing the ghost-terminal state needs actually
+spawning + abruptly killing an agent, which felt too risky to do against
+live sidebar/repo state. Frontend-only change — no Rust rebuild, picks up on
+a plain browser reload once `pnpm build` (or `make dev`) rebuilds `dist/`.
+
+- [ ] Spawn an agent-owned terminal (or a tmux-swarm-shim sub-pane) on some
+  branch, then kill the agent process directly (not via the tab's close
+  button). Confirm: the tab lingers with a grey "exited" state/countdown as
+  before, the sidebar dot for that branch goes idle (not green) once it's the
+  only terminal on the branch, and opening the worktree-removal dialog for
+  that branch does NOT show the busy/attached-terminals confirmation (plain
+  confirm only) — but the exited tab is STILL visible/reachable in the
+  sidebar's own expandable tab list (chevron), and merging/archiving or
+  removing that worktree still actually closes that tab rather than leaving
+  it dangling.
+- [ ] With `tabTreeEnabled` on and a branch that has >1 terminal (chevron
+  visible), click only the chevron (not the branch name). Confirm the tab
+  list toggles open/closed and NO new terminal is created — repeat on a
+  branch that has never been selected this session (freshly restored, before
+  any click) to hit the specific auto-spawn-on-first-select path.
+
+## LastPromptBar / agent idle-threshold after an agent exits back to a plain shell (refreshed 2026-10-08 for the rebased tree — Rust, needs a `make dev` restart)
+
+Bug (wip, 2026-09-10): after exiting an agent (`claude` → `/exit` or Ctrl+D) back to
+the shell in the same tab, the "Context" bar (`LastPromptBar`) and the agent idle
+threshold lingered because `session_states.agent_type` never cleared. On the rebased
+tree wip's fix (`clear_agent_type_on_confirmed_shell`, `agent_seen_running`, the
+OSC 133 fast path) is gone: main's `refresh_session_agent` (`pty.rs`) records the
+foreground agent per PTY chunk, on a timer and from both the IPC and HTTP
+foreground calls, and clears it when the foreground is a shell again. There is no
+OSC 133 fast path, so the bar goes away on the next foreground observation, not
+instantly.
+
+- [ ] Restart `make dev`. Open a terminal tab, run `claude`, let it start, then exit
+  back to the shell prompt. The "Context" bar disappears within about a second (the
+  next foreground observation), not after several seconds.
+- [ ] Same with another agent (e.g. `codex` or `gemini`).
+- [ ] With an agent running, let it run a short subprocess (e.g. `git status`); the
+  Context bar does NOT flicker off during the subprocess.
+- [ ] A run config using a custom/unrecognized launcher alias still activates the
+  Context bar/intent parsing on first launch (the preset is not wiped before the
+  launcher runs).
+- [ ] `GET http://127.0.0.1:9877/sessions/{id}/foreground` on the test instance
+  before and after exiting an agent returns the agent name, then none.
+
+## Worktree file sync: copy/symlink ignored/untracked/explicit files into new worktrees (2026-09-10, backend — needs `make dev` restart)
+
+`copy_ignored_files`/`copy_untracked_files` were previously fully plumbed
+through settings persistence and the UI (tri-state per-repo override with a
+global default) but had **zero consumer anywhere** — `git worktree add` only
+checks out tracked content, and nothing ever copied the ignored/untracked
+files on top of it. This adds the actual copy engine
+(`src-tauri/src/worktree_sync.rs`), wires it into worktree creation
+(`worktree::spawn_worktree_file_sync`, called from both the desktop
+`create_worktree` command and the MCP HTTP `create_worktree_shared`), and adds
+a new repo-specific "always copy these files/directories" list
+(`RepoSettings.copyPaths`, each entry copied fully or symlinked) independent
+of the two toggles. The copy runs in the background after the worktree is
+already created, with `worktree-sync-started`/`worktree-sync-completed`
+events driving a toast. Unit-tested at the engine level
+(`worktree_sync::tests`, including a security fix — a malicious branch
+planting an intermediate symlink in the new worktree can no longer redirect a
+synced write elsewhere — and a correctness fix for non-ASCII filenames) and
+the settings-resolution level (`config::tests`).
+
+**Settings UI itself already verified** (2026-09-10, via `agent-browser`
+against a `make dev` test instance on `:9877`, cleaned up afterward — no
+stray state left in the real `repo-settings.json`): the tri-state toggles
+cycle correctly, the "Always Copy These Files/Directories" list add/remove/
+mode-switch all work, and a real layout bug was caught and fixed in the
+process — `.group select`/`.group input[type="text"]`'s ambient `width:100%`
+rule was leaking into the new list row, starving the path input down to ~26px
+while the mode `<select>` ballooned to fill the row (fixed with a more
+specific `.copyPathRow .transferSelect` override in `Settings.module.css`).
+**Still unverified** is the actual worktree-creation flow below — the real
+copy/symlink happening on disk, the toast pair actually firing, and the
+MCP/HTTP parity — none of which the settings-UI check above exercises.
+
+- [ ] Restart `make dev` to pick up the Rust changes. In Settings → Repository
+  → Worktree for a real repo, turn on "Copy ignored files" and "Copy untracked
+  files" (or leave one on "Use global default" after turning the global
+  default on in Settings → Git & GitHub → Worktree Defaults). Put a real
+  ignored file (e.g. `.env`) and a real untracked file in the repo's main
+  checkout, then create a new worktree from the `+` button. A toast should
+  appear ("Syncing files into `<branch>`…") followed by a completion toast
+  ("Finished syncing `<branch>`" / "Synced N file(s)"), and both files should
+  actually exist in the new worktree's directory.
+- [ ] In the same tab, add an entry to "Always Copy These Files/Directories"
+  with mode "Copy" for some file, and a second entry with mode "Symlink" for a
+  directory (e.g. `node_modules` if present). Create another worktree: the
+  Copy entry should be a real independent file, and the Symlink entry should
+  be an actual symlink (`ls -la` shows `->`) pointing back at the source
+  repo's copy — editing through the symlink from either worktree should be
+  visible in both.
+- [ ] Turn both toggles off and leave the copy-paths list empty, then create a
+  worktree: no sync toast should appear at all (confirms the "no-op, no
+  events" fast path).
+- [ ] Create a worktree via an MCP client (`repo worktree_create`) for a repo
+  with the toggles/list configured: the same sync + toast should fire, proving
+  the MCP/HTTP path (`create_worktree_shared`) resolves the same effective
+  settings as the desktop path without any frontend involvement.
+
+## Prompt Library dialog: Tab-cycle categories, adaptive Compose/terminal routing, Command Palette Prompts chip (2026-09-10, frontend only — HMR)
+
+Fixed: the Command Palette's "Prompts" scope chip was always empty (no
+built-in ever declared the `command-palette` placement — now all do, with a
+`builtInVersion`-gated migration for existing installs); the Prompt Library
+dialog's Tab key moved focus through Search and the category buttons instead
+of cycling the category chips; picking a prompt always force-opened the
+Compose box even when closed (now adaptive — "Auto" fills an already-open
+Compose box, else goes to the terminal); Shell/Headless/API-mode prompts
+picked from the dialog were injected as raw unresolved text instead of
+actually running. All covered by new/updated component and store tests
+(`PromptDrawer.test.tsx`, `useSmartPrompts.test.ts`, `promptLibrary.test.ts`,
+`smartPromptsBuiltIn.test.ts`) plus a live browser-mode visual check of the
+shared Placement/Target editor UI via Settings → Smart Prompts (no live
+Tauri backend was available in that check, so the palette/execution fixes
+below were never exercised against a real backend, and the dialog's own
+keyboard shortcut couldn't be triggered through browser automation — both
+need a human with the real desktop app).
+
+- [ ] Open the Prompt Library dialog (`Cmd+Shift+K`). Confirm the caret never
+  leaves the Search field: press `Tab` repeatedly and confirm it cycles
+  All → Custom → Recent → Favorites → All (wrapping), with `Shift+Tab` going
+  backward, while the search input stays focused throughout.
+- [ ] Open the Command Palette (`Cmd+P`) and select the **Prompts** scope
+  chip — confirm the full list of built-in Smart Prompts now appears
+  (previously empty on a fresh install).
+- [ ] With the Compose panel closed, pick an inject-mode prompt with an
+  unset/"Auto" Target from the Prompt Library dialog: text should go straight
+  to the terminal input, not pop Compose open. Open Compose first, then pick
+  the same prompt again: this time it should fill the already-open Compose
+  box.
+- [ ] Pick (single-click) a Shell-mode or Headless-mode built-in prompt (e.g.
+  "Fix Lint Issues") from the Prompt Library dialog and confirm it actually
+  runs (shell script executes / headless subprocess launches) instead of
+  inserting its raw prompt text into the terminal.
+
+## Double-click smart selection no longer shrinks to a sub-word on real mouse jitter (2026-09-10, frontend only — HMR)
+
+Reported: double-clicking a long path/URL selected the whole thing, then
+immediately snapped down to just the word under the cursor. Root cause was a
+smart match reusing `"word"`-mode's drag anchor, which recomputes its live
+edge from a plain word-boundary resolver — narrower than the match at every
+point except its exact extent — so any `mousemove` before `mouseup`,
+including ordinary pointer jitter with zero real displacement, shrank it
+immediately. Fixed with a dedicated `"smart"` drag mode/anchor (see
+`AGENTS.md`'s "Smart Selection Drag Anchor"), and reproduced + covered by a
+real jsdom mouseDown/mouseDown/mouseMove/mouseUp sequence in
+`canvasTerminalGestures.pin.test.ts` plus unit coverage in
+`canvasTerminalSelection.test.ts`. What the automated coverage cannot fully
+stand in for is real trackpad/mouse hardware timing and coalescing, which
+jsdom's synthetic events only approximate.
+
+- [ ] In a real terminal session, double-click in the middle of a long path
+  or URL that's wider than a couple of words (e.g. `/usr/local/bin/some-tool`
+  or a long `https://` URL) using a real mouse/trackpad. The whole thing must
+  stay selected — no visible flicker/shrink to a sub-word.
+- [ ] Same double-click, then drag a little further in either direction
+  before releasing: the selection must extend outward by whole words from
+  the full match, not restart from just the word under the cursor.
+- [ ] Repeat both checks on a path/URL long enough to soft-wrap across two
+  terminal rows.
+
+## Gutter-hover "pointer" cursor no longer freezes over a mouse-tracking app's prompt (2026-09-08, frontend only — HMR)
+
+Reported: after the command-block gutter widened and gained a hover cursor
+(10bb1019), clicking in a Claude Code CLI prompt to reposition its own cursor
+looked broken — the mouse pointer showed a hand instead of the text-beam.
+Root cause (reproduced in `canvasTerminalGutterHoverCursor.mount.test.ts`,
+now covered): once an app enables xterm mouse reporting (Claude Code CLI's
+own click-to-reposition feature), `onMouseMove` returns before reaching any
+cursor-updating code at all — so whatever `style.cursor` was at that moment
+(very plausibly "pointer", from having merely drifted over the gutter at
+some earlier point) stayed frozen for the rest of that session. Separately,
+leaving the gutter for plain text (no mouse-reporting app involved) only
+reset the cursor via a 100ms-debounced link-hover check gated on an actual
+detected link — never on a bare gutter hover. Both paths now force the
+cursor back to "text" immediately. What the automated coverage cannot
+exercise is a *real* Claude Code CLI process actually enabling mouse
+reporting and repositioning its own cursor on click — only the CSS cursor
+state was simulated.
+
+- [ ] Start a real `claude` session in a terminal tab. Move the mouse over
+  the command-block gutter of an earlier, closed block (pointer cursor,
+  expected), then move it onto Claude's own prompt text: the cursor must be
+  the text-beam, not a hand, and clicking there must reposition Claude's own
+  input cursor as before.
+- [ ] With no mouse-tracking app running (a plain shell prompt), hover the
+  gutter (pointer cursor) then move onto the prompt line: the cursor must
+  switch back to the text-beam immediately, not after a brief pause.
+
+## OSC 1337 support — StealFocus/RequestAttention/OpenURL need a real window (2026-09-10, Rust-touching — needs a `make dev` restart)
+
+Added recognition for the OSC 1337 proprietary commands: `CursorShape`,
+`ClearScrollback`, `Copy`/`CopyToClipboard`+`EndCopy`, `StealFocus`,
+`RequestAttention`, and `OpenURL`. The parsing layer (vte `osc_dispatch`),
+the alacritty `Handler` impl (including the `CopyToClipboard`/`EndCopy`
+capture-buffer state machine), and the `terminal_grid.rs`/`pty.rs` event
+pipeline are all covered by unit/integration tests that feed raw escape
+bytes through the real `Term`/`TerminalGrid` and assert on the resulting
+events (`ansi.rs`, `term/mod.rs`, `terminal_grid.rs`, `pty.rs` test modules) —
+including `confirm_open_url`'s full raise/answer/timeout flow
+(`mcp_http/mod.rs`, using `#[tokio::test(start_paused = true)]` for the
+timeout case, so it doesn't take the real 120s). None of that exercises an
+actual Tauri window, though — three things only a human at the machine can
+confirm:
+
+- [HUMAN] **StealFocus** (`\x1b]1337;StealFocus\x07`) actually unminimizes,
+  shows, and focuses the main window when sent from a background/minimized
+  app. Toggle Settings > General > Terminal > "Allow terminal focus/attention
+  requests" off first and confirm it's a no-op instead.
+- [HUMAN] **RequestAttention** (`\x1b]1337;RequestAttention=yes\x07` /
+  `=once` / `=fireworks`) actually bounces the dock icon (macOS); `=no`
+  cancels a pending bounce. `fireworks` is deliberately mapped to the same
+  continuous bounce as `yes` (Tauri has no direct equivalent) — confirm that
+  reads as reasonable rather than broken.
+- [HUMAN] **OpenURL** (`\x1b]1337;OpenURL=:$(echo -n 'https://example.com' | base64)\x07`)
+  raises the same confirm dialog `ui action=confirm` MCP requests use
+  (`McpConfirmHost`), naming the URL, and — only once confirmed — opens it in
+  the system browser. Confirm a non-http(s)/mailto scheme (there's no OSC
+  1337 way to construct one directly, but worth a sanity pass) never reaches
+  the opener. Also worth confirming from a second connected client (e.g. the
+  mobile PWA or a browser tab) that answering there dismisses the dialog
+  everywhere else — the underlying mechanism is shared with `ui
+  action=confirm` and already covered there, but this is a new caller of it.
+
+This is a Rust change — none of it takes effect in Boss's live `make dev`
+session until it's restarted.
+
+## tmux compatibility shim: per-teammate accent color + tiled-layout split view (2026-09-15)
+
+**Rust change — needs `make dev` restart** (adds `AppState.pty_accent_colors`, two `AppEvent`
+variants, new `TmuxOp` variants in `tuic-cli`, and two new HTTP routes — none of this exists in a
+running `make dev` instance until restarted, which tears down every live PTY session; coordinate
+before running it).
+
+Turns `tmux-swarm-shim.md`'s two remaining cosmetic categories into real TUIC behavior: per-teammate
+`--agent-color` (via `set-option ... *-border-style`) as a real accent color, and `select-layout
+tiled`/`main-vertical` as a real split-view arrangement. Automated coverage (Rust: 154 `tuic-cli`
+tests + 18 `tmux_routes` tests + `sse_routes`/`session.rs` additions, all passing; frontend: 84
+`paneLayout` tests + `resolveActiveAccentColor`/`TabBar` accent-rendering tests, all passing) proves
+the plumbing end-to-end, but the following need a real Claude Code agent-teams swarm and Boss's own
+eyes — HTTP probing can't confirm canvas/CSS rendering (see AGENTS.md's canvas-rendering note):
+
+- [ ] Spawn a 2+ teammate agent-teams swarm from a `make dev` test-instance terminal (with the
+  `tuic` alias pointing at the rebuilt binary — see `tmux-swarm-shim.md`'s note on `~/bin/tmux`
+  always exec'ing whichever binary its owning `TUICommander.app` bundle ships) and confirm via
+  `GET :9877/logs?source=tmux-shim` that `set-option`/`select-layout` calls are actually followed
+  by `PUT /tmux/panes/:id/accent-color`/`POST /tmux/windows/:id/layout` requests (not just logged
+  as before).
+- [ ] Confirm each teammate's sidebar tab shows a distinct colored left-edge marker matching its
+  `--agent-color` (`TabBar.module.css`'s `[style*="--accent-color"]` rule).
+- [ ] Confirm the terminal area shows the teammates arranged in an actual tiled split (not separate
+  full-screen tabs you have to switch between), and that each teammate is still individually
+  visible/selectable in the sidebar tab list (sidebar semantics are unchanged by design).
+- [ ] Confirm the terminal pane border itself shows the accent color too (`PaneTree.css`'s
+  `[style*="--pane-accent"]` rule for the split case, `styles.css`'s `.terminal-pane.active[style*="--pane-accent"]`
+  for the flat/unsplit case) — both should match the same color for the same session.
+- [ ] Spawn a 4+ teammate swarm and confirm the tiled grid looks reasonable (not lopsided) for an
+  odd pane count.
+- [ ] Exact color match: the two 256-color indices (`colour208`→orange, `colour205`→pink) resolve
+  via the shared xterm palette (`terminal_grid.rs`) — visually confirm these render as the expected
+  orange/pink, not some other hue, since this is the one part of `resolve_tmux_color` that isn't a
+  simple passthrough.
+
+## tmux compatibility shim: swarm subcommands + invocation logging (2026-09-02/03, uncommitted)
+
+**Rust change — needs `make dev` restart** (adds an `AppState` field and a new `/tmux/*` route
+family; tab renames reuse main's existing `session-renamed` event — none of this exists in a running `make dev`
+instance until restarted, which tears down every live PTY session; coordinate before running it).
+
+Implements `tmux-swarm-shim.md`'s §5.1–5.6 (§5.0 — confirming the real pane-backed-teammate
+trigger — is explicitly deferred; the invocation logging below is how a future session answers it).
+
+_A `/code-review` pass (scoped to this session's uncommitted diff) found 10 issues, all fixed:_
+**(High)** `respawn-pane` sent the command text + submitting Enter as one raw PTY write, which a
+raw-mode Ink teammate agent treats as an unsubmitted prefill — now sent as two writes with a gap,
+matching `cmd_agent`'s `AgentAction::Type` framing. **(High)** `kill-server` closed every TUIC
+session app-wide and wiped every label's topology, not just the invoking `-L`/`-S`'s — now scoped
+to the current label only, matching real tmux's `-L a kill-server` never touching `-L b`.
+**(Medium)** `-c <cwd>` was parsed for `new-session`/`new-window` but silently dropped — now
+threaded through to the initial pane. **(Medium)** `kill-pane` left a stale `active_pane` pointer
+when the active pane itself was killed — now reassigned to a remaining pane. **(Medium)**
+`split-window` left a permanent phantom pane in topology if `materialize()` failed (e.g. hit the
+session cap) — now rolled back on failure. Plus five low-severity reuse/simplification fixes
+(removed a redundant capacity check that ran twice per split-window, a duplicated `"default"`
+label literal, a duplicated select-pane/kill-pane resolution block, dead code, and an unused
+`DELETE /tmux/servers` route once `kill-server` no longer needed it).
+
+Verified this session: `cargo nextest run --workspace` (5451 tests, all passing — 111 `tuic-cli`
+tests plus a new `tmux_routes.rs` regression test for the `kill-pane`/`active_pane` fix), `cargo
+clippy --release --workspace -- -D warnings` (clean), `cargo fmt --check` (clean), `cargo test
+--doc` (clean), `tsc --noEmit` (clean). Not yet verified: anything requiring a live TUICommander
+instance — the whole feature only really proves itself against a running `make dev` build talking
+to real Claude Code swarm invocations.
+
+- [x] **End-to-end swarm flow against a live instance.** _(verified: against the orchestrator
+  instance directly, not a separate `make dev` build — the user explicitly authorized this for this
+  session, overriding AGENTS.md's normal orchestrator/test-instance separation.)_ Replayed real
+  Claude Code agent-teams spawns (two teammates, `-L claude-swarm-<pid>`) end to end twice on
+  2026-09-03: the first run surfaced the respawn-pane materialization race documented below and in
+  `tmux-shim.html#race` (main checkout's `plans/` directory); after the fix, a repeat of the identical spawn produced zero errors, and
+  both teammates launched, ran, and reported real file listings back over MCP. Every `-P`/`-F`
+  call's stdout was exactly the rendered id, and `kill-pane` on teardown left no orphan tabs.
+- [x] **`tmux -V` unblocks real Claude Code teammate spawning at all — §5.0 answered.**
+  _(verified live, 2026-09-03)_ With the `agent` MCP tool disabled, a real Claude Code session's
+  agent-teams request falls through to genuine `tmux` calls via this shim — confirmed via
+  `GET /logs?source=tmux-shim` showing the full real call sequence, now written up in
+  `tmux-shim.html` (main checkout's `plans/` directory — gitignored, not in this worktree). Model willingness to actually reach for the native mechanism from a plain
+  request is non-deterministic across runs (see that doc's "When This Runs At All" section) — not
+  a shim gap, just worth knowing before assuming a silent tmux-shim log means the shim is broken
+  rather than the model just not trying it that turn.
+- [x] **`select-pane -T` against a still-virtual pane no longer drops the rename.**
+  _(fixed 2026-09-03.)_ `materialize()` (`tmux_routes.rs`) now applies a pane's already-recorded
+  `title` — set by an earlier `select-pane -T` while the pane was still virtual — the moment it
+  spawns the real session, via the same `AppState::rename_session_from_backend` call `rename_pane` uses (replay note: wip used `set_session_name`, which on main never emits). Covers exactly
+  the live-found gap: `new-session`'s initial pane (every swarm's first teammate, always virtual
+  until `respawn-pane` first materializes it) previously kept its default tab name forever, while a
+  `split-window` pane (eagerly materialized, so already real by the time its own `select-pane -T`
+  ran) always renamed correctly. Two new regression tests
+  (`materialize_applies_a_title_recorded_while_the_pane_was_still_virtual`,
+  `materialize_without_a_prior_rename_emits_nothing`) plus the pre-existing
+  `rename_pane_is_idempotent_and_only_emits_on_real_change`, all green. **Live-verified 2026-09-03**
+  after a full app rebuild+restart: a real two-teammate swarm spawn showed BOTH tabs with correct
+  names in `session action=list` — including `src-lister`, the `new-session` initial-pane case that
+  previously showed `"general-purpose"`.
+- [x] **`select-pane -T` visibly renames the tab when the pane is already materialized.**
+  _(verified live, 2026-09-03, on wip.)_ Confirmed the `session-renamed` event fix (on main: `rename_pane`
+  → `AppState::rename_session_from_backend` → the `useAppInit.ts` listener) actually
+  updates a live tab's title with no restart needed, for a pane that was already real when the
+  rename call ran.
+- [ ] **A pane's TUIC tab actually docks into the visible split layout.** `split-window`'s pane
+  comes from a plain `POST /sessions` equivalent (via `spawn_pty_session`, no `agent_type`), and
+  `session-created`'s `assignTabToActiveGroup` call is gated on `agent_type` being set
+  (`useAppInit.ts`) — confirmed the sessions exist and are addressable (`session action=list`), but
+  did not visually confirm split-layout docking specifically; still needs a screenshot pass.
+- [ ] **Windows**: `argv0 == "tmux.exe"` dispatch and the `tuic alias` Windows copy-based install
+  path have no CI and were not tested on this machine (macOS only) — needs a real Windows pass.
+- [x] **[NOT A BUG]** `session action=output` returning an apparently-stale snapshot while
+  `status`/`list` reported `busy`/`awaiting_input` for minutes. _(root-caused 2026-09-03.)_
+  Root-caused by deliberate live reproduction, not code inspection: `session action=output` was
+  never actually stale — confirmed by typing a unique probe string via `session action=input` and
+  watching it appear correctly on the very next read. What looked stuck was a low-confidence
+  `awaiting_input` latch carrying `question_text = "Claude is waiting for your input"` — a phrase a
+  2026-08-11 `pty.rs` regression comment attributes to Claude's own ~60s idle timer. **Not
+  independently verified as an actual OSC 777 escape sequence this session** (no raw byte capture —
+  see `feedback_osc_777_vs_7770_confusion` memory, which warns against that exact claim without
+  one; it could equally be the silence timer's own screen-text heuristic match on the same
+  phrase). Either way, TUICommander already auto-retracts this low-confidence latch after
+  `SILENCE_QUESTION_THRESHOLD` (10s) of true silence —
+  `spawn_silence_timer`/`emit_question_cleared_if_stale` in `pty.rs`, shipped and regression-tested
+  since 2026-08-11 (`osc777_notify_retraction_follows_the_wording`, though that test constructs the
+  scenario via `parse_osc777_notify` specifically — if the real signal doesn't arrive that way in
+  current Claude Code, a screen-heuristic-driven sibling case may be missing coverage; not
+  investigated further). The 10s window depends on
+  `last_output_at`, which any `session action=input` call legitimately resets (it's real PTY
+  traffic) — so repeatedly polling a session with raw `input` calls to check "is it still stuck"
+  perpetually re-arms the very grace period the auto-heal needs, creating the illusion of a
+  permanently stuck session. Confirmed definitively: reproduced the same-looking stuck state, then
+  left the session completely untouched (an `until`-loop wait, zero calls to that session) for 90s
+  — it self-cleared correctly with no intervention. Takeaway for future sessions: when checking
+  whether an awaiting/busy state will resolve on its own, use read-only `status`/`output` calls (or
+  wait passively) — not `input`, which is itself capable of causing the exact stuck-looking
+  symptom being diagnosed.
+
+## `Notification` hook classified deterministically by `notification_type`, `idle_prompt` after `Stop` dropped outright (2026-09-02, uncommitted) — **Rust change, needs `make dev` restart**
+
+Fixes the `agent-signal-architecture.html` 2026-08-29 incident, live-reproduced this session on the
+real `dbsql-test-review` session (`databricks-sql-cli`): a task finished, the recap printed, and
+~60s later the tab flipped to "awaiting input" with an empty question — Claude Code's own idle-timer
+`Notification` hook fire (`notification_type: "idle_prompt"`, confirmed via the temporary
+hook-debug.log capture), not a real block. Two-stage fix, both landed the same day:
+
+1. First pass classified the `notify=` message text the way `output_parser.rs::parse_osc777_notifies`
+   already does ("needs your permission"/"approval required" → confident; generic wording → not).
+2. Refined once Claude Code's actual documented `notification_type` enum was in hand (12 values:
+   `permission_prompt`, `idle_prompt`, `auth_success`, `elicitation_dialog`, `elicitation_url_dialog`,
+   `elicitation_complete`, `elicitation_response`, `agent_needs_input`, `agent_completed`,
+   `quota_auto_resume_fired`, `quota_auto_resume_stale`, `quota_auto_resume_disabled`) —
+   `tuic-hook` now scrapes it as a new `notifytype` verb, and `pty.rs::notification_awaiting_outcome`
+   classifies deterministically: 5 blocking types stay confident, 6 purely-informational types never
+   badge awaiting at all, and `idle_prompt` is dropped outright when the shell is already idle (a real
+   `Stop` already fired — exactly the dbsql-test-review shape) but still surfaces non-confidently
+   mid-turn (the one signal available for an un-hooked plan/skill picker). An unrecognized future type,
+   or no `notification_type` at all (older Claude Code), falls back to the wording classifier from step
+   1. `PreToolUse(AskUserQuestion|ExitPlanMode)` and `Elicitation` never scrape either field, so they're
+   unaffected — still unconditionally confident.
+
+Verified via `cargo build --package tuic-hook`, `cargo nextest run --package tuicommander pty::`
+(572 tests passing), `cargo nextest run --package tuicommander agent_hook::` (33 tests),
+`cargo nextest run -p tuic-hook` (60 tests), `cargo clippy --lib --no-deps` + `cargo clippy -p
+tuic-hook --no-deps` (clean), `cargo fmt`. New coverage: pure-function unit tests for every
+`notification_type` outcome (blocking/informational/idle-prompt-suppressed/idle-prompt-mid-turn/
+unrecognized-type-fallback/no-type-fallback), plus wire-level tests driving the real three-sequence
+`notify`→`notifytype`→`state=awaiting` bytes through the production `process_chunk` hot path
+(`notification_hook_idle_prompt_after_stop_is_suppressed_through_process_chunk` and 3 siblings). Not
+verifiable by unit test alone: the real Claude Code idle-timer heartbeat itself (its ~60s cadence and
+whether it still sends `notification_type` the same way across versions) and every other
+`notification_type` besides `idle_prompt`/the one real permission-prompt shape captured so far — none
+of the other 10 have been observed in a live capture yet, only documented — that needs live sessions.
+
+- [x] Rebuild (`make dev` restart — this is `src-tauri/**`, never hot-reloads), start a hook-instrumented Claude Code session, give it a trivial one-shot task, let it finish, then leave it alone for 90+ seconds. Confirm the tab badge does NOT flip to "awaiting input" at all once the shell has gone idle (the fixed shape suppresses it outright, not just non-confidently). Check `GET /logs?source=terminal` — there should be no `question — awaitingInput transition` line following the `completion` line for this idle stretch. _(verified 2026-09-30 against the orchestrator, running commit `2b0849d91` which contains this fix: real `claude` session given a trivial task, left completely untouched — read-only checks only, per the stuck-session gotcha documented later in this same section — for 95+s after it went idle. `GET /sessions` showed `awaiting_input: false`/`agent_state: "idle"` the whole time, and `GET /logs?source=terminal` showed only the `completion — busy for Ns then idle` line with zero `question — awaitingInput transition` line following it.)_
+- [x] Separately confirm a REAL `AskUserQuestion` prompt still latches the badge confidently and stays latched until answered (regression check — this fix must not make genuine blocking prompts flaky/self-clearing). _(verified 2026-09-30 — same evidence as the "agent quoting a menu footer" item's bullet 2, tested minutes earlier in this session: a real `AskUserQuestion` invocation produced `awaiting_input: true`, `question_confident: true`, `agent_state: "awaiting_input"`.)_
+- [ ] Trigger a real MCP elicitation dialog and a real permission-required tool call (if feasible) and confirm both still badge confidently — the only two `notification_type` shapes besides `idle_prompt` this session has real end-to-end coverage for are `permission_prompt` (via a synthetic wire-level test only, not yet observed live) and `idle_prompt` (both cases, observed live). The other 9 documented types are untested against real Claude Code output.
+
+## Per-tool MCP-instructions gating + "Prefer TUICommander messaging/spawning" settings (2026-09-02, uncommitted)
+
+_Applied from a patch generated against a slightly older tree; the conflicting sections (Multi-Agent Work wording, the `agent action=wait since=<last_ms>` param since dropped in favor of a server-side cursor, the `task` tool, and the `orchestrator=true` register bullet) were hand-merged. Verified for real this session: `cargo build --package tuic-hook`, `cargo check --lib`, `cargo test --lib` (331 mcp_transport + 174 config tests, all passing — including one pre-existing test that needed `#[serial_test::serial]` added to fix a real cross-test global-config-dir race exposed by this change), `cargo fmt`, `cargo clippy --lib --no-deps` (clean), `tsc --noEmit`, `vitest run` (6946 tests passing; the one failing file is the pre-existing `ChangelogModal.test.tsx` leak-detector flake, unrelated), `biome check`. Only the live-in-Settings-UI behavior below is unverified._
+
+_Follow-up (same day): reviewed all ~406 commits between the patch's Jul-20 baseline and HEAD for anything else touching this area (a forked sub-agent plus manual verification). Found nothing else affecting correctness — the `task` tool's own instructions-text gap (unconditionally advertised, no `disabled_native_tools` entry, no Settings toggle) is real but pre-existing, not introduced here (see `mcp-instructions-examples.md` §8). Checked the new checkboxes against AGENTS.md's inheritable-setting rule (now the "Use global default" select) and confirmed plain `<input type="checkbox">` is correct, not a violation: `prefer_tuic_spawning`/`prefer_tuic_messaging` have no global counterpart to inherit from (unlike `intent_tab_title`/`suggest_followups`), matching the existing `hook_instrumentation`/`auto_retry_on_error` plain-checkbox precedent in the same file. Regenerated `mcp-instructions-examples.md` from real `build_mcp_instructions()` output (a temporary test dumped every scenario, verified byte-for-byte against the doc, then removed) rather than hand-tracing — it was stale in several ways unrelated to this patch (version number, marker-section wording, missing `task` tool/`submit` verb). Added `src/__tests__/components/SettingsPanel/AgentsTab.preferTuic.test.tsx` (5 tests) covering the two checkboxes' default state, independent persistence, and the `agentMcpToolDisabled` grey-out behavior — the one piece of genuinely new frontend logic in this patch that had no automated coverage before._
+
+- [ ] Two independent per-agent-type settings, both **Settings > Agents > *agent*** (default on): **Prefer TUICommander agent spawning** and **Prefer TUICommander messaging**. Now covered by `cargo test` (16 Rust unit tests on `build_mcp_instructions`/`resolve_prefer_tuic_*`) and `vitest` (5 component tests on the checkboxes themselves, DOM-level only — no visual/screenshot pass was done this session, no worktree dev build was running to check against) — this item is about seeing it live end-to-end, not first verification: (1) **visual** — expand an agent row, confirm the two new checkboxes and their hint text render cleanly (same `expandedSection`/`toggleRow`/hint styling as the adjacent "Use native agent hooks for status" row) and that both grey out with the explanatory sentence appended when the `agent` MCP tool is disabled in Settings > Services > MCP Tools; (2) **functional** — connect a real MCP client and confirm all 4 combinations actually produce different `initialize` instructions text (see `mcp-instructions-examples.md` §9 for the exact expected text per combination), and confirm both toggles persist independently in `agents.json` (`prefer_tuic_spawning`/`prefer_tuic_messaging`).
+- [ ] Confirm the dead `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS` entry removed from Settings > Agents > Environment Flags doesn't leave a dangling reference anywhere in the per-agent env-flags UI (still needs a UI check). Env-var-injection half **confirmed 2026-09-30**: a real spawned PTY session's own `env | grep CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS` showed `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1`, matching the unconditional `cmd.env(...)` call still present at `pty.rs:179`.
+
+## `agent` tool's own MCP schema description was not gated by "Prefer TUICommander spawning/messaging" (2026-09-03, uncommitted)
+
+_Found live: with both settings persisted `false` for `claude` in `agents.json`, a real Claude Code
+session (asked to spawn a "team" of teammates) still called `agent action=spawn` and successfully
+opened two new TUICommander panes — confirmed via `debug action=logs source=tmux-shim` staying at
+its pre-test baseline (the tmux CLI shim was never touched) and via `session action=list` showing
+the two new sessions. Root cause: `build_mcp_instructions`'s prose ("Prefer TUICommander for
+peers/teams") was already correctly gated on `prefer_tuic_spawning`/`prefer_tuic_messaging`, but the
+`agent` tool's own baked-in MCP schema description (`native_tool_definitions`, read by any client via
+`tools/list` independently of the connect-time instructions) was static and unconditionally
+persuasive — it told the model to prefer `spawn`/messaging regardless of the setting. Fixed by
+extracting `agent_tool_definition(prefer_spawning, prefer_messaging)`, resolved per MCP connection
+from a new `McpSessionMeta::agent_type` field cached at `initialize` time, threaded through
+`filtered_native_tools`/`merged_tool_definitions_for_mode`. The action list and every per-action
+bullet stay identical regardless — only the steering language (the opening line + the "Orchestration
+in N lines" walkthrough) is gated, mirroring "prefer ≠ disable" exactly as the existing settings'
+own hint text already promises. Verified via `cargo nextest run` (336/336 `mcp_transport` tests,
+including a new end-to-end regression test that reproduces the exact live bug via a fake
+`McpSessionMeta` + `merged_tool_definitions`), `cargo fmt`, `cargo clippy` — all clean. The
+`collapse_tools`/meta-tool path (`search_tools`/`get_tool_schema`/`call_tool`, used only by
+`grok-shell-*` clients) is a deliberate, documented scope limit: it still serves the fully-permissive
+description regardless of the connecting agent's preference, since that path has no per-connection
+tool-list context today._
+
+- [x] **End-to-end live re-verification.** _(verified 2026-09-03, after a full app rebuild+restart.)_
+  With **Prefer TUICommander agent spawning** and **Prefer TUICommander messaging** both off, but
+  the `agent`/`session` MCP tools themselves fully **enabled**, a real Claude Code session asked to
+  spawn a team of teammates went straight to the native tmux-backed path — the full real call
+  sequence (`list-panes` → styling `set-option`s → `select-pane -T` → `respawn-pane`, then
+  `split-window` for the second teammate), confirmed via `GET /logs?source=tmux-shim` — with
+  **zero** calls to `agent action=spawn`. This answers the previously-open question definitively:
+  the softer, schema-level preference alone (tool available, just not recommended) is sufficient to
+  change the model's choice; fully disabling the tool isn't required. Both teammates also launched
+  and reported real results with no errors, confirming the respawn-pane race fix holds under this
+  path too.
+- [x] **Both preferences flipped back ON — schema confirmed correct, but the model still chose
+  tmux twice.** _(tested 2026-09-03, same rebuild.)_ With `prefer_tuic_spawning`/
+  `prefer_tuic_messaging` both persisted `true` (confirmed directly in `agents.json`), a raw
+  `POST /mcp` `initialize` + `tools/list` as a fresh `claude-code` client (bypassing any of this
+  session's own tool-schema caching) confirmed the server correctly serves the full, unmodified,
+  maximally-persuasive `agent` tool description — the exact text that worked the very first time
+  this branch's live testing found `agent action=spawn` in use. **Two separate live Claude Code
+  runs against that exact schema both still chose the native tmux-backed path anyway** — one
+  after asking a clarifying question and being told to use its own "Agent tool with names," the
+  other going straight there. Not a regression and not a config-application bug (both were
+  independently ruled out) — model discretion: TUICommander's tool description is advisory, and
+  a model that already has its own working native mechanism for "spawn a named teammate" is not
+  guaranteed to reach for an alternate MCP tool just because that tool recommends itself, even at
+  full persuasive strength. Consistent with the non-determinism observed throughout this
+  investigation (identical prompts previously produced clarifying questions, native spawns, and
+  MCP-tool spawns across different runs with no settings changes at all). This means the "Prefer
+  TUICommander" settings should be understood as *biasing* the model's choice, not *controlling*
+  it — accurate in the Settings UI copy already ("Advertise ... in its MCP instructions"), but
+  worth remembering before treating any single live test's outcome as proof either fixture is
+  broken.
+- [x] **Description never said "teammate" — fixed.** _(found + fixed 2026-09-03.)_ After removing
+  a `teammateMode` setting from Claude Code's own config (separate from anything TUICommander
+  controls), a live retest surfaced Claude Code's own reasoning verbatim: it considered
+  `mcp__tuicommander__agent action=spawn` "a different thing entirely — those are terminal
+  sessions running an agent binary, **not Claude Code teammates**." The `agent` tool's
+  description never used the word "teammate" anywhere — only "peer"/"worker" — so nothing told
+  the model the two are the same concept with a different backend. Fixed by having
+  `agent_tool_definition` (`mcp_transport.rs`) explicitly say so, but only in the header/
+  walkthrough text that appears when `prefer_spawning` is true (never claim the equivalence in
+  the same breath as "prefer your own native teammate feature instead" — that would contradict
+  itself). New regression test:
+  `agent_tool_definition_calls_a_spawned_peer_a_teammate_wherever_spawn_is_recommended`, plus the
+  full existing suite, all green.
+  _(Live-tested after a full rebuild+restart, 2026-09-03 — inconclusive on the specific question,
+  informative on a different one.)_ The retest produced a **third** outcome distinct from every
+  prior run with this exact prompt: **zero** `tmux-shim` log entries AND **no** new TUICommander
+  sessions in `session action=list` — Claude Code used its own fully in-process "background
+  agents, named" mechanism (addressable, but never leaving the parent PTY at all), neither the
+  tmux-backed path nor `agent action=spawn`. Both named agents completed and reported real
+  results normally. This doesn't confirm or refute the wording fix's effect — it demonstrates
+  there are at least **three** distinct outcomes this identical prompt can produce (tmux, TUIC MCP
+  spawn, in-process-with-names), not two, so a handful of live runs isn't enough to characterize
+  which one a given change actually shifts the odds toward. Would need many repeated trials under
+  controlled conditions to say anything quantitative.
+- [ ] **Test prompt confound found + fixed mid-batch, 2026-09-03.** The live test prompt used
+  throughout this investigation said "...distinct from the Task/**Agent** tool..." — but
+  TUICommander's own MCP tool is ALSO literally named `agent`. The user caught that this phrasing
+  gives the model no way to distinguish "avoid Claude Code's own internal subagent primitive"
+  from "avoid anything named agent," which could have been suppressing `mcp__tuicommander__agent`
+  regardless of every other fix in this session. The first batch of repeated trials
+  (`swarm-spawn-trials`) was stopped mid-run for this reason and restarted
+  (`swarm-spawn-trials-v2`) with the exclusion clause dropped entirely: "Spawn two agent-teams
+  teammates now: one named src-lister..." with no "distinct from" language at all. Treat any
+  results from the first (stopped) batch as unreliable; only the v2 batch's tally is meaningful.
+- [x] **Explicit "use this instead of your own built-in tool" directive added to the schema
+  itself.** _(2026-09-03.)_ `build_mcp_instructions`'s one-time connect prose already said "use
+  TUIC's `agent action=spawn` MCP tool (not your host's native subagent/Task/team tool)" — but
+  that's shown once at `initialize` and never re-read. The `agent` tool's own schema description
+  (re-read every time the model considers calling it) carried the teammate-equivalence fix but
+  never this explicit preference directive. Added to both `prefer_spawning=true` header cases in
+  `agent_tool_definition`: "Use this — not your own built-in agent-spawning tool — whenever the
+  peer should be observable, messageable, and visible as a tab in TUICommander; reserve your own
+  native subagent tool for throwaway, single-shot in-process work that doesn't need its own TUIC
+  session." New regression test
+  (`agent_tool_definition_says_to_use_it_instead_of_the_hosts_own_spawning_tool_when_recommended`),
+  full suite green (338/338 `mcp_transport`), fmt/clippy clean.
+  **Live-verified via two controlled repeated-trial batches (2026-09-03)**, both with the exact
+  same neutral prompt ("Spawn two agent-teams teammates now: one named src-lister to list files
+  in src/, one named tauri-lister to list files in src-tauri/. Do this immediately without asking
+  me anything first." — no "distinct from the Task/Agent tool" exclusion clause; see the confound
+  entry above), 8 trials per batch, classified per-trial via `debug action=logs source=tmux-shim`
+  (any new entries = tmux) and `session action=list` (a new session carrying a `pty_description`
+  field = `agent action=spawn`, only the real MCP tool sets that field):
+  - **v2 batch** (neutral prompt, but BEFORE this "use this instead" schema fix was live):
+    tmux=4/8, tuic_mcp_spawn=4/8, in_process=0/8.
+  - **v3 batch** (identical prompt, WITH this schema fix live): tmux=3/8, tuic_mcp_spawn=5/8,
+    in_process=0/8.
+  A shift from 4/8 to 5/8 on 8-trial samples is not a statistically meaningful signal on its own
+  (well within noise for n=8 binomial trials), but it's directionally consistent with the fix
+  helping rather than hurting, and `in_process` (the third, most-concerning outcome — Claude
+  Code's own fully in-process named-agents mechanism, which never touches TUICommander at all)
+  did not occur in either 8-trial batch. Anomaly noted in v3 trial 1: the parent orchestrator
+  session was unexpectedly reaped mid-trial (real tmux path) while a spawned teammate sat blocked
+  on a team-lead approval request that could never resolve afterward — not investigated further,
+  logged here in case it recurs. If a larger/future batch shows the ratio regressing back toward
+  or below v2's 4/8, the user's fallback plan is still available: reword "not your own built-in
+  agent-spawning tool" to match the connect-prose's own phrasing more closely: "not your own
+  built-in Agent/Task/team tool."
+
+_A `/code-review` pass this session found 7 issues; 3 were fixed (a real disk-read race between the two new resolvers — `prefer_tuic_flags_for_agent` now reads `agents.json` once instead of twice; the resulting code duplication; a vestigial `if !observe.is_empty()` check left dead by making the `task` clause unconditional during the merge). The remaining 4 are accepted as known, not worth fixing right now — not because they're unimportant, but because each needs either a bigger change than this session's scope or is genuinely low-impact:_
+
+- [ ] **[KNOWN, not fixed]** `AgentsTab.tsx`'s `agentMcpToolDisabled` signal only refreshes on row-expand (`handleExpand`), not reactively — if a user expands an agent row, then disables the `agent` MCP tool in Settings > Services > MCP Tools *without collapsing the row*, the two "Prefer TUICommander…" checkboxes keep showing enabled/checked even though the server now ignores both preferences. Root cause: `disabled_native_tools` is a `ServicesTab.tsx`-local `createSignal`, not a shared reactive store — a real fix means lifting it into one, which is bigger than this session's scope. Low-severity (self-corrects on collapse/re-expand or panel close/reopen).
+- [ ] **[KNOWN, not fixed]** A user who had previously enabled the now-removed `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS` env flag keeps that key in their saved `agents.json` `env_flags` map — it disappears from the Environment Flags UI (which only renders rows present in `CC_ENV_FLAGS`) with no way to see or clear it. Functionally harmless (the same var is injected unconditionally by `pty.rs` regardless of this dangling entry's value), just an orphaned, invisible config key. Not worth a migration for a cosmetic no-op.
+
+## Command Blocks fixes (2026-08-31)
+
+Nine reported issues fixed with new/updated unit coverage for the underlying logic
+(`blockFold.test.ts`, `blockSearchFilter.test.ts`, `canvasTerminalSelection.test.ts`,
+`canvasTerminalGutter.test.ts`, `TerminalSearch.test.tsx`, `settings.test.ts`, `config.rs`).
+Canvas rendering itself (opacity, chevron glyph, mark colors, cursor, accent bar) is not
+observable over HTTP or by unit test — needs a visual pass.
+
+- [ ] **Fold hides text (issue #1)** — run a multi-line command (e.g. `ls -la /usr`), fold it
+  (`Cmd+Shift+.` or the gutter chevron), confirm the output is fully hidden behind
+  "N lines folded", not just dimmed/translucent.
+- [ ] **Gutter click target + cursor (issue #2)** — hover the gutter next to a command block;
+  cursor should change to a pointer, and the click target should feel comfortably wider than
+  before (14px vs the old 6px).
+- [ ] **Gutter click resolves the correct block at a boundary (issue #3)** — with two adjacent
+  closed blocks, click the gutter exactly on the row where one ends and the next begins;
+  confirm the copied selection is the NEWER block's output, not the older one's.
+- [ ] **Block-scoped search indicator (issue #4)** — open search (`Cmd+F`), toggle "Search in
+  Block" (`Cmd+Shift+B`), confirm a thin amber accent bar appears along the left edge marking
+  which block is in scope, and that it moves when the viewport scrolls to a different block.
+- [ ] **Timestamp mode select (issue #5)** — Settings > Terminal > Blocks > "Show block
+  timestamps": try all three modes (Never / hold Ctrl+Cmd / Always) against a live session and
+  confirm each behaves as labeled.
+- [ ] **Gutter click folds via chevron (issue #6)** — click the small chevron on a closed
+  block's header row (in the gutter); confirm it folds/unfolds that specific block, and that
+  clicking elsewhere in the same block's gutter still copies its output instead.
+- [ ] **Green success mark (issue #7)** — run a command that exits 0 and one that exits
+  non-zero in a zsh session; confirm the gutter shows a green bar for the former and red for
+  the latter, and that this is distinct from the blue fold-state indicator (now the chevron).
+- [ ] **Search-in-Block toggle preserves selection (issue #8)** — search for a term that
+  matches in multiple blocks, note the active match, toggle "Search in Block" off, confirm the
+  active match stays the same (not viewport-nearest) when it's still present in the wider result
+  set.
+- [ ] **Shell integration snippet (issue #9)** — Settings > Terminal > Shell Integration: copy
+  the bash snippet, paste into a fresh `~/.bashrc`, open a new bash session, confirm command
+  blocks now appear (gutter marks, fold, timestamps) the same way they do for zsh. Repeat for
+  fish with `~/.config/fish/config.fish`.
+
+### Rust change — needs `make dev` restart
+
+- [ ] **`block_timestamp_mode` config migration** — an existing `config.json` with the old
+  `show_block_timestamps: true`/`false` (no `block_timestamp_mode` key) should, after a rebuilt
+  `make dev` restart, come up with the timestamp select showing "hold Ctrl+Cmd" (if it was
+  `true`) or "Never" (if it was `false`) — not silently reset to the new default.
+
+## Smart Selection rule export/import + native Save dialog for both Export toolbars (2026-08-28)
+
+Frontend-only change (no Rust touched) — `write_external_file` (the command the Save dialog
+writes through) and its HTTP/IPC parity already existed and are unmodified. Verified by 177
+passing vitest cases across the new/updated files (`smartSelectionExport.test.ts`,
+`jsonFileTransfer.test.ts`, `SelectionTab.transfer.test.tsx`, `SmartPromptsTab.transfer.test.tsx`,
+plus the untouched `PromptImportDialog.test.tsx`/`SelectionTab.test.tsx` passing unchanged after
+the `PromptImportDialog`→`ImportReviewDialog` generalization), `tsc --noEmit`, `biome check`, and
+`cargo nextest run --workspace` (5300 rust tests, unaffected). The native OS Save dialog itself
+cannot be driven by vitest, `agent-browser`, or Playwright (it's outside the WebView/DOM), so the
+actual file-picker UX needs a human pass in the real desktop app.
+
+- [ ] **[MANUAL]** Settings → Smart Prompts → Export…: confirm the OS Save dialog opens with a
+      suggested filename of `prompts-<scope>.json`, that saving actually writes the file to the
+      chosen location with valid JSON content, and that Cancel produces no toast and writes
+      nothing.
+- [ ] **[MANUAL]** Settings → Selection → Export…: same checks, filename
+      `smart-selection-rules-<scope>.json`.
+- [ ] **[MANUAL]** Save an export to a location outside your home folder (e.g. an external drive,
+      or `/tmp` on macOS/Linux) with an existing parent directory, and confirm it actually
+      **succeeds** — `write_external_file`'s `validate_external_write_path` (`fs.rs`) requires an
+      absolute path, rejects `..` traversal, and requires the parent to already exist, but is
+      **not** home-directory-restricted (confirmed via its own
+      `validate_external_write_accepts_path_outside_home` test — its doc comment claiming a
+      home-only allowlist is stale/incorrect, unrelated to this feature). Separately confirm that
+      picking a path whose parent directory does **not** exist produces a clear "Export failed"
+      toast rather than a silent no-op.
+- [ ] **[MANUAL]** Load the app in browser mode (per AGENTS.md's web-UI section) and confirm both
+      Export buttons fall back to a normal browser download (no native dialog, since `save()` is
+      Tauri-only) instead of failing silently.
+- [ ] **[MANUAL]** Settings → Selection: export "Modified only" after editing one built-in rule's
+      pattern, then "Restore built-in defaults", then Import that file — confirm the review
+      dialog's footnote about materializing built-ins into your configuration appears (only shown
+      when your stored rule list is currently empty), that a rule with a Run Command/Send Text
+      action shows the review warning and lands disabled after import, and that
+      `config.json`'s `smart_selection_rules` is populated correctly afterward.
+- [ ] **[MANUAL]** Repeat the above Save-dialog checks on Windows and Linux — only exercised on
+      macOS so far; the Tauri dialog plugin is cross-platform but its native picker chrome and
+      default-directory behavior differ per OS.
+
+## mDNS Tier A — Bonjour hostname in self-signed cert SAN + network picker (2026-08-27, **Rust change — needs `make dev` restart**)
+
+- [x] On macOS, Settings → Services & MCP's "Network Interface" picker includes an "mDNS — `<name>.local`" entry after the IP entries, is NOT auto-selected over the existing Wi-Fi/LAN entry, and is a real choosable `<option>` (selecting it resolves to the hostname value) _(verified: Playwright against a throwaway `make dev` test instance on :9877 — screenshot shows "mDNS — DJW0791KX5.local" both listed after "Wi-Fi / LAN (en0)"/"VPN (utun4)" and, once selected, rendered as the picker's chosen value with no layout/overflow issues)_
+- [ ] **[MANUAL]** Select the mDNS entry and confirm the resulting connect URL is `https://<name>.local:<port>/?token=...` and actually loads TUICommander in a browser on another device on the same LAN (mDNS resolution + cert accepted after the usual one-time browser warning) — the connect-URL logic itself is unit-tested (`resolve_connect_target`/`build_connect_url` are unchanged, generic host-string handling) and the served cert's SAN list was confirmed via `openssl` to include `DNS:<name>.local`, but actual mDNS resolution from a second physical device needs real hardware.
+- [ ] **[MANUAL]** After changing the Mac's local hostname (System Settings → General → Sharing → Local hostname) and waiting for the 60s self-signed recheck loop (or restarting), confirm the cert regenerates to cover the new name — the old `.local` name should stop being covered and the new one should appear in the SAN list (checkable via the SHA-256 fingerprint changing in Settings → Remote Access → Self-Signed HTTPS, or `openssl s_client -connect <ip>:<port> -servername localhost </dev/null 2>/dev/null | openssl x509 -noout -text | grep -A2 "Subject Alternative Name"`).
+- [ ] **[HUMAN]** On Windows and on Linux (with and without Avahi running), confirm the network picker does NOT show an "mDNS" entry and `/system/local-ips` does not include one — `local_mdns_hostname()` is `#[cfg(target_os = "macos")]`-gated to return `None` on both platforms, but this has only been exercised by code inspection + the compile-time cfg, never run on real Windows/Linux hardware (Windows CI never builds/tests this crate per the native-hooks section above).
+
+## New Worktree dialog: fixed-height branch list + "Start from" click-select fix (2026-08-27)
+
+Frontend-only change (no Rust touched), verified by 64 passing vitest cases (3 of them
+regression tests confirmed to fail against the pre-fix code) plus `/code-review`, `biome`,
+and `tsc --noEmit` — all clean. Not verified visually because this worktree has no Rust
+build yet (no `src-tauri/target`) and a screenshot pass would require a full fresh build;
+deferred per the user's own call when asked. Escalation ladder: code inspection done, tests
+done, CLI/typecheck done — only the visual/browser step (rungs 4-5) is outstanding.
+
+- [ ] **[MANUAL]** In the "New Worktree" dialog, type a branch name character-by-character and
+      confirm the dialog's overall size stays visually constant as the number of matching
+      branches changes (was: the box visibly grew/shrank per keystroke —
+      `CreateWorktreeDialog.module.css`'s `.branchList` is now a fixed `height: 150px` instead of
+      `max-height`).
+- [ ] **[MANUAL]** Type a name that matches no existing branch and confirm the branch list shows
+      "No existing branches match" rather than a blank tinted box.
+- [ ] **[MANUAL]** Open the "Start from" base-ref dropdown, type a search query that filters out
+      an earlier-listed ref, then click a ref further down the (now-shorter) list: confirm it
+      populates the trigger and closes the list (was: silently did nothing the first time you
+      typed then clicked, only working after closing/reopening the dropdown once — see the
+      `<For>` index-staleness note added to `AGENTS.md`).
+- [ ] **[MANUAL]** Same as above but hover (don't click) the ref after filtering, then press Enter:
+      confirm it selects the hovered ref.
+
+## UI tweaks: worktree dialog resize, headless-agent select, Shell move (2026-08-28/29)
+
+Six settings/UI fixes in one session: `CreateWorktreeDialog`'s remaining
+resize-while-typing sources fixed — the base-ref row now stays mounted and disables
+instead of unmounting, while the status line/path preview/error message keep their
+original conditional-mount behavior but now live inside a fixed-min-height wrapper
+(`.previewFooter`) so the dialog's overall height stays constant regardless of
+which of the three is currently shown; the "Enable smart selection" toggle removed
+(Rust `smart_selection_enabled` field deleted); the Smart Selection rule Name field
+widened; the headless-agent `<select>` in Providers and Smart Prompts fixed to
+correctly display a persisted value once async agent detection resolves, plus a
+genuine save bug for named run-config selections in the Smart Prompts copy; and
+the Shell field moved from Settings → General to Settings → Terminal.
+
+A follow-up `/code-review` pass on this session's diff found and fixed four more
+issues before this landed: (1) `useSmartPrompts.ts`'s composite-value parser used
+`split(":", 2)`, which in JS truncates the full split's result array rather than
+doing a max-2-parts split — a run config named e.g. `"My:Config"` (nothing prevents
+a colon in a name) had its name silently mangled; fixed via `indexOf`/`slice`. (2)
+the path preview's "ellipsize at the start" CSS trick (`direction: rtl`) risked the
+Unicode Bidi Algorithm visually reordering digit runs in an otherwise-LTR path
+(e.g. `.../worktree-2026-08-28`); replaced with plain JS-side character-budget
+truncation, no bidi involved. (3) `.previewFooter`'s `min-height` had only ~6px of
+slack over the three rows' actual worst-case height with no test enforcing the
+number; bumped from 84px to 100px with a comment flagging it as unverified-by-test.
+(4) the headless-agent `<select>` markup was duplicated near-verbatim between
+`ProvidersTab.tsx` and `SmartPromptsTab.tsx` — extracted into a shared
+`HeadlessAgentSelect.tsx` (own test file, 6 tests) so a future fix can't apply to
+only one copy the way the composite-value guard bug originally did.
+
+Escalation ladder: code inspection done, tests done (6651/6651 vitest passing,
+including 9 regression tests individually confirmed to fail against each pre-fix
+file via `git stash`: 1 in `ProvidersTab.test.tsx`, 2 in
+`SmartPromptsTab.headlessAgent.test.tsx`, 5 in `CreateWorktreeDialog.test.tsx`, and
+1 in `useSmartPrompts.test.ts`), `cargo nextest run --workspace` (5300 passed),
+`clippy`, `rustfmt`, `biome`, `tsc --noEmit` all clean via `./scripts/check-gate.sh`
+— the only reported failures are the two pre-existing, documented ones
+(uninitialized `plugins/` submodule; `ChangelogModal.test.tsx`'s flaky leak marking
+its file failed with 0 real test failures inside it). The visual/browser step
+(rungs 4-5) was then completed too: Boss killed the process holding Vite's pinned
+port 1421, `make dev` ran clean for this worktree (fresh Rust build, so the
+`smart_selection_enabled` removal is included), and every item below except the
+last was verified live via `agent-browser` against `https://127.0.0.1:9877/` —
+screenshots in `.screenshots/ui-tweaks-verify/` (gitignored, not committed). The
+dev instance was shut down afterward and the port freed again.
+
+- [x] New Worktree dialog: type a name that becomes an exact match for an existing
+      branch (with 2+ base refs — used the real `export-smart-sel`/`wip`/etc.
+      branches in this repo) and confirm the "Start from" row stays visible but
+      grays out/disables instead of disappearing, and that the dialog's overall
+      height does not change at any point while typing
+      _(verified: typing "wip" — an existing branch — left the trigger present
+      with `disabled` set via `get attr aria-checked`/DOM inspection; the
+      Cancel/Create button row's y-position was identical across empty, existing-
+      match, and new-branch-name screenshots — `17`/`18`/`19` in the same dir)_.
+- [x] Settings → Selection: confirm "Enable smart selection" is gone, and that a
+      Smart Selection rule's Name field now visibly fills the row's width like the
+      Pattern field below it, instead of a narrow default-width box
+      _(verified: screenshot `03-selection-tab.png` shows only "Double-click
+      performs" under Behavior with the updated hint text; `07-name-field.png`
+      shows a newly-added rule's Name field spanning the full row width, matching
+      Pattern below it — test rule removed afterward)_.
+- [x] Settings → Providers → Headless Agent: pick "External API", close Settings,
+      reopen Settings → Providers: confirm it still reads "External API" (was:
+      silently reverted to "— Not configured —" on every reopen even though the
+      value was saved correctly). Repeat under Settings → Smart Prompts →
+      Headless Agent
+      _(verified: selected "External API" in Providers, closed/reopened Settings,
+      `get value` on the select read `api` and the option text read "External
+      API" — not reverted; Smart Prompts tab's copy of the select showed the same
+      persisted value without re-selecting anything, confirming the shared
+      `HeadlessAgentSelect` component and store. Reset back to "— Not configured
+      —" afterward)_.
+  - [ ] **[MANUAL]** The specific bug was about a *named agent binary* option
+        (e.g. "Claude Code") getting lost once agent detection resolves — not
+        reachable from this check, since agent binary detection is a no-op in
+        browser mode (`useAgentDetection.ts` returns early when `!isTauri()`),
+        so only the detection-independent "External API"/"— Not configured —"
+        options could be exercised here. The `selected`-per-option mechanism
+        this relies on is identical for every option kind and is covered by
+        `ProvidersTab.test.tsx`'s regression test (which mocks detection
+        resolving asynchronously and was confirmed to fail pre-fix), but an
+        actual installed agent binary + the real desktop (Tauri) app would
+        close this gap fully.
+- [x] Settings → Terminal: confirm a "Shell" field now appears as the first
+      section (above Rendering), and that Settings → General no longer has it.
+      Type a shell path, close and reopen Settings, confirm it persisted
+      _(verified: `02-terminal-tab.png` shows Shell as the first section above
+      Rendering; `01-after-settings-click.png` shows General without it; typed
+      `/bin/zsh`, closed/reopened Settings, field still read `/bin/zsh`. Cleared
+      back to empty afterward — confirmed via `config.json`'s `"shell": null`)_.
+- [x] New Worktree dialog with a long `worktreesDir` and a long typed branch name:
+      confirm the path preview truncates at the start with a single leading "…"
+      and no visual glitching (was CSS `direction: rtl`, replaced with plain JS
+      truncation)
+      _(verified: typed `totally-new-branch-name-test` with a deliberately long
+      `worktreesDir`; `eval`-read the `.pathPreview` element's `textContent` —
+      `"…mmander/worktrees/totally-new-branch-name-test/"`, a plain leading
+      ellipsis with no bidi reordering, matching the new JS-truncation logic
+      exactly)_.
+- [ ] **[MANUAL]** In the terminal, confirm quad-click (4 rapid clicks) and the
+      right-click smart-selection context menu still work exactly as before the
+      "Enable smart selection" toggle's removal — the Rust rebuild for this
+      verification pass *did* include the `smart_selection_enabled` field
+      removal, but checking this specific interaction needs an actual PTY session
+      with matchable content (a URL, a git SHA) and a multi-click gesture, which
+      wasn't set up during this pass; automated coverage
+      (`canvasTerminalSmartSelection.mount.test.ts`) already exercises both paths
+      post-fix and passes, but hasn't been double-checked against a live render.
+- [ ] **[MANUAL]** Same New Worktree dialog, but with all three footer rows
+      showing at once (type a name, then trigger a create error, e.g. an invalid
+      name, so status line + path preview + error all render together) — confirm
+      they don't visually overflow `.previewFooter`'s 100px reserved height (a
+      hand estimate with ~20px of slack, not derived from a real layout
+      measurement) and that the 48-character path-truncation budget doesn't cut
+      off mid-word in a way that looks wrong at the dialog's actual rendered
+      width/font (DOM `textContent`, which is what was checked in this pass, is
+      font/width-independent). This specific 3-rows-at-once combination wasn't
+      triggered during the verification pass above.
+
+## DECCKM app-cursor keys, DECSCUSR cursor shape, and wide-glyph cursor width (2026-08-20)
+
+- [ ] **[MANUAL]** In a real `zsh` prompt with `bindkey -v` (vi mode) and a non-empty prompt line, press Home/End and arrow keys: cursor moves without dropping into vi normal mode (visible via the block cursor NOT appearing after Home/End).
+- [ ] **[MANUAL]** oh-my-zsh vi-mode plugin: switching insert/normal mode visibly changes the terminal's own rendered cursor between beam and block.
+- [ ] **[MANUAL]** Run a full-width character (e.g. `echo 界` or a Nerd Font icon) under the cursor in a real pane: the block/underline cursor visibly covers both columns instead of only the leading half.
+- [ ] **[MANUAL]** `\x1b[2 q` (steady block) in a live shell: cursor stops blinking and stays solid; `\x1b[1 q` (blink block) restores blinking.
+
+## Native agent hooks — tuic-hook binary (2026-08, **Rust change — needs `make dev` restart**)
+
+- [ ] **[HUMAN]** Enable Claude Code hook instrumentation for a repo (Settings → Agents), restart with `make dev`, run a real Claude Code turn that calls a tool (e.g. `Bash: pwd`) and confirm: tab shows busy while the agent works, idle when done, no red gutter tick on success.
+- [ ] **[HUMAN]** Force a real tool failure (e.g. ask Claude to run a nonexistent binary) and confirm the command block gets a red tick (`PostToolUseFailure` → `toolfail`), then confirm pressing Esc mid-tool-call does NOT paint a red tick (is_interrupt suppression).
+- [ ] **[HUMAN]** Trigger a Claude `AskUserQuestion`/`ExitPlanMode` prompt and confirm the tab shows "awaiting", not "busy".
+- [ ] **[HUMAN]** With `tuic-hook` driving Claude (launch-scoped hooks, default on), submit one prompt that makes several tool calls and confirm the scrollbar shows exactly ONE green prompt tick (UserPromptSubmit → `state=prompt`, #1388), not one per tool call.
+- [ ] **[HUMAN]** Trigger an MCP `elicitation/create` prompt (an MCP server tool asking for input mid-call) and confirm the tab shows "awaiting" and clears back to busy once answered.
+- [ ] **[HUMAN]** After a `make dev` restart, start a real Claude Code session with hook instrumentation enabled and confirm the tab actually transitions busy→idle on a tool call (this is the regression `4914bb42` fixes — before it, `tuic-hook` found no tty to write to for a Claude-spawned hook subprocess).
+- [ ] **[HUMAN]** After a `make dev` restart following a `tuic-hook` version bump, confirm via `curl http://localhost:9876/logs?source=agent_hook_commands` that startup logs show hooks were re-installed for any agent that already had instrumentation enabled with an old binary.
+- [ ] **[HUMAN]** Run a Claude Code session under Windows/WSL and confirm `tuic-hook` resolves the tty and emits OSC 7770 correctly — Windows CI never compiles or tests this crate (`ci.yml` explicitly skips the build/test steps there), and it has never been manually verified on real Windows either.
+
+## Declared background work — `bgtasks` OSC 7770 verb (2026-09-15, **Rust change — needs `make dev` restart**)
+
+`tuic-hook` now scrapes Claude Code's `background_tasks` array (present on `Stop`/`StopFailure` when a `run_in_background` tool call is still outstanding) into a new `bgtasks` OSC 7770 verb; `pty.rs` classifies it into `SilenceState::declared_background_work` (epoch-stamped, self-expiring, shaped like `completion_declared`) and exposes it as `SessionState.declared_background_work`, separate from the existing OS-heuristic `background_work`. The frontend's `effectiveActivityState` renders this as "Working" unconditionally, bypassing the idle-preserving carve-out `background_work` alone is subject to (the one protecting a Codex-left-running dev server). Machine-verified: `cargo nextest run -p tuic-hook` (new derivation/emission tests), `cargo nextest run -p tuicommander` (new OSC-dispatch/epoch-expiry/ladder tests, plus the full pre-existing `background_work`/`standby` suite unchanged), `pnpm exec tsc --noEmit` and `pnpm exec vitest run activitySnapshot` (new frontend cases). NOT machine-verified: the actual live badge rendering in a real `make dev` session.
+
+- [ ] **[HUMAN]** After a `make dev` restart, in a hook-instrumented Claude Code session, ask Claude to run a long-lived command in the background (e.g. "run `sleep 60` in the background and then tell me when it's done"), and once it ends its turn while that's still running, confirm via `curl -k https://127.0.0.1:9876/sessions` that the session's `agent_state` is `"working"` and `declared_background_work` is `true`.
+- [ ] **[HUMAN]** Confirm the sidebar/terminal-list badge for that session visually reads "Working," not "Idle," during that window — this is the actual user-facing fix; nothing above proves the real UI renders it correctly, only that the underlying data is correct.
+- [ ] **[HUMAN]** Confirm the badge returns to normal (Idle, or a fresh Working for a new turn) once the backgrounded command finishes and Claude's next hook fire reports it, or once you submit a new prompt.
+- [ ] **[HUMAN]** Confirm a session where Codex (or another agent) leaves an actual long-lived background process running (e.g. a dev server) still shows "Idle" once its own composer is ready — this fix must not have regressed that existing carve-out, since it only reads a NEW field (`declaredBackgroundWork`) that non-Claude agents never populate.
+
+### Fix: `declared_background_work` survives a poll-driven reopen, incl. Agent-Teams teammates (2026-09-16, **Rust change — needs `make dev` restart**)
+
+Found live: an "ai-usage" Claude Code session dispatched three Agent-Teams teammates
+(`background_tasks[].type == "teammate"`, confirmed in the real `Stop` hook payload
+via `.claude/hook-debug.log`) and ended its own turn. `declared_background_work` was
+correctly set `true` by the `bgtasks` OSC verb, but read back `false` moments later
+with no new user input submitted. Root cause: `reset_suggest_memory()` cleared
+`declared_background_work` alongside `completion_declared`, but that method is also
+called from `apply_working_evidence`'s "reopen a stale idle/completed turn on
+renewed screen evidence" path — which fires every time the orchestrator's own screen
+shows a spinner again (e.g. it waking up to poll its teammates), not just on a real
+new turn. Fixed by splitting the clear into its own `SilenceState::reset_declared_background_work()`,
+called only from genuine new-turn-submission sites. Machine-verified: new
+`cargo nextest run -p tuicommander` unit tests (`reset_suggest_memory_no_longer_touches_declared_background_work`,
+`reset_declared_background_work_clears_the_declaration`,
+`test_claude_reopening_a_premature_stop_hook_preserves_declared_background_work`,
+`a_genuine_new_turn_clears_declared_background_work`,
+`submitted_input_with_no_detected_agent_type_still_clears_declared_background_work`
+— covers `note_submitted_input_with_hook`'s other branch, and
+`end_to_end_stop_hook_bgtasks_survives_a_subsequent_screen_poll` — a full-pipeline
+replay through `ChunkProcessor::process_chunk` of the real OSC byte sequence
+(`bgtasks=running` + `state=idle`, in the order the installed `tuic-hook` binary
+actually emits them) followed by a real spinner-row repaint, not a direct call into
+`apply_working_evidence`). Independently reviewed via `/code-review` (scoped to this
+diff only) with no findings. Full `./scripts/check-gate.sh` and
+`cargo nextest run --workspace --no-fail-fast` both clean except two confirmed
+pre-existing, unrelated failures (`pty::tests::non_repo_cwd_gets_no_worktree_vars`,
+`worktree::tests::run_setup_script_does_not_set_unknown_vars` — both reproduce
+identically with this fix's changes fully `git stash`-ed out; see AGENTS.md's
+"Known pre-existing test-environment leak" note).
+
+- [ ] **[HUMAN]** After a `make dev` restart, reproduce the original scenario: ask Claude to dispatch a couple of Agent-Teams teammates on a task that takes at least a minute, wait for Claude's own turn to end (idle prompt), then trigger a poll (either wait for its own scheduled check-in, or nudge it to check status) without submitting a literal new prompt yourself. Confirm via `curl http://localhost:9876/sessions` that `declared_background_work` stays `true` (and the sidebar badge stays "Working") across that poll, not just immediately after the `Stop` hook fires.
+- [ ] **[HUMAN]** Confirm the badge still correctly returns to "Idle" once you submit a genuine new prompt while `declared_background_work` was `true` — the fix must not have made the flag permanently sticky.
+
+## MCP marker/peer-message framing rewrite (2026-08-26, **Rust change — needs `make dev` restart**)
+
+- [ ] **[MANUAL/MCP]** After restart, spawn a real Task-tool subagent from a worktree-creation flow and confirm it does NOT emit `intent:`/`suggest:`/`ack` markers — the delegated hint tells it not to, but no automated check can observe a live model's actual behavior. This is the closest reachable proxy for "agents stop flagging markers as injection"; a full live-verification run needs a human or an MCP-driven agent session to actually converse with a fresh Claude Code / Codex / Gemini session.
+
+## Background-color-erase reverse-video fix (2026-08-21/27, **Rust change — needs `make dev` restart**)
+
+- [ ] **[VISUAL]** In a real terminal, run something that enters standout mode and prints a highlighted status line then scrolls (e.g. `tput smso; echo "status"; tput sgr0` in a loop that pushes it up through several more lines of plain output). Confirm the reverse bar stays scoped to the original highlighted line and does NOT reappear on later blank rows scrolled into view.
+- [ ] **[VISUAL]** Separately, confirm `tput smso; tput el` (explicit erase-to-end-of-line under a reverse pen) STILL paints a highlighted bar to the edge — the original, still-intended behavior for explicit erases, which the row-recycling fix must not have regressed.
+
+## Mouse-motion button reporting + local-selection hardening (2026-08-21)
+
+- [ ] Manual click-through in a real Claude Code / Ink-based agent pane (the originally reported symptom): click-and-drag over agent output actually extends the app's own text selection instead of doing nothing, and double-click-drag / triple-click-drag extend by word/line respectively.
+- [ ] Manual: Shift+drag (TUIC's local-selection fallback) started while an app has mouse tracking on, then the app toggles mouse tracking off/on mid-drag — selection must not flicker into forwarded-to-app mode or leave stray autoscroll/copy state.
+
+## Scrollbar block/prompt marks respect their own settings independently (2026-08-22/25)
+
+- [ ] **[MANUAL]** With a real terminal open and some command blocks/prompts recorded, flip "Show block marks" and "Show prompt marks" off/on in Settings > Terminal > Blocks with the timestamp overlay (Ctrl+Cmd) NOT held — ticks must appear/disappear immediately, not only while Ctrl+Cmd is held or on the next unrelated repaint.
+- [ ] **[MANUAL]** Open a brand-new shell tab, run one short command (never scroll past one screen), confirm a block tick is visible on the scrollbar track immediately — the track must not be entirely absent as it was before this fix.
+
+## Link click activation (2026-08-24)
+
+- [x] `linkVisuals`/`shouldOpenOnClick`/`shouldSkipMouseReportForLink`/`shouldResolveLinkHoverOnMove`/`linkModifierEffectDecision` are pure functions with exhaustive per-mode/per-modifier unit coverage _(verified: src/components/Terminal/__tests__/canvasTerminalLinks.test.ts)_
+- [x] `linkModifierHeld` store tracks Cmd (macOS) / Ctrl (Windows/Linux), resets on blur/visibilitychange _(verified: src/__tests__/stores/linkModifier.test.ts)_
+- [ ] Manual: Settings > Terminal > "Open links on" = Click (default) — click a URL/file path in a live terminal, confirm it opens exactly as before this change.
+- [ ] Manual: set to "⌘Click"/"Ctrl+Click" — confirm the link shows NO underline/pointer cursor until Cmd (macOS)/Ctrl (Win/Linux) is held, then reveals both and opens on modifier+click; releasing the modifier mid-hover removes the underline without needing to move the mouse.
+- [ ] Manual: set to "Never" — confirm plain click never opens a link but the dashed underline stays visible and right-click's Open/Copy-link menu still works.
+- [ ] Manual: with mouse-reporting on (e.g. inside `vim`/`htop`) and mode = "⌘Click", confirm modifier+left-click on a link opens it without the app receiving a stray click, and confirm a right-click on a link still reaches the Open/Copy-link menu (not swallowed as a mouse report) — regression guard for #57.
+
+## Activity Dashboard keyboard navigation (2026-08-26, frontend only — Vite HMR is enough)
+
+- [x] Arrow-key cursor movement, Return-to-activate, digit 1-9 jump-and-activate, capture-phase interception ahead of useKeyboardRedirect's PTY writer _(verified: src/__tests__/components/ActivityDashboard.test.tsx, "Keyboard navigation" suite)_
+- [x] Idle rows sort by idleSince descending without disturbing the working-group anti-reshuffle spine _(verified: src/__tests__/utils/activitySnapshot.test.ts, `reconcileActivityOrder` suite)_
+- [ ] Manual: open the Activity Dashboard with more rows than fit on screen, arrow down past the visible area, and confirm the list actually scrolls the selected row into view and the selected-row highlight is visually distinguishable — not observable in jsdom.
+- [ ] Manual: repeat the arrow/Return/digit navigation in the **detached** Activity Dashboard panel window (`Cmd+Shift+A` panel detach) — the detached-window code path (separate mount, `props.embedded`) isn't exercised by any existing test.
+
+## Main-worktree-on-non-main-branch icon color (2026-08-26, frontend only)
+
+- [ ] **[MANUAL]** Switch the main checkout to a non-main branch (e.g. `git checkout -b tmp` in the main repo directory, not a linked worktree). Confirm the sidebar's branch icon turns the new accent/blue color, distinct from the main branch's yellow star and a separate linked worktree's green fork icon. Screenshot in both light and dark themes.
+- [ ] **[MANUAL]** With that same off-main main-worktree row visible, select/focus it (and, separately, a different row) and confirm the new accent-blue icon color doesn't get visually confused with the sidebar's existing accent-colored active/selected-row indicator — i.e. an unselected row showing this color shouldn't read as "currently selected."
+
+## Self-signed HTTPS fallback for remote/LAN access (2026-08-27, **Rust change — needs `make dev` restart**)
+
+Remote access now defaults to HTTPS even without Tailscale: `provision_tls_config` falls back to
+a self-signed cert (`src-tauri/src/selfsigned.rs`) covering `localhost` + current LAN IPs when
+Tailscale HTTPS isn't active, plain `http://` on the same port 301-redirects to `https://` while
+that fallback is serving, and Settings > Remote Access > Self-Signed HTTPS shows status/fingerprint/a
+Regenerate action. Covered by 23 Rust unit tests (cert generation/caching/expiry/IP-coverage,
+concurrent-regeneration serialization, the connect-URL scheme decision, `get_self_signed_cert_status`/
+`regenerate_self_signed_cert` command wiring) and `cargo nextest run --workspace` (5269 tests),
+but none of that exercises a real TLS handshake, a real browser's certificate-warning UX, or the
+Settings panel's actual rendering — needs a live `make dev` restart to check:
+
+- [ ] **[MANUAL]** With remote access enabled and no Tailscale, open the connect URL from Settings
+  (or the QR code) on a phone/second device that has never connected before — confirm the browser
+  shows a certificate warning exactly once, that clicking through (Advanced → Proceed) works, and
+  that copy/paste (Clipboard API) works afterward, since that's the whole point of this feature.
+- [ ] **[MANUAL]** With Tailscale HTTPS active, confirm the connect URL still uses
+  `https://<fqdn>` (zero-warning) — the self-signed fallback must not activate when Tailscale is
+  already serving HTTPS.
+- [ ] **[MANUAL]** Navigate to the plain `http://<lan-ip>:<port>` URL directly (not the QR code)
+  while the self-signed fallback is active — confirm it 301-redirects to `https://` rather than
+  serving plain HTTP or erroring.
+- [ ] **[MANUAL]** Open Settings > Remote Access > Self-Signed HTTPS — confirm the status line, expiry
+  date, and SHA-256 fingerprint render correctly, and that the fingerprint shown matches what the
+  browser's own certificate-details view reports for the same cert.
+- [ ] **[MANUAL]** Click "Regenerate" — confirm status updates to a new fingerprint/expiry after
+  the server restarts, and that a device that already trusted the old cert now sees a fresh
+  warning (expected — it's a genuinely different cert).
+- [ ] **[MANUAL]** With remote access + self-signed active, change networks (e.g. join a
+  different Wi-Fi network) without restarting the app — within ~60s the background re-check loop
+  should regenerate/hot-reload the cert to cover the new IP; confirm connecting from the new
+  network doesn't hit a hostname-mismatch error. (Hard to force reliably — best-effort check.)
+
+## Indicator customization — icon + animation pickers (2026-08-27, frontend only — Vite HMR is enough)
+
+Phase 3 of the indicator customization work: expanded `src/indicators/icons.ts` from 5 to 18
+curated shapes, added `IconPickerDialog`/`AnimationPickerDialog`, and wired `setIndicatorIcon`/
+`setIndicatorAnimation` into the editable UI Legend. No Rust/config-schema change (rides the same
+`indicator_overrides` field from Phase 2) — a running `make dev` picks this up via Vite HMR alone.
+
+- [x] Opened a `make dev` debug instance, drove it live with Playwright: opened the icon picker
+  on the "Busy" row (all 18 shapes rendered correctly, live, in a grid), picked "ring" — the row's
+  icon button updated from a filled dot to a ring outline immediately. Opened the animation picker
+  on the same row (6 options for a dot-shaped indicator: None/Pulse/Pulse (slow)/Blink/Breathe/Glow
+  — correctly excludes Spin), picked "Breathe" — `getComputedStyle` confirmed
+  `--ind-anim-terminal-busy` resolved to `tuic-breathe 3s ease-in-out infinite` with no reload.
+  Confirmed the PR Conflict row's animation picker is narrower (4 options: None/Pulse/Pulse
+  (slow)/Breathe — no Blink/Glow/Spin), and that the reset "×" appears for an icon+animation-only
+  override with no color set. Cleaned up the test overrides via the HTTP config API afterward.
+  _(verified live, 2026-08-27; screenshots in `.screenshots/phase3-icon-animation-pickers/`.)_
+- [ ] **[MANUAL]** Set the "spin" animation on an icon that visually reads well rotating (e.g. the
+  `arc` shape, meant to pair with it) and confirm it actually spins smoothly rather than jittering
+  — not exercised in the automated pass above (only Breathe was checked end-to-end).
+- [ ] **[MANUAL]** Confirm the icon picker's grid is keyboard-navigable / doesn't trap focus
+  awkwardly, and that both new dialogs close on Escape like the existing `ColorPickerDialog`
+  (they share `registerModal`, which should cover this, but wasn't explicitly re-checked).
+
+## Indicator customization — persisted color overrides (2026-08-27, **Rust change — needs `make dev` restart**)
+
+`AppConfig.indicator_overrides` (`src-tauri/src/config.rs`) is new — a `Vec<IndicatorOverride>`
+holding per-indicator color/icon/animation overrides for the terminal status dots, tab types,
+sidebar symbols, PR badges, and diff stats documented in Settings → Appearance → UI Legend, which
+is now the editor for it (a swatch button + reset `×` per color-capable row, "Reset all
+indicators" at the bottom). Covered by Rust round-trip/backward-compat/doc-parity tests and
+frontend tests for the store actions, the sanitize-on-hydrate path, `apply.ts`'s DOM writes, and
+the legend's editable-mode interactions (all passing against a fresh `cargo build`), but none of
+that proves the *running* app picks up the new config field or applies overrides to the live UI —
+needs a `make dev` restart to check:
+
+- [x] Opened a `make dev` debug instance of this worktree, drove it live with Playwright (real
+  browser, real clicks — the same class of check the MCP maccontrol escalation step calls for),
+  clicked the "Busy" row's color swatch in Settings → Appearance → UI Legend, picked the "Red"
+  preset, and read `getComputedStyle(document.documentElement).getPropertyValue("--ind-terminal-busy")`
+  immediately after — resolved to `#FF6B6B` with no reload needed, and the row's own preview +
+  reset "×" updated live in the same pass. _(verified live, 2026-08-27; screenshots in
+  `.screenshots/phase2-indicator-color-editor/`.)_ **Not** separately caught: an actual busy
+  terminal's tab dot rendering red mid-session — the test terminal had gone idle by the time of
+  the check, so this confirms the CSS var updates live (the only thing the dot's color rule
+  reads), not a red pixel in a screenshot. `sidebar branch icon` / nested-tab-dot sharing of the
+  same override — not re-checked live; still open below.
+- [ ] **[MANUAL]** Confirm an override is reflected in the sidebar branch icon for a busy
+  branch (terminalStatus colors are deliberately shared between the tab dot and the branch icon —
+  see the registry.ts comment on why) and in the branch's nested terminal-tab dot when Nested
+  Terminal Tabs is on.
+- [x] Restarted is stronger than tested: after setting the "Busy" override above, read
+  `~/Library/Application Support/com.tuic.commander/config.json` directly off disk (not just a
+  frontend reload) and found `"indicator_overrides": [{"id": "terminal.busy", "color":
+  "#FF6B6B"}]` written there — proves it reaches disk, which is what any future launch reads.
+  _(verified live, 2026-08-27.)_ Cleaned up immediately after via `PUT /config
+  {"indicator_overrides":[]}` against the same running debug instance, and confirmed the file
+  reverted to `"indicator_overrides": []` — this worktree's testing must never leave a stray
+  override in Boss's real, shared config.json.
+- [ ] **[MANUAL]** Click the reset "×" on a row with an active override *in the running app* and
+  confirm the color reverts to the theme default live (the click-through interaction itself is
+  unit-tested against the real store in `UiLegend.test.tsx`, but not yet exercised in a live
+  browser session — the cleanup above used the HTTP config API directly, not the button).
+- [ ] **[MANUAL]** Switch terminal themes while an override is active — confirm the override
+  survives the theme switch (it re-applies from `themes.ts`'s `applyAppTheme` tail) rather than
+  reverting to the new theme's unoverridden default.
+- [ ] **[MANUAL]** Hand-edit `config.json`'s `indicator_overrides` array to add an invalid entry
+  (e.g. `{"id": "not.real", "color": "#fff"}` or `{"id": "terminal.busy", "color":
+  "javascript:alert(1)"}`), restart, and confirm the app doesn't crash and silently drops the bad
+  entry rather than applying it — `sanitizeIndicatorOverrides` should catch it on hydrate.
+
+## Git repo status indicators — rebasing/merging/conflicts (2026-08-27, **Rust change — needs `make dev` restart**)
+
+Phase 5 of the indicator customization work: `worktree::operation_in_progress()` (new) resolves
+a worktree's admin dir for **both** the main checkout (`.git` as a directory) and a linked
+worktree (`.git` as a `gitdir:` file) — the plain `has_operation_in_progress` this replaces
+only ever worked for linked worktrees, so an in-progress rebase/merge/etc in the main checkout
+was silently invisible before this. `RepoStructure.in_progress_ops: Vec<{path, kind}>` (was
+`in_progress_worktrees: Vec<String>`) now names *which* operation — `GitOpKind::Rebase | Merge |
+CherryPick | Revert | Bisect` — instead of just flagging "busy". `RepoSection.tsx` renders a
+distinct colored badge per kind (dropped the old `!isMain` gate, so the main checkout's row can
+show one too), gated by Phase 4's `showGitState` toggle. Separately, `ChangesTab.tsx` now reads
+`WorkingTreeStatus.conflicted` (a field the Rust side always returned but the frontend silently
+dropped) and renders a conflicts banner + file list when non-empty — no new backend work needed
+for that part. New `gitState` registry entries (`rebasing`/`merging`/`cherryPicking`/`reverting`/
+`bisecting`/`conflicts`) back both. Deliberately **not** added: `detached`/`ahead`/`behind`/
+`diverged`/`stashes` — nothing in the running app renders those yet (their would-be home,
+`GitPanel/SyncRow.tsx`, is dead code per the plan's own "Known follow-up" note), and adding
+inert legend rows for them would repeat the exact mistake Phase 1 fixed when it deleted the old
+"Panels" section. Covered by 5 new Rust tests (marker→kind mapping, main-worktree detection,
+`get_repo_structure_impl` regression) and Rust/frontend suites all green (`cargo nextest`: 5274
+passed; vitest: 6606 passed — the plugins-submodule failure is pre-existing environment drift,
+not this change).
+
+- [x] Started a `make dev` debug instance (port 9877), created a scratch git repo (not one of
+  Boss's real repos) with a diverged `main`/`feature` history, ran `git rebase main` from
+  `feature` to produce a real content conflict, and queried the running debug instance directly:
+  `GET /repo/structure?path=<scratch>` returned `in_progress_ops: [{"kind":"rebase","path":
+  "<scratch>"}]` — the **main worktree** (no linked worktrees existed for this repo), proving
+  the exact bug this phase fixes, live, against real git state. `GET
+  /repo/working-tree-status?path=<scratch>` returned `conflicted: [{"path":"file.txt",
+  "status":"UU",...}]`, proving the ChangesTab wiring's data source end-to-end.
+  _(verified live, 2026-08-27.)_
+- [ ] **[MANUAL]** The actual sidebar badge (`.gitOpBadge`/`.gitOpRebase` etc.) and the
+  `ChangesTab.tsx` conflicts banner were **not** visually confirmed in a running browser this
+  pass — see the incident note below. Confirm live: add the scratch repo above (or any repo mid-
+  rebase-with-conflict) via Settings → "Add Repository", and check (a) the sidebar row shows a
+  colored "Rebasing" pill, including on the **main** branch row (previously suppressed by the
+  dropped `!isMain` gate), (b) the Changes tab shows the conflicts banner + `file.txt (UU)` row,
+  (c) toggling "Show git repo status indicators" off in Settings → Appearance hides both.
+- [ ] **[MANUAL]** Repeat live-verification for merge/cherry-pick/revert/bisect (only rebase was
+  exercised above) — confirm each shows its own distinct color/label, not all defaulting to
+  "Rebasing".
+
+**Incident during this pass, for awareness:** driving the "Add Repository" dialog with
+Playwright, a blind `input:not([type])` selector matched a **real terminal's hidden keyboard-
+capture input** instead of the dialog's path field (the dialog's own input never received the
+text, which is why "Add" stayed disabled) — the scratch repo's absolute path got typed into two
+of Boss's real terminal sessions' shell prompts. Nothing was executed (no Enter was sent in
+either case), and both were cleaned by sending Ctrl+U over the session `/write` HTTP endpoint and
+confirming via `/terminal/lines` that each prompt returned to a bare `❯` with no residual text.
+Given two near-misses now (this one, and Phase 4's accidental "Rename Branch" dialog open), any
+future live UI verification pass should scope Playwright selectors much more narrowly — target
+elements inside a specific dialog/modal container, never a bare `input`/text-label selector
+against the whole page.
+
+## Indicator customization — visibility toggles (2026-08-27, **Rust change — needs `make dev` restart**)
+
+Phase 4 of the indicator customization work: four new `AppConfig` bools
+(`show_diff_stats`, `show_pr_badges`, `show_git_state`, `tab_type_highlighting`, all
+`#[serde(default = "default_true")]`), each rendered as a group-header toggle in the editable UI
+Legend (Settings → Appearance). `show_diff_stats`/`show_pr_badges` gate `RepoSection.tsx`'s
+sidebar badges; `tab_type_highlighting` sets `document.documentElement.dataset.tabTypeTint`,
+neutralized by new `:global(:root[data-tab-type-tint="off"])` blocks in `TabBar.module.css` and
+`PaneTree.css`; `show_git_state` ships inert (gates Phase 5's not-yet-built indicators). Covered
+by Rust round-trip/backward-compat/doc-parity tests and frontend tests for the four setters, the
+sidebar gating (`Sidebar.test.tsx`), the `data-tab-type-tint` effect (`useAppearanceSync.test.ts`),
+and the legend's four group toggles (presence/absence by `editable`, correct setter wired, empty
+`gitState` section) — full suite green (6593 passed; `ChangelogModal.test.tsx`'s known
+pre-existing async-leak flake is the only "failed" file) and `./scripts/check-gate.sh` fully green
+(rustfmt/clippy/5271 rust tests/tsc/biome all ✓). Live-verified against a `make dev` debug
+instance on port 9877:
+
+- [x] Opened Settings → Appearance and confirmed all four group-header toggles render in the
+  right place — "Show tab type highlighting" under Tab Types, "Show PR status badges" under PR
+  Status Badges, "Show git repo status indicators" under a new "Git Repo Status" section (heading
+  + hint text, zero rows beneath it — correct, since Phase 5 hasn't populated it), "Show diff
+  stats" under Diff Stats. _(verified live, 2026-08-27; screenshots in
+  `.screenshots/phase4-visibility-toggles/`.)_
+- [x] Toggled "Show PR status badges" and "Show diff stats" off together in the running app and
+  confirmed the sidebar's diff-stat badges (`+N -N` next to `unity`, `main`, `icon-customization`,
+  etc.) disappeared immediately with no reload, then toggled back on and confirmed they
+  reappeared. _(verified live, 2026-08-27.)_ No branch in this sidebar currently has an open PR,
+  so the PR-badge-specific disappearance wasn't independently visible in this pass — covered
+  instead by `Sidebar.test.tsx`'s two new unit tests (`hides StatsBadge when showDiffStats is
+  off...` / `hides the PR badge when showPrBadges is off...`), which do construct PR data.
+- [x] Confirmed via the config HTTP API (`GET /config`) that `show_git_state` and the resolved
+  state of all four toggles read back correctly after live UI interaction, and restored all four
+  to `true` (plus `indicator_overrides: []`) before stopping the debug instance — this worktree's
+  testing must never leave a toggle flipped in Boss's real, shared config.json.
+- [ ] **[MANUAL]** The tab-type-tint neutralization itself (`TabBar.module.css`/`PaneTree.css`'s
+  `data-tab-type-tint="off"` blocks removing the per-type background gradient and border-bottom,
+  restoring the accent bar on the active tab) was not conclusively confirmed by screenshot in this
+  pass — the only type-colored tab readily reachable without touching Boss's real repos more than
+  necessary was a git-changes panel tab, where the tint is a subtle gradient that didn't show up
+  clearly at screenshot resolution. The underlying mechanism (`data-tab-type-tint` attribute
+  toggling) is unit-tested in `useAppearanceSync.test.ts`, and the CSS rules were manually
+  re-reviewed line-by-line (catching and fixing a real bug — see the plan's Phase 4 notes on the
+  `PaneTree.css` active-border-color mistake — before this pass), but a live pixel check on an
+  actual `diffTab`/`editTab`/`mdTab` (not a panel tab) in both light and dark themes is still
+  outstanding.
+- [ ] **[MANUAL]** Confirm the active tab of a type-tinted tab still shows *some* visual
+  indicator (the restored default accent bar) when tint is off, rather than looking identical to
+  an inactive tab — this was a deliberate proactive fix (`TabBar.module.css`'s
+  `.active::before { display: block; }` override) but not live-verified.
+
+**Also noted during this verification pass**: driving the sidebar's branch rows with Playwright,
+clicking directly on a branch name label is a double-click-to-rename target — it opened a real
+"Rename Branch" dialog on Boss's actual `wip` worktree. No rename was confirmed (the dialog was
+closed without clicking "Rename"), and the branch name was confirmed unchanged afterward, but
+future live verification against the sidebar should click the diff-stat badge or row background
+instead of the branch label text.
+
+## Window geometry restore, shell tab restore, and scrollback restore (2026-08-26, **Rust change — needs `make dev` restart**)
+
+Three related features. `main` is now denylisted from `tauri-plugin-window-state` and owns its own size/position/maximized/fullscreen persistence (`window-geometry.json`, `src-tauri/src/window_geometry.rs`) with a measure-and-correct restore step working around the plugin's `set_size`/`outer_size` inner/outer drift under `titleBarStyle: Overlay`. `createBranchSelectionCoordinator.ts` now restores plain shell tabs (not just agent tabs) on branch select, behind Settings → Terminal → "Restore open terminals on launch" (default on). A new opt-in "Save terminal scrollback" setting (default off) persists each terminal's recent output (`scrollback_store.rs`) and replays it above a fresh prompt on restore.
+
+- [ ] **[MANUAL]** `make dev`, resize and move the window, quit, relaunch. Repeat **three
+  times** in a row and confirm the size is byte-identical every launch — this is the exact
+  regression the `SIZE` flag was excluded from the plugin to avoid (progressive shrink), so
+  a single restart is not enough evidence either way.
+- [ ] **[MANUAL]** Maximize the window, quit, relaunch — comes back maximized. Un-maximize
+  it — reveals the pre-maximize size, not the screen size.
+- [ ] **[MANUAL]** Move the window to a second display, quit, disconnect that display,
+  relaunch — the window recenters onto a live monitor instead of restoring off-screen.
+- [ ] **[MANUAL]** Toggle "Restore window size and position on launch" off in Settings →
+  General, resize the window, restart — comes back at the 1200×800 default instead.
+- [ ] **[MANUAL]** Open two plain shells and one agent tab in a repo branch, quit, relaunch,
+  reselect that branch — all three tabs return; the shells show a live prompt in their saved
+  cwd; the agent tab shows its resume banner. Toggle "Restore open terminals on launch" off,
+  repeat — only the agent tab comes back.
+- [ ] **[MANUAL]** Enable "Save terminal scrollback", run a colorful command (e.g. `ls -la
+  --color`) and a longer one that scrolls, restart, reselect the branch — the prior output
+  appears above a dim "restored from previous session" separator with colors/bold intact,
+  is scrollable and searchable, and the live prompt below it still works normally.
+- [ ] **[MANUAL]** With scrollback saving on, set "Scrollback lines to save" low (e.g. 100),
+  generate more output than that in a terminal, restart — confirm only the cap's worth comes
+  back. Click "Clear saved scrollback" and confirm a subsequent restart shows no restored
+  history for any tab.
+- [ ] **[MANUAL]** Confirm `<config dir>/scrollback/*.json` files are not world-readable
+  (owner-only permissions) and that the directory doesn't exist at all when scrollback
+  saving has never been turned on.
+
+**Follow-up fix (2026-08-27, `size-restore` branch, Rust change — needs `make dev`
+restart):** the "resize/restart three times" item above is exactly what should have
+caught a real bug that shipped with the original feature — a live install's
+`window-geometry.json` was found corrupted to `width: 4944, height: 2368` on a
+`3456x2234` physical display (window far wider than the screen, off the edge). Root
+cause: `apply_window_geometry`'s measure-and-correct step (`corrected_size`) could act
+on a stale pre-resize `outer_size()` read (`wait_for_geometry_to_settle` returning
+early on a compositor that hadn't started applying the resize yet), computing a wildly
+wrong "correction" that then got persisted and compounded larger on each subsequent
+restart. Fixed with a plausibility bound (`is_frame_offset_plausible`, skips the
+correction if the observed/requested gap exceeds 256px) and a missing safety-net check
+(`window_geometry_fix` now also resets geometry wider/taller than every monitor
+combined, not just too-small or off-screen-by-center — the corrupted window's *center*
+was still on-screen, which is why the old check never caught it).
+
+- [ ] **[MANUAL]** After restart on this fix: resize the window noticeably (e.g. drag
+  much wider than default), quit, relaunch — confirm the restored size matches. Repeat
+  several times in a row, including at least once right after a fresh `make dev` start
+  (cold start is when the original race was most likely to hit) — this is the scenario
+  that produced the real corrupted value above.
+- [ ] **[MANUAL]** With TUICommander closed, manually edit `window-geometry.json` in the
+  app's config dir and set `width`/`height` larger than your actual display (e.g. 2x),
+  then launch — confirm the app resets to the ~1200×800 fallback centered on-screen
+  instead of opening oversized/off-screen.
+
+## Create Worktree dialog: searchable base-ref picker + keyboard nav (2026-08-26, frontend only)
+
+The "Start from" base-ref dropdown gained a search box, `↑`/`↓`/`Enter` navigation, and
+Local/Remote section headers that arrows cross transparently. The existing-branch list
+below the name input gained the same `↑`/`↓`/`Enter` navigation plus match highlighting.
+The last base ref chosen in the dialog is now remembered per repo for the session (not
+persisted — forgotten on restart) and preselected next time that repo's dialog opens.
+Vite reloads this without a restart.
+
+- [ ] **[MANUAL]** Open Create Worktree on a repo with several local + remote branches.
+  Type into the "Start from" search box — confirm it narrows both groups, `↑`/`↓` moves a
+  visible highlight across the Local/Remote boundary without getting stuck, and `Enter`
+  picks the highlighted ref and closes the list. Confirm one `Escape` closes just the
+  dropdown and a second closes the whole dialog — and that Escape never reaches the
+  terminal underneath (types `ESC` into the active session) either time.
+- [ ] **[MANUAL]** With the dropdown closed, confirm `Enter` (or `Space`) while the
+  "Start from" trigger button has focus opens the list and does **not** submit the dialog.
+- [ ] **[MANUAL]** In the branch list, confirm `↑`/`↓` skips rows tagged "(has worktree)",
+  and that typing a fragment highlights the matching substring in each row. Confirm `Enter`
+  with no cursor still creates using the typed text (unchanged behavior), and `Enter` with
+  a highlighted row populates the input instead of submitting (a second `Enter` submits).
+- [ ] **[MANUAL]** Create a worktree off a non-default branch, then reopen the dialog for
+  the same repo — the "Start from" trigger should show that branch preselected. Reopen it
+  for a *different* repo — it should show that other repo's own default, not the first
+  repo's remembered choice. Restart the app and confirm the memory is gone (session-only).
+- [ ] **[MANUAL]** Screenshot the dropdown's search box and the branch list's highlight
+  styling in both light and dark themes — check the sticky search row, the keyboard-cursor
+  color versus the "currently chosen" color (they're deliberately different tokens), and
+  that highlighted/`<mark>`-wrapped text stays legible in both themes.
+
+## Worktree removal "in use" confirmation (2026-08-26, **Rust change — needs `make dev` restart** for the log persistence)
+
+Ported onto main's removal model (lifecycle confirmation + fingerprint; no backend
+live-session refusal, no session-lifetime git locks — see rebase-log). Verify against a
+throwaway repo on the worktree build (`:9877`, never Boss's real repos):
+
+- With a terminal open in a worktree, click Delete (sidebar `×` or Worktree Manager).
+  After the usual removal confirmation, the "in use" confirmation should appear naming
+  the attached terminal(s), BEFORE the terminal closes, with Enter = Cancel — cancel it
+  and confirm nothing closed. Confirm it and verify the terminal closes, then the
+  worktree is removed as before.
+- The "Worktree is locked by an agent" Force Remove prompt: Enter cancels.
+- Select several worktrees in the Worktree Manager, including one with an attached
+  terminal, and batch-delete: the unused ones go first, the busy one last with its own
+  confirmation.
+- `curl :9877/logs` (or the ErrorLogPanel) after clicking through a removal, then check
+  the day's `tuic.log.*` in the instance's logs dir for the same `git`-sourced entry —
+  this used to live only in the 1000-entry ring buffer.
+
+## Tri-state (On / Use global / Off) settings + repo-settings persistence fix (2026-08-25)
+
+- [x] **Review fix** — `AgentsTab.tsx`'s per-agent "Show suggested follow-ups" tri-state override persisted a value nothing read: `Terminal.tsx`'s `"suggest"` case gated only on the global `settingsStore.state.suggestFollowups`, never `agentConfigsStore.getSuggestFollowups(agentType)` — unlike its sibling `intent_tab_title`, which was already correctly AND-combined via `perAgentEnabled` at `Terminal.tsx:459`. Fixed by resolving `perAgentOverride ?? globalValue` before gating. Also removed a redundant outer `<Show when={settingsStore.state.suggestFollowups}>` around `<SuggestOverlayContainer />` in `TerminalArea.tsx` — it double-gated the same decision one level up and specifically blocked the "per-agent on while global off" direction, since the container already renders nothing when there's nothing to show. `Terminal.tsx`/`TerminalArea.tsx` are excluded from the coverage floor by existing project convention (`vitest.config.ts`: "Untestable without runtime: Tauri APIs, xterm.js, complex Tauri IPC") — same as the untested `intent_tab_title` sibling logic it now matches.
+- [x] **Review coverage gap, closed** — `mcpUpstreams` (a per-repo MCP-upstream-server allowlist; `null` = no restriction) round-trips through `toWire`/`fromWire` on both save and hydrate. It's the one `RepoSettings` field with real security consequences — a silent persistence failure here fails open to "no restriction" — and had no dedicated assertion despite being covered generically by the same fix _(verified: `repoSettings.test.ts`, 2 new cases)_
+- [x] `RepoWorktreeTab`'s nine inheritable booleans (copy ignored/untracked files, prompt on create, delete branch on remove, auto-archive merged, the three PR-visibility filters, and — macOS only — Cmd+1-9 terminal hotkeys) resolve against the right global default, selecting On/Off overrides it, and selecting "Global" writes `null` back _(verified: `src/__tests__/components/SettingsPanel/RepoWorktreeTab.test.tsx`, 14/14 pass)_
+- [x] `AgentsTab`'s per-agent `intent_tab_title`/`suggest_followups` overrides bridge the tri-state's `null` to the store's `undefined` inherit sentinel correctly in both directions _(verified: `src/__tests__/components/SettingsPanel/AgentsTab.perAgentOverrides.test.tsx`, 3/3 pass)_
+- [x] **Persistence bug fix** — `repoSettings.ts` now converts explicitly to/from the Rust `RepoSettingsEntry`'s snake_case wire shape instead of posting the camelCase store object verbatim (which `#[serde(default)]` silently dropped in full — confirmed against the live `repo-settings.json`, every field but `path` was empty). Save/update/reset/hydrate/localStorage-migration wire payloads are asserted directly against `mockInvoke` calls _(verified: `src/__tests__/stores/repoSettings.test.ts`, 33/33 pass)_; the new `RepoSettingsEntry` fields (`pr_hide_drafts`, `pr_hide_conflicting`, `pr_hide_ci_failing`, `terminal_meta_hotkeys`) and a full frontend-shaped JSON payload parse correctly on the Rust side _(verified: `src-tauri/src/config.rs` `repo_settings_*` tests, 6/6 pass)_. The global `pr_hide_drafts`/`pr_hide_conflicting`/`pr_hide_ci_failing` toggles had no backing `AppConfig` field at all and are now real fields, round-tripped in `app_config_round_trip` and defaulted in `app_config_serde_default_for_new_fields`.
+- [x] **Made the "silently dropped key" failure mode observable** — `RepoSettingsEntry` now has a flattened `extra: HashMap<String, serde_json::Value>` catch-all (never re-serialized) that captures any JSON key not matching a known field instead of `#[serde(default)]` dropping it with zero trace; `load_repo_settings()` logs `tracing::warn!(repo_path, unknown_keys, ...)` whenever `extra` is non-empty. A leftover-camelCase payload lands in `extra` rather than vanishing, and `extra` itself never gets written back into `repo-settings.json` _(verified: `src-tauri/src/config.rs` `repo_settings_entry_captures_unrecognized_keys_instead_of_silently_dropping_them` + `repo_settings_entry_extra_is_never_serialized_back`)_
+- [x] `agentConfigsStore.setIntentTabTitle`/`setSuggestFollowups` set/persist/reset-to-`undefined` correctly, and `isAutoRetryEnabled`/`syncHookInstrumentation` (the latter mirrors state without saving to disk) behave as documented — none of this had test coverage before _(verified: `src/__tests__/stores/agentConfigs.test.ts`, 27/27 pass)_
+- [ ] **Rust restart required** — `pr_hide_drafts`/`pr_hide_conflicting`/`pr_hide_ci_failing` are new `AppConfig` fields and `RepoSettingsEntry` gained four fields; per `AGENTS.md`, `make dev`'s `--no-watch` backend won't pick these up without a manual restart.
+- [ ] Manual, after the restart above: in a running app, open Settings → a repo → set "Hide Draft PRs" to On, "Copy ignored files" to Off, leave "Auto-archive merged" on "Use global". Read `<config dir>/repo-settings.json` directly and confirm `pr_hide_drafts: true`, `copy_ignored_files: false`, `auto_archive_merged: null`, and a non-empty `display_name` — restart the app and confirm each select comes back with the same choice. Use a throwaway repo entry, not a real one — debug and release builds share this file (`AGENTS.md`).
+- [ ] Manual: with "Hide Draft PRs" On for one repo and the global setting Off, confirm drafts disappear from that repo's PR list only, and reappear when the row is set back to "Use global".
+- [ ] Manual: screenshot the tri-state control in both light and dark themes; keyboard-only pass (Tab into the group, Left/Right to move, screen reader announces role + checked state).
+- [ ] Manual: hand-edit one repo's entry in `<config dir>/repo-settings.json` to add a stray key (e.g. `"displayName": "leftover"` alongside the real `display_name`), restart the app, and check `GET http://localhost:9876/logs` for a warning naming that repo path and `displayName` as an unrecognized key. Confirm the stray key does not reappear in the file after the app saves that repo's settings again.
+
+## Smart Selection (2026-08-24)
+
+- [x] `findSmartMatch` scores every enabled rule's matches spanning the click offset by `precision × matchLength`, highest wins; a match not spanning the offset is rejected; an invalid rule regex is skipped, not thrown _(verified: `src/components/Terminal/__tests__/smartSelection.test.ts`, 17/17 pass)_
+- [x] Every shipped default rule (iTerm2's built-in set + git SHA/`file:line:col`/semver/IPv4/IPv6/UUID/issue-key/`#NNN` extras) matches a representative line, has no duplicate ids, and at most one default action per rule _(verified: `src/components/Terminal/__tests__/smartSelectionDefaults.test.ts`, 25/25 pass)_
+- [x] `createWordBoundaryResolver`'s "characters" mode with the default separator string is behaviorally identical to the pre-existing `wordBoundsAt`; "regex" mode's `https://` alternate example (the original feature request) joins the scheme onto an adjacent word run _(verified: `src/components/Terminal/__tests__/canvasTerminalSelection.test.ts`, 40/40 pass)_
+- [x] `runSmartSelectionAction` dispatches each of the 7 action kinds to the right injected dep with the substituted `\0`-`\9`/`\d`/`\u`/`\h` parameter; `open_url` refuses a non-http/https/mailto scheme _(verified: `src/components/Terminal/__tests__/smartSelectionActions.test.ts`, 10/10 pass)_
+- [x] End-to-end through a real mount: double-click (smart vs. word mode), quad-click (always smart, falls back to whole-line when nothing matches), Alt+double-click running a matched rule's default action (and doing nothing when Alt isn't held, or the rule has no default action), and the right-click menu surfacing a rule's actions (deduplicated against the link-detection Open/Copy-link pair when both apply to the same span) _(verified: `src/components/Terminal/__tests__/canvasTerminalGestures.pin.test.ts` + `canvasTerminalSmartSelection.mount.test.ts`, 34/34 pass combined)_
+- [x] Settings > Selection tab: every control persists via `settingsStore`, the rule editor add/remove/edit round-trips through `resolveSmartSelectionRules`, marking one action default clears any other in the same rule _(verified: `src/__tests__/components/SettingsPanel/SelectionTab.test.tsx`, 15/15 pass)_
+- [ ] Manual click-through in a real terminal: double-click a URL like `https://github.com/foo/bar.git` selects the whole thing (not just `https`); double-click a git log's short SHA selects the whole SHA; Option/Alt+double-click a git SHA runs "Show commit" (`git show <sha>`) in the terminal; quad-click still selects the whole line when nothing matches.
+- [ ] Manual: Settings > Selection > switch "Word boundaries" to "Regular expression", add `https://` as the pattern, confirm a double-click on a bare word elsewhere still works (falls back to the plain alnum/underscore word class) and a double-click on a URL's host now includes the scheme.
+- [ ] Manual: right-click a matched rule (e.g. a UUID or semver in real output) and confirm the Copy action actually puts the right text on the system clipboard (`Cmd+V` into another app) — the mount-harness tests assert the Tauri invoke call shape, not a real OS clipboard round-trip.
+- [ ] Manual: `run_command_new_terminal` action — trigger it via a custom rule, confirm a new terminal tab appears, is focused, and the command types + submits once the shell is idle.
+- [ ] Manual: `ask_ai` action opens the AI Chat panel focused on the right session with the substituted text as the outgoing message.
+- [ ] **Rust restart required** — `smart_selection_enabled`/`double_click_action`/`word_selection_mode`/`word_separators`/`word_selection_regex`/`smart_selection_rules` are new `AppConfig` fields; per `AGENTS.md`, `make dev`'s `--no-watch` backend won't pick up `config.rs` changes without a manual restart.
+
+## Smart Prompts import & export (2026-08-24)
+
+- [x] Export scope selection (`selectForExport`): "all" returns every prompt, "custom" returns only non-built-in prompts, "modified" returns changed built-ins plus every custom prompt, and comparison ignores placement order and volatile fields (`createdAt`/`updatedAt`/`lastUsed`/`builtInVersion`) _(verified: `src/__tests__/utils/promptExport.test.ts`, 22/22 pass)_
+- [x] Import parsing rejects non-JSON, a mismatched `kind`, and a newer `schemaVersion`; sanitizes an invalid `executionMode`/`injectTarget`/`preferredAgent` instead of rejecting the whole file; drops entries missing `id`/`name`/`content` with a warning _(verified: `src/__tests__/utils/promptExport.test.ts`, `src/__tests__/utils/promptSanitize.test.ts`)_
+- [x] `importPrompts()` batch-upserts in a single debounced save, forces `enabled: false` on imported `shell`/`api` prompts and reports their names, preserves the existing `createdAt` on a conflicting overwrite, and clears a forged `builtIn: true` on an id that isn't an actual built-in _(verified: `src/__tests__/stores/promptLibrary.test.ts` "importPrompts()" suite)_
+- [x] `hydrate()` behavior is unchanged after extracting its validation into `sanitizePrompt` — same warnings, same `tab-context` migration _(verified: existing `hydrate()` tests in `src/__tests__/stores/promptLibrary.test.ts` still pass unmodified)_
+- [x] `PromptImportDialog` renders one row per candidate with NEW/CONFLICT badges, flags shell/api rows needing review, defaults to everything selected, and the All/None/New-only bulk controls and Import/Cancel buttons behave correctly _(verified: `src/__tests__/components/PromptImportDialog.test.tsx`, 8/8 pass)_
+- [x] `downloadPromptExport`/`pickPromptImportFile` build the right Blob/anchor and file input, and resolve the picked file's text (or `null` when nothing was selected) _(verified: `src/__tests__/utils/promptTransfer.test.ts`)_
+- [ ] Manual click-through in **Settings > Smart Prompts**: Export "Everything" downloads a `.json` with all 27+ built-ins and any customs, no `lastUsed` keys; edit one built-in and disable a second, then Export "Modified only" includes exactly those two plus all customs; Export "Custom only" has no `builtIn: true` entries.
+- [ ] Re-import the "Everything" file: every row shows CONFLICT; uncheck some rows and confirm only the checked ones are overwritten. Import into a profile with no `prompt-library.json`: every row shows NEW.
+- [ ] Hand-craft a file with a `shell`-mode prompt and import it: it lands disabled, and the toast/warning names it. Confirm a modified built-in still offers "Reset to default" after import.
+- [ ] Remote/browser mode (`http://127.0.0.1:9877` per `AGENTS.md`'s test-instance rule): Export downloads via the browser's normal download flow and Import opens the native OS file picker, with the same behavior as desktop.
+
+## Scroll acceleration cap + SGR-report input corruption (2026-08-20)
+
+- [x] `gestureAccelFactor` stays within `[0.5, 2.0]` and reaches exactly `1.0` at two screens of cumulative travel _(verified: `src/components/Terminal/__tests__/canvasTerminalScroll.test.ts` "gestureAccelFactor" suite; `cargo`/`vitest` n/a here, this is the frontend suite — 141/141 pass)_
+- [x] A direction reversal restarts the acceleration ramp from `|dy|` instead of continuing to accelerate off distance traveled the other way _(verified: `canvasTerminalScroll.test.ts` "accumulates same-signed gesture distance and restarts the ramp on reversal", and the `snap()`/`cancel()` sign-reset case)_
+- [x] An SGR mouse report (`ESC [ < Cb ; Cx ; Cy M`, wheel notch or mouse-move motion report) fed into `InputLineBuffer` no longer splices its digits into the reconstructed line _(verified: `src-tauri/src/input_line_buffer.rs` `test_sgr_mouse_report_does_not_leak_into_content` — feeds real notch/motion-report bytes mid-line and asserts the reconstructed content is unaffected; 122/122 `input_line_buffer` tests, 472/472 `pty`, 12/12 `mcp_http::session` tests pass; `cargo clippy`/`cargo fmt --check` clean)_
+- [ ] **Needs a `make build`/dev-restart to observe live** (Rust doesn't hot-reload): after rebuilding, run a long session in Claude Code with mouse tracking on (default) and use the wheel/mouse heavily, including while a subprocess pager (`less`, `top`) is displayed; confirm `last_prompt`/submitted text for that session contains no `NN;NN;NNM`/`m` fragments (previously visible via `GET /sessions` on the debug HTTP port).
+- [ ] A long momentum fling over deep scrollback (`seq 1 100000 | less` main-buffer scrollback, or a Claude Code pane without mouse tracking) no longer visibly outruns a shorter fling — the acceleration ceiling should be reachable but not exceeded, felt as "fast, but not runaway."
+
+## Mouse wheel quantization in mouse-aware apps (2026-08-20)
+
+- [ ] Flick the wheel over a Claude Code pane: moves a few lines, not a page; scrolling back to a specific earlier message lands on it accurately.
+- [ ] Slow drag over the same pane: nothing moves until a full line of travel, then exactly one line, with no 1px jitter; a mid-scroll reversal responds within one notch.
+- [ ] Discrete mouse (USB wheel or Magic Mouse) click ≈ 3 lines.
+- [ ] Plain shell pane scrolling feels unchanged from before this fix (it was already on the scrollback path).
+- [ ] Shift+wheel, held for the whole gesture, scrolls TUIC's own scrollback (not the app) in Claude Code, `vim`, `lazygit`, and `htop` — this previously did nothing on macOS until Shift was released.
+- [ ] `vim` (`:set mouse=a`) still scrolls the file on wheel without the cursor jumping; `lazygit` scrolls only the hovered panel; `htop` scrolls the process list — no regression from the alt-screen forwarding path.
+- [ ] `grok --no-alt-screen` still scrolls its own conversation on wheel (the `e92200f0` inline-mouse-mode behavior the guard must preserve).
+- [ ] Ctrl+wheel in an app that binds it: the modifier bit survives the coalesced multi-notch write.
+- [ ] Scrollbar thumb drag, then wheel immediately after releasing: no smooth-scroll re-entry or repaint freeze.
+- [ ] Blur the pane mid-flick, refocus, then wheel once: no stray leftover notch fires.
+
+## Command Block System (2026-05-20)
+
+- [ ] Press `Cmd+Shift+.` once with the viewport centered on a block: confirm only ONE block toggles fold (not two, not the wrong one) — this is the double-firing bug `e36c1ae4` fixed by removing `CanvasTerminal`'s duplicate inline handler.
+- [ ] Windows/Linux: `Ctrl+Shift+.` folds a block instead of typing a literal `.` into the shell prompt (regression guard for the raw-keystroke passthrough exclusion `CHANGELOG.md`'s `Cmd+Shift+.` entry describes).
+- [ ] `Cmd+Shift+B` toggles block-scoped search through the SAME toolbar-button state (`TerminalSearchRef.toggleBlockScope`) — opening via toolbar then pressing `Cmd+Shift+B` should turn scoping off, not open a second/duplicate bar.
+- [ ] Settings > Terminal > Blocks → turn OFF "Enable block folding", then press `Cmd+Shift+.`: nothing happens (verifies `toggleBlockFoldAtViewport`'s `settingsStore.state.blockFoldingEnabled` gate at `CanvasTerminal.tsx:3320`).
+- [ ] **[MANUAL]** With a live Claude Code session (hook-instrumented), run a turn that makes 3+ tool calls: confirm exactly ONE command block spans the whole turn (not one block per tool call) and its label shows the submitted prompt text when the prompt is 10+ words.
+- [ ] **[MANUAL]** End a turn via a genuine `StopFailure` (not just `PostToolUseFailure`): confirm the tab still goes idle (not stuck busy) AND the block is red-ticked.
+
 ## Auto-retry on Claude Code's prose 5xx message
 
 **Rust change — a `make dev` restart (or `make build`) is required.** The parser
@@ -1692,6 +3726,37 @@ needs to re-run this: `command -v` still finds none of `amp`, `cursor`,
 
 - [ ] Time it. Expect ~38 s on this repo; if it feels worse than a cold build, _(NOT VERIFIED 2026-09-30: partial — Not run on the tuicommander repo (would create a worktree in Boss's real repo; forbidden). Analog: 200-file ignored dir fixture warmed in under 1s; 29/09 analog with 60k files ~13s. ~38s expectation on the real repo not measured.)_ _(audit 2026-10-13: HUMAN — Real main worktree creation exercised and pending->done observed, but elapsed warming not instrumented. Recycled clean archived checkout, so cannot claim cold 38s performance…)_ _(triage 2026-10-14: WAITS — Needs coordinator-owned benchmark/mutation scheduling; no expensive batch gate started by this peer.)_
       say so rather than living with it.
+
+## Worktree warming: opt-out, bounded parallelism, sidebar badge — **Rust + frontend, needs a `make dev` restart**
+
+Warming already ran in the background on main; this adds a per-repo/global opt-out,
+copies up to four ignored directories at once, reports progress, and gives
+`POST /sessions/worktree` the same warm step as the other creation paths.
+
+- [ ] Create a worktree of a repo with a large `node_modules`/`target`. While it
+      warms, `repo action=worktree_list` (or `GET /worktrees/paths?path=<repo>`)
+      shows that workspace's `warm_artifacts` as `pending` with `phase: "warming"`
+      and `copied` climbing toward `total`, then `phase:
+      "file_sync_and_setup_script"`, then `done`.
+- [ ] The sidebar row shows a **Warming…** badge whose tooltip's copied/total
+      moves as directories finish; it clears when the copy finishes (not when the
+      Setup Script finishes).
+- [ ] Turn off "Warm ignored build directories" for the repo (Settings →
+      Repository → Worktree; global default under Settings → Git & GitHub →
+      Repository Defaults, expert mode), create a worktree: no badge, no
+      `node_modules`/`target`, and the final `warm_artifacts` is `done` with a
+      `skipped` reason. Per-repo On/Use global/Off beats the global default.
+- [ ] Same opt-out through `POST /sessions/worktree` (HTTP) and MCP
+      `repo worktree_create`: identical behaviour to the desktop dialog.
+- [ ] Remove a worktree while its chain is still running (big warm or a slow
+      Setup Script): the creation flow of a NEW worktree on the same branch is
+      not released early or frozen, and the new one's setup status is not wiped.
+
+- [x] After restarting `make dev`, verify Project Progress HTTP controls on the _(obsolete, verified 2026-09-29: Progress pause/resume/clear removed: transport.test.ts:395 lists progress_pause/clear/export as gone; no /progress/pause route in mcp_http/mod.rs:884-890.)_
+      isolated test instance: pause rejects reports, resume accepts only new reports,
+      and clear leaves an existing `progress.md` untouched. _(Rust backend change;
+      requires restart to load.)_
+
 ## Progress rewritten to one journal, one database and a dialog — needs a `make dev` restart
 
 The whole Progress feature was re-implemented against the 2026-09-14 revision of
@@ -2438,6 +4503,1114 @@ Needs an iPhone (iOS 16.4+, 18.4+ preferred), the desktop TUICommander running a
 - [ ] Work-item setting controls: after integration, verify the five controls in their consuming settings and Tasks forms; account Add requires the separate native account sink. The dev-only field preview covers the controls independently. _(triage 2026-10-14: WAITS — Needs the named integration/plugin release to land and load before the consumer check.)_
 - [ ] Settings transaction foundation: after Boss's next manual restart/build and the later transport cutover, verify stale revisions conflict, a rejected batch writes nothing, and persisted listener changes report pending/recovery until applied. Internal service only at this stage; no new tool is exposed. _(triage 2026-10-14: WAITS — Needs the named integration/plugin release to land and load before the consumer check.)_
 - [ ] After the next manual Rust restart, verify Tasks integration against the A4 contract when its UI/transport stream is installed. A4 itself adds a library contract and local provider only; no new visible surface. _(triage 2026-10-14: WAITS — Needs the named integration/plugin release to land and load before the consumer check.)_
+
+## Worktree removal with a submodule checked out — after `make dev` restart
+
+Rust (`tuic-git` `remove_worktree_internal_with_lock`): needs a TUIC restart.
+
+Reported bug (wip): clicking the "X" in the sidebar to delete a worktree whose
+checkout has an initialized git submodule (e.g. `plugins/`) failed with
+`fatal: working trees containing submodules cannot be moved or removed`. On main
+this is handled by tuic-git's removal (cleanliness + submodule check, then one
+`--force`); wip's own Safe-mode retry was not carried over — verify main's path.
+
+- [ ] Create a worktree from a repo that has the `plugins/` submodule
+  initialized inside it (or any repo with a submodule checked out in the
+  worktree), then delete it via the sidebar "X". It should succeed and the
+  row should disappear — no more "cannot be moved or removed" error in the
+  logs.
+- [ ] Same, but first add/modify a file in the worktree (uncommitted change)
+  before deleting — the app should show the normal "discard uncommitted
+  changes?" confirmation instead of silently deleting.
+
+## DSR/CPR reply latency — `leaf` and other cursor-position-querying tools (2026-08-29, **Rust change — needs `make dev` restart**)
+
+Reported bug: running `leaf <file.md>` (a terminal markdown pager) in a
+TUICommander tab printed `^[[3;1RError: The cursor position could not be read
+within a normal duration` instead of rendering the file. Root cause: TUIC's
+cursor-position (DSR/CPR, `ESC[6n`) reply was only flushed to the child's
+stdin *after* an expensive per-chunk screen-diff, which raced against `leaf`'s
+own short internal deadline on a session's first paint. Fixed in
+`pty.rs::process_chunk` (flush immediately after draining VT events) and in
+the frame ticker's stalled-sync-update flush path (`terminal_grid.rs`'s new
+`drain_pty_write_events`), which had the same class of bug for a rarer trigger
+(a BSU/DEC-2026 block that never sees its ESU within 150ms).
+
+- [ ] After restart, run `leaf <any-markdown-file>` in a TUIC tab. It should
+  render the file normally — no raw `ESC[...R` text printed before/instead of
+  the rendered output.
+- [ ] Same, but on a large file (so the pager's first paint is a big,
+  multi-row repaint) — this is the specific case that raced before the fix.
+- [ ] Any other tool that queries cursor position on startup (e.g. some
+  readline-based REPLs, `tput`-driven scripts) still gets a correct reply and
+  behaves normally — this fix changes reply *timing*, not content, so nothing
+  should look different, only faster/more reliable.
+
+## OSC 9;4 progress bar — error/warning/indeterminate states
+
+All four states (normal/error/indeterminate/warning), with and without a
+percentage, were verified via synthetic `printf` injection on both desktop
+(tab bar) and mobile (SessionCard + SessionDetailScreen header) — screenshots
+in `.screenshots/progress-bar-error-warning-indeterminate/` in the main
+checkout. Two things weren't covered by that synthetic testing:
+
+- [ ] Watch for a real long-running tool (a build, a package manager, an AI
+  agent) that emits OSC 9;4 state 2 (error), 3 (indeterminate), or 4 (warning)
+  during normal daily use, and confirm it renders as expected end-to-end (not
+  just via injected test sequences). Most real emitters observed so far
+  (cargo, nextest) only use state 1 (normal).
+- [ ] Enable "Reduce motion" (macOS System Settings → Accessibility, or the
+  OS-level `prefers-reduced-motion` toggle) and confirm the indeterminate
+  sweep animation actually stops rather than continuing to animate — the
+  `@media (prefers-reduced-motion: reduce)` rule in `global.css` is a blanket
+  `*, *::before, *::after { animation-duration: 0.01ms !important }`, which
+  should cover it, but this wasn't visually confirmed with the OS setting
+  actually toggled on (only reasoned about from the CSS cascade).
+- [ ] Mobile session detail (main's layout has no header progress bar): open the
+  overflow menu and confirm the Progress entry shows `NN%`, or the kind name
+  (e.g. `indeterminate`) when no percentage was sent.
+
+## UI fixes batch (2026-08-31, frontend only — no `make dev` restart needed)
+
+Nine UI/UX fixes plus three follow-on fixes for issues the same session's own
+code review and audit surfaced (a Space-key double-toggle, a Tab accessibility
+regression, an uncancelled animation frame, plus three more `autofocus`-on-
+dynamic-insertion sites, a keystroke-drop race window, and the New Worktree
+dropdown's fixed-direction clipping). Most of the original nine were live-
+verified against a real built app via `agent-browser` with real keystrokes
+(scope chips + Tab-cycling, the Menu-label focus/scroll fix, the Compose-vs-
+Edit-Prompt focus trap, dialog width/autofocus, both renames — see
+`.screenshots/ui-fixes-batch/` in the main checkout for the captured evidence)
+and are not repeated here. What's left needs a human pass:
+
+- [ ] **New Worktree dialog — Tab into "Start from", then type** — open the
+  dialog, Tab from the name field until the "Start from" trigger is focused
+  (verify with a visible focus ring), type a letter. It should open the
+  dropdown and filter by that letter in the search box — nothing should be
+  typed into the terminal behind the dialog. Also type a second letter
+  immediately (as fast as you can) right after the first — both should land in
+  the search box, not just the first.
+- [ ] **New Worktree dialog — "Start from" popup direction** — the popup now
+  picks upward or downward based on the trigger's actual on-screen position
+  (recomputed every open), rather than always opening upward. Needs a repo
+  with 2+ branches (the one repo checked live during this session's own
+  verification pass had only one, so the dropdown never appeared). Resize the
+  window short and confirm the popup opens toward whichever side has more room
+  and is never clipped, in both a tall and a short window.
+- [ ] **Compose append vs. overwrite** — with a terminal's Compose panel open
+  and some draft text typed in, trigger a Smart Prompt with "compose" as its
+  inject target (e.g. from the Prompt Library, with auto-execute off). The
+  prompt's content should be appended below the existing draft (blank line
+  separator), not silently dropped and not overwriting the draft. (Live
+  verification this session covered the adjacent focus-trap fix by typing
+  directly into the Content field, not this exact "trigger a real Smart
+  Prompt" path.) _(NOTE (2026-10-19): append applies to an already-open CLI
+  Compose (`appendRequest`) and to the always-open Chat input (draft, blank
+  line, prompt: user decision, it no longer replaces as main's `textRequest`
+  path did, #1599-db8a). A closed Compose still opens filled with the prompt.
+  Also try it in the Chat input (CLI | Chat switch) with a typed draft.)_
+- [ ] **Settings → Smart Selection — first-edit-on-a-fresh-config case** — on
+  a config with no prior Smart Selection customization (so the rule list is
+  showing built-in defaults, unmaterialized), expand a rule, type into "Menu
+  label", and confirm focus and scroll position both survive that first edit.
+  (Live verification this session used a config that already had
+  materialized rules, so it didn't exercise the identity-flip-on-first-edit
+  path specifically, only the steady-state per-keystroke case.)
+- [ ] **Three more `autofocus`-on-dynamic-insertion fixes** — confirm each
+  actually focuses when shown: Prompt Library drawer's search box on open
+  (`Cmd/Ctrl+Shift+K`), the Knowledge history overlay's search box on open,
+  and a repository group's rename field (Settings → Appearance → Repository
+  Groups → double-click a group name).
+- [ ] **Tab-name-flapping fix (rustc requires `make dev` restart)** — fixed an
+  infinite `session-renamed` echo loop between the frontend's `update()` (in
+  `terminals.ts`) and the backend's `set_session_name` (`pty.rs`'s Tauri
+  command and `session.rs`'s HTTP twin): both now no-op an unchanged
+  name/is_custom pair instead of unconditionally re-emitting, and the
+  frontend now also skips its echo-back RPC when the value hasn't changed.
+  Covered by automated tests (`set_session_name_skips_emit_when_unchanged`,
+  `rename_pane_is_idempotent_and_only_emits_on_real_change`,
+  `terminals.renameEchoGuard.test.ts`), all verified to fail without the fix.
+  What automated coverage can't reach: the actual live symptom — a tab's
+  title visibly flickering/relabeling while an agent works, or during a tmux
+  swarm session with `select-pane -T` — and the sustained CPU spike this was
+  causing (~125-130% observed in this session's own orchestrator instance
+  logs before the fix). After restarting `make dev`, open a tab running an
+  active agent for a couple of minutes and confirm the tab name stays stable
+  (only changes when the agent's title/status genuinely changes), and check
+  `GET /diagnostics` (enable diagnostic mode first) for CPU staying idle
+  between real activity instead of pinned high.
+- [ ] **Swarm teammate panes landed under the wrong repo's tab group (needs
+  `make dev` restart, then live rebuild + reinstall to real `~/bin/tmux` per
+  AGENTS.md).** _(found + fixed 2026-09-04, live report from Boss.)_ A
+  4-teammate `agent-teams` swarm spawned from an `ai-usage` session rooted
+  in `commerce-journal` had all 4 teammate panes appear under an unrelated
+  repo, `databricks-sql-cli` — the repo Boss happened to be actively working
+  in at that moment. Root-caused: Claude Code's real swarm calls never pass
+  `-c <cwd>` on `new-session`/`split-window` (confirmed empirically, both in
+  this session's earlier live captures and the synthetic wording harness);
+  `tuic-cli`'s arg parser only ever reads `-c` and left `cwd: None`
+  otherwise, so `spawn_pty_session` (`session.rs`) never called `cmd.cwd()`
+  and the child PTY just inherited whatever directory the TUICommander app
+  process itself happened to be running in — matching no registered repo.
+  The frontend's `assignSessionToRepoBranch` (`useAppInit.ts`) correctly
+  falls back to "park it in the sidebar's currently *active* repo" when a
+  session's cwd owns no registered repo — which is exactly, and only,
+  because the cwd it received was wrong in the first place. Fixed with a
+  `resolve_cwd()` helper in `tuic-cli/src/tmux/exec.rs`, applied at all
+  three creation call sites (`new-session`, `new-window`, `split-window`):
+  falls back, in priority order, to (1) an existing pane's already-resolved
+  cwd elsewhere in the same session/window, then (2)
+  `std::env::current_dir()` (the tmux CLI subprocess's own cwd, inherited
+  from Claude Code's real process) whenever `-c` is absent — matching real
+  tmux's own default behavior, not TUICommander's own fabricated default.
+  A `/code-review` pass (scoped to just this fix) found the topology-inheritance
+  step was missing initially — each `tmux` subcommand is its own OS
+  subprocess, so relying on a fresh `current_dir()` read alone for every
+  pane could in principle disagree with an earlier pane's if the calling
+  process's own cwd ever changed between separate invocations; closed off
+  by preferring an already-resolved sibling pane's cwd first. That same
+  review flagged two more issues, accepted as-is (documented in
+  `tuic-cli/AGENTS.md`): `current_dir()`'s symlink-resolving semantics
+  could still mismatch a repo registered via a symlinked path (pre-existing,
+  general gap, not introduced or worsened by this fix), and this crate now
+  has multiple independent inline `current_dir()`-stringify implementations
+  instead of one shared helper (real duplication, deferred as a separate
+  cleanup rather than scope-creeping this fix). New regression tests
+  (`new_session_without_dash_c_falls_back_to_the_real_cwd_not_none`,
+  `split_window_without_dash_c_falls_back_to_the_real_cwd_not_none`,
+  `new_window_without_dash_c_falls_back_to_the_real_cwd_not_none`,
+  `new_session_with_dash_c_still_honors_the_explicit_value`,
+  `legacy_new_session_without_dash_c_never_gets_resolve_cwds_fallback`,
+  plus a `resolve_cwd`/topology-helper unit test group), all 125 `tuic-cli`
+  tests green, full workspace (`cargo nextest run --workspace`, 5477 tests)
+  green, fmt/clippy clean. **Not yet live-verified** — this is a `tuic-cli` crate
+  change; per AGENTS.md's "Fresh Worktree Setup" point 4 and "Dev Hot
+  Reload," the real `~/bin/tmux` alias execs whichever `tuic` binary its
+  owning `TUICommander.app` bundle ships, not `target/debug/tuic` — testing
+  this live needs a real rebuild (`make build` or `pnpm build:sidecar
+  --force`) that actually replaces that bundle's binary, not just `cargo
+  build`. After that: reproduce the exact repro (spawn a swarm from a
+  session in one repo while a different repo's tab is focused/active) and
+  confirm the new teammate panes land under the *originating* repo, not the
+  focused one.
+- [ ] **Reworded the "Prefer TUICommander for peers/teams" connect-time bullet
+  (needs `make dev` restart to take effect).** _(changed 2026-09-04, based on
+  an n=10-confirmed A/B harness result — see
+  `plans/docs/agent-teams-wording-harness/README.md`.)_ The old hedged phrasing
+  ("use TUIC's `agent action=spawn` MCP tool (not your host's native
+  subagent/Task/team tool) whenever spawning an AI peer that should be
+  observable, messageable, and visible as a tab in TUICommander...") scored
+  0/10 against a real Claude Code session running as Opus, choosing between
+  this tool and tmux on an identical spawn-two-teammates scenario. A blunt,
+  unhedged directive scored 10/10 on the same scenario. `build_mcp_instructions`
+  (`mcp_transport.rs`) now reads: "every agent-teams teammate is created with
+  TUIC's `agent action=spawn` MCP tool — do not use your own built-in
+  agent-spawning tool for this, at every level..." — same bold label
+  (`**Prefer TUICommander for peers/teams:**`, so existing tests/greps still
+  match), same trailing carve-out/scope clauses (untested against removal,
+  so left in for safety), only the opening directive reworded to match what
+  was actually measured to work. All 339 `mcp_transport` tests green,
+  fmt/clippy clean. `mcp-instructions-examples.md` (main checkout's `plans/`)
+  updated to match, plus a new §11 documenting the separate `agent` tool
+  schema (`tools/list`) wording, which the same harness found has NO
+  measurable effect (unlike this connect-time bullet). **Not yet
+  live-verified** — after a `make dev` restart, a fresh Claude Code
+  agent-teams spawn (ideally running as Opus, the case this specifically
+  targets) should now reach for `agent action=spawn` rather than falling
+  through to tmux noticeably more often than before. Given the harness
+  showed near-100% vs near-0% rates, a single live test should already be
+  fairly telling, though the harness's earlier finding that model choice
+  dominates everything else means don't read too much into one Sonnet-backed
+  trial (Sonnet already picked TUIC's tool 100% of the time regardless of
+  this wording).
+
+## Second `AskUserQuestion` in one session never showed "awaiting" (2026-08-30, **Rust change — needs `make dev` restart**)
+
+Reported bug: a hook-instrumented Claude tab correctly showed "awaiting" for its FIRST
+`AskUserQuestion` in a session, but a second, later `AskUserQuestion` in the same session showed
+"working" — genuinely blocked on the user with no badge to show it. Confirmed via a live capture
+with Claude Code's own hooks fully instrumented (`.claude/hook-debug.log`): Claude Code's
+`PreToolUse(AskUserQuestion)` hook fired correctly both times, and the raw OSC 7770 stream carried
+`state=awaiting` for both questions — the break was entirely inside `pty.rs`'s own dedup logic.
+Root cause: `tuic_state_awaiting_event()`'s hook-based mapping always builds
+`ParsedEvent::Question{prompt_text: String::new(), ..}` (there's no real question text on the
+bare protocol marker), and the question-dedup guard a few chunks later keyed off that same
+(always-identical, always-empty) `prompt_text` with no regard for source. The screen-absence reset
+meant to retire the dedup key can never fire for an empty string (`anything.contains("")` is
+always true), so the first `AskUserQuestion` permanently poisoned the dedup for the rest of the
+session. Fixed by only applying that dedup when `prompt_text` is non-empty. Regression test
+`claude_double_askuserquestion_both_survive_dedup` (`pty.rs`) replays a real captured two-question
+session through the actual production `process_chunk` hot path and asserts all four raw
+`state=awaiting` markers survive — confirmed it fails (count stuck at 1) against the pre-fix code
+and passes (count 4) with the fix.
+
+- [ ] After restart, in a hook-instrumented Claude session, trigger `AskUserQuestion` twice in a
+  row (answer the first, let it lead into a second, separate `AskUserQuestion` call) — the tab
+  should show "awaiting" both times, not just the first.
+- [ ] Same, but with a real amount of work between the two questions (not back-to-back) — confirms
+  the fix holds once other busy/idle churn has happened in between.
+- [ ] A single multi-sub-question `AskUserQuestion` (the "Pick 3 options, Submit" wizard shape)
+  still re-arms correctly between sub-questions — this fix is unrelated to that mechanism
+  (`rearm_awaiting_for_open_dialog`) but should be spot-checked for a regression anyway since both
+  paths touch `awaiting_input`.
+
+## Mid-turn `AskUserQuestion` busy re-affirmation silently dropped the awaiting clear (2026-09-01, **Rust change — needs `make dev` restart**)
+
+Live-reproduced on two real, unattended/auto-approve Claude sessions (`commerce-journal`'s
+`publish` tab, `agent-tooling-analysis`'s `tool-scan` tab): the awaiting badge stuck `true` through
+full task completion. Root cause: `PreToolUse(AskUserQuestion)`'s `awaiting` override never touches
+the shell busy/idle bit, so shell state was already `SHELL_BUSY` before and after a mid-turn
+`AskUserQuestion` — the ordinary case. `PostToolUse(AskUserQuestion|ExitPlanMode)`'s busy
+re-affirmation, kept specifically to clear the badge, landed on that already-busy state
+(`busy_transitioned == false`) and its clear was silently dropped — nothing else is allowed to
+retract a confident question besides real user input, which never arrives when the agent answers
+its own question unattended. Fixed: `tuic_state_awaiting_event` now clears on
+`busy_transitioned || currently_awaiting`. _(NOTE, rebase onto main: main already clears awaiting
+on EVERY hook `busy` — no edge gate, prompt row moved to the `prompt` verb (#1388) — so this half is
+carried by main's code; the `ChoicePrompt` suppression below was NOT carried over, because main
+deliberately screen-scrapes Claude dialogs in hooked sessions too (AskUserQuestion choices for
+mobile, #1212); the `test_chunk_processor_choice_prompt_suppressed_when_hook_instrumented` test
+was dropped.)_ Separately, the `ChoicePrompt` screen-scrape detector
+had no hook-instrumented suppression at all (only the generic `Question` heuristic did, via
+`suppress_heuristic_question`) — fixed to skip detection outright for a hook-instrumented session.
+Both covered by regression tests in `pty.rs`
+(`claude_askuserquestion_midturn_busy_reaffirmation_clears_stuck_awaiting`,
+`test_chunk_processor_choice_prompt_suppressed_when_hook_instrumented`), each individually
+confirmed to fail against the pre-fix code. Full incident write-up, a related-but-still-OPEN
+`Notification`-hook confidence gap, and an investigation playbook for the next report in this
+class: `agent-signal-architecture.html#incidents`.
+
+Debug logging (all at `tracing::debug!` — the app's default level is `info`; needs
+`RUST_LOG=info,tuicommander_lib::pty=debug,tuicommander_lib::state=debug` to actually see them) was
+added throughout the awaiting-input state-transition path specifically so a future report doesn't
+need this same archaeology — see the playbook link above for exactly what's logged where. A
+temporary global Claude Code hook (tagged `# tuic-debug-hook-2026-09-01 (temporary, research)` in
+`~/.claude/settings.json`) logs every raw hook payload to `.claude/hook-debug.log` per-repo while
+`TUIC_SESSION` is set — intentionally left in place "for the time being"; remove it (grep the
+sentinel) once this research window closes.
+
+- [ ] After restart, reproduce the original report if possible: an unattended/auto-approve Claude
+  session that calls `AskUserQuestion` (or hits a Bash permission prompt while hooks are
+  installed) mid-turn — confirm the tab correctly shows "awaiting" and then correctly clears back
+  to busy/idle once the turn continues, instead of sticking.
+- [ ] With `RUST_LOG` elevated per above, confirm the new debug log lines actually appear in
+  `GET /logs` during a real session — spot-check at least the `state.rs` generic awaiting-diff
+  line and the `pty.rs` shell-state-edge lines.
+
+## macOS Finder Service — "New TUICommander Tab Here" (2026-09-10, **Rust change — needs `make dev` restart or a packaged build**)
+
+New feature: right-click a folder (or file) in Finder → a terminal pane opens there, filed under
+the right repo group via a 3-rung placement ladder (owning repo → active repo → ask the user).
+Ships as a hand-authored Automator `.workflow` bundle (`src-tauri/services/`), verified functionally
+via `automator -i <path> "services/New TUICommander Tab Here.workflow"` for a single item, a
+multi-item selection, and a plain file — but **never through a real Finder right-click**, which
+needs a packaged/installed build for Launch Services to pick up the bundle from
+`~/Library/Services/`. See `docs/user-guide/finder-integration.md` and `FEATURES.md` §17.4.2 for
+the intended behavior.
+
+- [ ] Install from Settings → General → Finder Integration on a packaged build (or accept the
+  first-run prompt), then right-click a folder in Finder — confirm "New TUICommander Tab Here"
+  appears in the menu and opens a pane with that folder as cwd.
+- [ ] Right-click a **file** — confirm the pane opens at the file's parent directory, not the file
+  itself.
+- [ ] Right-click a folder inside a repo you've already registered (repo root, and separately a
+  linked worktree) — confirm the pane is filed under that repo/branch in the sidebar, with cwd
+  equal to the exact folder clicked (not the repo root) when clicking a nested subfolder.
+- [ ] Right-click a folder outside every registered repo while a repo is active — confirm the pane
+  is filed under the active repo.
+- [ ] Right-click a folder outside every registered repo with **no** active repo — confirm the
+  "Open terminal in which repo?" picker appears, and each of its four outcomes works: choosing an
+  existing repo, "Add this folder as a repository", "Open unattached terminal", and Cancel/Escape.
+- [ ] Select 3 folders and invoke the service — confirm 3 panes open. Select more than 5 — confirm
+  only the first 5 open.
+- [ ] Quit TUICommander entirely, then invoke the service from Finder — confirm it launches the
+  app and still opens the pane once ready.
+- [ ] Remove the integration from Settings → General → Finder Integration → Remove — confirm the
+  Finder menu item disappears (may need a moment for `pbs -flush` to take effect).
+- [ ] Confirm the first-run prompt never reappears after being dismissed (accept or decline), and
+  that Settings always reflects the true installed/not-installed state.
+- [ ] **[VISUAL]** No screenshots were taken during implementation — both new visual pieces
+  (`RepoPickerDialog`, and the Settings → General → Finder Integration section) are gated behind
+  `isTauri()`/a real deep link, which browser-mode can't reach without either risking the URL
+  scheme resolving to Boss's live orchestrator instance instead of a test build, or standing up a
+  second debug instance unnecessarily for what's fundamentally a CSS check. Both reuse existing,
+  already-shipped CSS (the shared `dialog.module.css` shell; GeneralTab's existing CLI-section
+  classes) with only new page-specific styling in `RepoPickerDialog.module.css` genuinely
+  unverified visually. While doing the real Finder round-trip above, screenshot the picker dialog
+  and the Settings section and save them to `.screenshots/finder-service/` in the main checkout.
+
+## Branch From: real branch list + stale-setting warning (2026-09-10, frontend only — no `make dev` restart needed)
+
+Frontend-only change (no Rust touched): `RepoWorktreeTab` now lists the repo's real local/remote
+branches (via the existing `list_base_ref_options` command) instead of a hardcoded
+main/master/develop list, and the Create Worktree dialog now consults the repo's "Branch From"
+setting when preselecting a base ref, with a non-blocking warning when the configured branch has
+since been deleted. Covered by 40+ new/updated vitest cases (coordinator, `RepoWorktreeTab`,
+`CreateWorktreeDialog`, `repoSettings`), but **no live/visual verification was done** — this
+worktree had no prior build (`dist/`, sidecar binaries), and standing up a full `make dev` instance
+purely to eyeball CSS on a frontend-only change wasn't judged worth the build time. Needs:
+
+- [ ] Settings → *a repo* → Worktree Configuration → **Branch From**: confirm the dropdown shows
+  `Automatic` plus `<optgroup>`s "Local"/"Remote" populated with the repo's actual branches (not a
+  static main/master/develop list), and that a repo without `develop`/`master` doesn't offer them.
+- [ ] Set Branch From to a real branch, then delete that branch (`git branch -D <name>`) outside
+  the app and let the repo refresh — confirm the dropdown keeps showing the stale value with a
+  "(no longer exists)" option label, plus a warning line below the dropdown.
+- [ ] With that stale setting still configured, open **Create Worktree** (`+`) for that repo —
+  confirm the "Start from" control shows a "Select a branch…" placeholder (nothing preselected),
+  a warning row with a tooltip icon appears above the preview footer, and **Create still works**
+  (the warning must never disable the Create button).
+- [ ] Repeat with a repo where Branch From names a branch that still exists — confirm it *is*
+  preselected as "Start from" when no session-remembered ref exists yet for that repo.
+- [ ] With the stale-setting dialog open (warning showing, nothing preselected), pick any branch
+  from the "Start from" dropdown — confirm the warning row disappears immediately (a code-review
+  fix: it used to stay visible, telling the user to "pick one below" even after they'd already
+  picked one).
+- [ ] Repeat the stale-setting scenario on a repo with **only one branch total** — confirm the
+  dialog does NOT show the warning row (no dropdown exists to pick from), and confirm the created
+  worktree is actually based on that one real branch, not on `HEAD`/whatever the main repo's
+  current checkout happens to be (a code-review fix: it used to leave nothing selected here,
+  silently falling back to HEAD instead of the one real branch).
+- [ ] **[VISUAL]** Screenshot the Branch From dropdown (both the normal grouped state and the
+  stale-value + warning state) and the Create Worktree dialog's warning row, save to
+  `.screenshots/branch-from/` in the main checkout.
+
+## `get_git_branches`/`get_branches_detail` remote-classification + phantom-entry fixes (2026-09-10, Rust change — needs `make dev` restart)
+
+Fixed three bugs found while closing test-coverage gaps in git branch enumeration:
+
+1. **`get_git_branches`'s `is_remote`** was a naive `name.starts_with("origin/")` check
+   on the short ref name, so a remote added under any name other than `origin` (e.g.
+   `upstream`) was never detected as remote, and a local branch literally named
+   `origin/foo` was misreported as remote. Backend for `BranchSwitcher.tsx`
+   (`Cmd+B`-style branch switcher dialog).
+2. **Detached-HEAD garbage entry** — in a detached-HEAD repo state (checked out a
+   specific commit/tag, mid-rebase, mid-bisect), `git branch -a`'s synthetic
+   `(HEAD detached at abc1234)` pseudo-entry was parsed into a garbage branch named
+   `(HEAD`. Also `get_git_branches`.
+3. **Remote-HEAD-symref phantom branch, in BOTH `get_git_branches` AND the already-shipped
+   `get_branches_detail_impl`** (backend for `GitPanel`'s **Branches** tab, not just the
+   switcher) — found by code review, not in the original plan. Every normally **cloned**
+   repo has a `refs/remotes/<remote>/HEAD` symref (e.g. `refs/remotes/origin/HEAD`)
+   whose *short* name collapses to just the remote's own name (`"origin"`, not
+   `"origin/HEAD"`). Both functions' old filtering logic checked the short name for a
+   `/HEAD` suffix, which this ref never matches — so a phantom branch literally named
+   `"origin"` (or whatever the remote is called) has been leaking into both the branch
+   switcher AND the Git Panel's Branches tab for any cloned repo, likely for a long time
+   (this bug predates this session entirely for `get_branches_detail_impl`). Now both
+   check the *full* refname for a `refs/remotes/.../HEAD` shape instead.
+
+All three are covered by new unit tests (`git.rs`), but the actual UI surfaces (branch
+switcher dialog, Git Panel Branches tab) have not been visually checked against a real
+cloned repo.
+
+- [ ] Restart `make dev` to pick up the Rust change. Open **any normally-cloned repo**
+  (not one created via `git init`) in the branch switcher (`BranchSwitcher.tsx`) —
+  confirm there is no phantom branch entry named exactly `origin` (or whatever the
+  remote is called) in the list. This is the highest-value check: it's a
+  long-standing, previously-undetected bug affecting ordinary repos, not just an edge
+  case.
+- [ ] Open the same repo's Git Panel → **Branches** tab (`GitPanel/BranchesTab.tsx`,
+  backed by `get_branches_detail`) — confirm the same phantom `origin` entry does not
+  appear there either.
+- [ ] Open a repo with a remote added under a non-`origin` name
+  (`git remote add upstream <url> && git fetch upstream`), open the branch switcher,
+  and confirm the `upstream/*` branches render in the "remote" section/style, not
+  mixed in with locals, and that there's no phantom `upstream` entry either.
+- [ ] In that same repo, check out a specific commit (`git checkout <sha>`) to detach
+  HEAD, then open the branch switcher again — confirm there is no phantom
+  `(HEAD detached at ...`-style entry in the list.
+
+## Inline images (color-tools plan, Phases 1-9 — all phases implemented)
+
+Rust changes here **require a `make dev` restart** to take effect (no hot-reload) — this whole
+section needs a human running the rebuilt app, not just re-running tests.
+
+**Post-implementation code review + security review (2026-09-11)**, scoped to the whole
+inline-images feature diff (`93d00740..d11e3f4b`), found and fixed 4 real issues before this
+feature could be considered done — see commit history for the fix commit:
+1. **[Critical, fixed]** `reserve_image_footprint` had no upper bound on requested rows — a
+   crafted `r=`/`height=` (e.g. `r=4000000000`) could attempt up to `u32::MAX` `linefeed()`
+   calls under the session's `vt_log` lock, hanging that session (and every other consumer of
+   its grid) indefinitely. Now clamped to a hard `MAX_FOOTPRINT_ROWS = 10_000` cap. Regression
+   test: `terminal_grid::tests::kitty_footprint_row_count_is_clamped_to_a_sane_maximum`.
+2. **[High, fixed]** Kitty's `m=1` chunked-transmission accumulation had no cap of its own —
+   each individual chunk was already bounded by vte's `MAX_OSC_RAW_STD` (2 MiB), but a client
+   could stream an unbounded *number* of chunks, growing the pending buffer past any reasonable
+   size before the app-level `MAX_SESSION_IMAGE_BYTES` cap ever ran. Now capped at
+   `kitty::MAX_CHUNKED_B64_BYTES` (96 MiB, mirroring iTerm2's own equivalent guard), failing
+   closed (aborts the whole transfer). Regression test:
+   `terminal_grid::tests::kitty_chunked_transmission_over_cap_aborts_the_whole_transfer`.
+3. **[High, fixed]** `o=z` zlib decompression had no bound on inflated output size — a classic
+   decompression bomb (a small compressed all-zero payload expanding to gigabytes) would
+   allocate the full inflated buffer before the byte cap ever checked it. Now bounded via
+   `Read::take` at 64 MiB, rejecting before the oversized buffer is ever fully built.
+   Regression test: `terminal_grid::tests::kitty_o_equals_z_decompression_bomb_is_rejected`.
+4. **[Should-fix, fixed]** `unicode_placeholder_z` (the U=1 z_index map) had no cap of its own —
+   only cleared by explicit `a=d` or session end — so a client registering many placements
+   without ever deleting them would grow it for the session's lifetime. Now capped at 100,000
+   entries as a refusal (falls back to the default z_index=0 past the cap, a benign
+   degradation). **No dedicated regression test was written for this one** — the guard is a
+   one-line length check, and a test proving the exact 100,000-entry boundary would need that
+   many real escape-sequence parses, which wasn't judged worth the runtime cost for a
+   defense-in-depth-only fix; reviewed by inspection instead.
+
+The review's remaining findings: (a) **Fixed 2026-09-11**: Kitty transmit decode
+(base64/zlib/file-read/shm-copy) now runs off the `vt_log` lock — see `docs/backend/pty.md`'s
+Kitty Graphics Protocol section for the design (`PendingKittyDecodeJob`, `ImageData`'s
+`OnceLock`-backed `bytes`, the new `image-decoded` frontend retry signal). Cell reservation
+stays synchronous/in-order; a transmission's eventual decode failure no longer prevents its
+footprint from being reserved (disclosed behavior change, 3 existing tests updated).
+**Live-verified** against a real `make dev` instance: a real Kitty raw-`f=24` image decoded and
+displayed correctly end-to-end through the actual `pty.rs::process_chunk` path (not just the
+test harness), and the reserve-before-decode-completes behavior confirmed live too. A follow-up
+code review + security review of that fix (commit `484d269b`) found and fixed two more real
+issues: an unbounded `ImageStore` entry-count growth path (a permanently-failed decode never
+evicted its placeholder — now fixed) and a functional regression (the frame ticker's
+stalled-sync-update flush and session-teardown flush could each queue a Kitty decode job without
+ever resolving it — now fixed, and flagged in `AGENTS.md` as a "check every such queue, not just
+`PtyWrite`" lesson). **Still needs a real-tool pass** beyond the unit/integration coverage and
+the one hand-crafted live test already done: run `mpv --vo=kitty`/`timg` against a live
+`make dev` session and confirm no visible stutter in other panes/HTTP polling during *sustained*
+playback — the fix's *correctness* is tested and spot-verified live, but the *latency benefit*
+under real sustained load (this was the whole point) has not been benchmarked, only reasoned
+about from the code. (b) `ImageLayer.verifyOverlapping()`'s fail-open behavior on a `terminal_image_ref_at`
+error could in principle mask a *persistent* backend error (a genuinely-overwritten placement
+never getting cleared) rather than just a transient one — low severity, since `a=d`/alt-screen
+cleanup independently cover the common cases; left open. (c) **Fixed 2026-09-11**: added
+dedicated `mapCommandToHttp` shape tests for all 4 image commands (method/path/transform,
+including the null-passthrough cases) plus two `rpc()`-level integration tests — one proving
+`terminal_image_bytes` specifically goes through the octet-stream/`ArrayBuffer` path (not just a
+sibling command sharing the mechanism), one proving `terminal_image_meta` goes through the JSON
+path and passes a real `null` through for an unknown image id — in `transport.test.ts`.
+
+- [ ] After a rebuild, run the real `imgcat`/`imgls`/`divider` scripts, a hand-written OSC 1337
+  sequence, or a real Kitty-protocol tool (`chafa -f kitty`, `mpv --vo=kitty`) against a live
+  `make dev` session and confirm an image visibly displays. **Both protocols' backends are fully
+  implemented and unit/integration-tested end to end** (parsing, decode, footprint sizing incl.
+  `auto`/aspect-ratio, cell reservation, `CellExtra` attachment, transmit/place/delete/query,
+  chunking, quiet levels), **and a frontend renderer now exists** (Phase 5: `imageLayer.ts`, a
+  dedicated canvas between the glyph canvas and the cursor/selection overlay, fed by a new
+  `image-placement`/`image-placements-cleared` WS/Tauri event pair and a
+  `terminal_image_placements` hydration query for reconnect/new-client attach) — this item now
+  needs a real visual confirmation against a live rebuild, not just the unit-level formula/paint
+  tests in `imageLayer.test.ts` and the backend's own placement-event tests in `terminal_grid.rs`.
+  **Full z-order compositing, raw pixel format decoding, and overwrite detection are now
+  implemented too** (previously-documented gaps, since closed): (1) Kitty `z<0` ("paint below
+  text") placements now render on a dedicated `belowTextImageCanvasRef` sandwiched between a
+  background-only canvas and a transparent glyph-only canvas — `CanvasTerminal.tsx` switches a
+  session from the single fused `canvasRef` paint to this 5-layer stack the first time
+  `ImageLayer.hasNegativeZ()` goes true, and never switches back, so the common case (no
+  negative-z images) keeps the original fast path. Live-verified against a real `make dev`
+  session: a `z=-1` placement painted through a blue square's text (visible on top) while an
+  otherwise-identical `z=0` placement stayed hidden beneath it, exactly as intended.
+  (2) Kitty's raw `f=24`/`f=32` pixel formats (no container — used by mpv/blackcat) now decode via
+  a new `terminal_image_meta` command (mime + intrinsic dimensions) plus frontend-side manual
+  `ImageData` reconstruction (RGB expanded to RGBA) in `imageLayer.ts`'s `decodeRawPixels`.
+  (3) A placement's cells being overwritten by ordinary text (not an explicit `a=d`/alt-screen
+  switch) is now detected heuristically: `ImageLayer.verifyOverlapping()` re-checks a placement's
+  top-left cell via `terminal_image_ref_at` whenever a dirty-row update touches one of its rows,
+  and drops the placement if the ref no longer matches — narrower than a full-rectangle check
+  (a partial overwrite that spares the top-left cell isn't caught) but covers the common case.
+  All three still need a real-tool visual pass beyond the z-order live-verification already done:
+  raw `f=24`/`f=32` against mpv/blackcat, and overwrite-clearing against a real TUI that redraws
+  over a placement's origin cell (yazi, image.nvim scrolling). iTerm2's `File=` and Kitty's default
+  `f=100` PNG (everything `imgcat`/`imgls`/`divider` and most real Kitty clients actually send)
+  both render fine and were live-verified earlier in this same session.
+- [ ] Diagnostics-ring elision (color-tools plan, Phase 8, `image_payload_elision.rs`) is now
+  implemented: an OSC 1337/Kitty APC payload is replaced with a short placeholder before it reaches
+  `pty_raw_rings` or a `.tcap` capture. Covered by unit tests (including one against the same real
+  captured `tuic divider` bytes `terminal_grid.rs`'s end-to-end parser test uses), but the PTY
+  reader thread's hot loop (AGENTS.md flags this as one of the most regression-prone spots in the
+  codebase) deserves its own live-capture pass, not just unit tests: run a real image tool (`tuic
+  imgcat`/`chafa -f kitty`) against a `make dev` session, then enable capture mode
+  (`POST /diagnostics/capture`) and confirm the resulting `.tcap` shows `<image N bytes elided>`
+  in place of the base64 payload while the image still displays correctly on screen (proving the
+  real parser saw the unelided bytes). Also worth confirming: a payload that straddles a PTY
+  `read()` boundary (a large image) is passed through unelided rather than partially elided —
+  by design, not a bug, but worth seeing once with a real large image.
+- [ ] `CSI 14 t`/`CSI 16 t`/XTVERSION replies: confirm against a real client. `timg -pk` and
+  `broot` are the easiest first targets — `broot`'s env-based detection already matches our
+  `TERM_PROGRAM=ghostty` with zero further changes needed.
+- [ ] Kitty capability probe (`a=q` + immediate `i=` echo): confirm against yazi or blackcat, both
+  of which do a live runtime probe rather than an env-var allowlist. yazi in particular keys its
+  `kgp`/`kgp_shm` flags off the echoed `i=` matching what it sent — worth checking specifically.
+- [ ] Kitty `t=f`/`t=t`/`t=s` transmission mediums and `o=z` compression are now implemented
+  (color-tools plan, Phase 6) and covered by real end-to-end tests in `terminal_grid.rs` (a real
+  temp file read+delete, a real POSIX shared-memory segment round-tripped through `shm_open`, a
+  real `flate2`-compressed zlib payload) and `terminal_image_transmission.rs` (file/shm reader unit
+  tests, including the temp-dir-delete-guard and the size-cap check). Still needs a real-client
+  pass: blackcat (`t=s`, `o=z`), ranger's kitty backend (`t=f`), and mpv (raw `f=24`/`t=s`) against
+  a live `make dev` session.
+  **The Windows `t=s` path (`read_shm_medium` in `terminal_image_transmission.rs`, `#[cfg(windows)]`
+  branch) is written against documented Win32 `OpenFileMappingW`/`MapViewOfFile`/`VirtualQuery`
+  semantics but has never been compiled, let alone run, on Windows** — this repo is developed on
+  macOS, and cross-compiling the whole app for `x86_64-pc-windows-gnu` here hits an unrelated
+  missing-mingw-toolchain wall before reaching this code at all. Needs a real Windows build and a
+  real `t=s` client to verify.
+- [ ] Unicode virtual placeholders (`U=1`, color-tools plan, Phase 7) are now implemented:
+  `U+10EEEE` + diacritics + foreground/underline color is recognized during ordinary text output
+  and attached as a real image tile, using the authoritative `rowcolumn-diacritics.txt` table
+  fetched directly from Kitty's own docs (not guessed) and verified end-to-end against the
+  protocol page's own worked examples (2x2 grid, most-significant-byte extension, diacritic-
+  omission inheritance) in `terminal_grid.rs`. Still needs a real-tool pass against a live
+  `make dev` session: image.nvim and snacks.nvim (neovim plugins) and yazi's modern `Kgp` driver
+  are the three target tools that specifically rely on this path rather than ordinary Kitty
+  placements. Also worth checking live: a real client's exact diacritic-omission behavior (does
+  it always send all 2-3 diacritics per cell, or actually rely on the inheritance optimization?),
+  and whether any of the three tools sets colors via a code path (e.g. a terminal-capability
+  fallback) this implementation doesn't yet convert into an id — only `Color::Indexed`/`Color::Spec`
+  (256-color and true-color SGR) are handled; `Color::Named` yields no image id at all.
+- [ ] `tuic imgcat`/`imgls`/`divider` (color-tools plan, Phase 4, `crates/tuic-cli/src/imgcat.rs`):
+  unit-tested (sequence construction, tmux passthrough wrapping) and proven end-to-end against our
+  own OSC 1337 parser (`real_tuic_divider_cli_output_displays_through_our_own_parser` in
+  `terminal_grid.rs`, using bytes actually captured from the compiled binary), but never run against
+  a real terminal/human eyeball. After a `make dev` rebuild (these are plain binary changes, not
+  requiring the Rust-hot-reload workaround since they're a separate sidecar binary, but still worth
+  confirming against a fresh build), verify: `imgcat` against a real PNG/JPEG, `imgls` against a
+  directory with several images, `divider` producing a visible full-width bar, and the tmux
+  passthrough path (`TERM=tmux-256color tuic imgcat ...` inside a real tmux pane).
+- [ ] `imgcat`/`imgls`/`divider` are now wired onto each spawned PTY's `PATH` as one-line shim
+  scripts (color-tools plan, Phase 9: `image_cli_shims.rs`, written to `<config
+  dir>/image-cli-shims/` and prepended in `inject_unix_terminal_env`), each `exec`-ing the resolved
+  `tuic` sidecar with the right subcommand. **Requires a `make dev` restart** to take effect (Rust
+  change, no hot-reload) — after restarting, open a NEW terminal tab (existing PTYs were spawned
+  before the restart and won't have the updated `PATH`) and confirm bare `imgcat photo.png`,
+  `imgls`, and `divider ...` all work with no `tuic` prefix. Unix only, matching
+  `inject_unix_terminal_env`'s own scope — Windows PATH shims are out of scope for this pass.
+  Silently absent (no error, no shim) if the `tuic` sidecar can't be resolved at all (e.g. a
+  from-source checkout with no built sidecar) — confirm that failure mode doesn't also break
+  anything else about the PTY spawn.
+- [ ] Worktree automation scripts (`TUIC_*` env injection) and PTY `TUIC_*` context
+  (`plans/worktree-automation-tuic-env-injection.md`): Setup/Archive script injection and
+  timeouts are unit-tested end-to-end against real subprocesses/worktrees, but the PTY-side
+  injection (`pty.rs::inject_worktree_env`, called from every `bind_pty_identity` site) needs a
+  **`make dev` restart** to take effect (Rust change, no hot-reload) — after restarting, open a
+  NEW terminal tab in a worktree (existing PTYs were spawned before the restart) and confirm
+  `env | grep '^TUIC_'` shows `TUIC_MAIN_REPO_PATH`, `TUIC_BRANCH`, `TUIC_WORKTREE_NAME`,
+  `TUIC_WORKTREES_DIR`, `TUIC_IS_WORKTREE=true`, and (if a base ref/branch is configured)
+  `TUIC_BASE_REF`/`TUIC_BASE_BRANCH`. Also verify a Run Script (Settings → repo → Automation
+  Scripts) actually sees these vars when typed into the fresh tab. Windows is out of scope for
+  this pass (no process-group kill on script timeout, and the PTY/PATH env behavior there is
+  unverified) — confirm at least that nothing regresses there (`cmd /C`, `%TUIC_MAIN_REPO_PATH%`).
+  A real `npm ci`/`npm install` setup script should also be checked in the *packaged* app (`make
+  build`), where the desktop-launch `PATH` is genuinely impoverished — the new
+  `PATH=enriched_path()` on setup/archive scripts is meant to fix exactly that.
+- [ ] Worktree setup-script ordering fix + new event (`plans/worktree-automation-tuic-env-injection.md`,
+  Phase 7): create a worktree in a repo with `copy_ignored_files`/`copy_untracked_files`/`copy_paths`
+  AND a Setup Script configured (e.g. `ls -la > setup-saw-these-files.txt`) — confirm the synced
+  files are visible to the script (previously could race and not be there yet), and that
+  `GET /worktrees/paths?path=<repo>` keeps `warm_artifacts.status: "pending"` until the script has
+  finished (order is warm -> sync -> setup). Since the setup script's outcome is no longer returned
+  synchronously, confirm the status bar reports a failing script (e.g. `exit 1`) as "Setup script
+  failed (exit 1)", and that the script ran exactly once (browser mode used to run it twice). Needs a `make dev` restart (Rust change). Test on all three creation
+  paths if practical: desktop "+" button, MCP `repo worktree create` (`agent` tool or a manual
+  HTTP `POST /worktrees`), and MCP HTTP session-with-worktree creation.
+- [ ] Setup-script/Run-Script ordering fix, frontend half (`createWorktreeCreationCoordinator.ts`'s
+  `armSetupScriptWaiter`, follow-up to the item above): configure a Setup Script that takes
+  a few real seconds (e.g. `sleep 5 && echo done > setup-ran.txt`) plus a Run Script (e.g.
+  `echo run-script-typed`). Create a new worktree from the desktop "+" button and confirm the Run
+  Script is NOT typed into the new tab until the Setup Script has actually finished (watch for
+  `setup-ran.txt` to appear before the Run Script's command shows up in the terminal) — previously
+  the Run Script could type immediately, racing the Setup Script. This is a frontend-only change
+  (hot-reloads under `make dev`, no restart needed) but is easiest to verify alongside the Rust-side
+  item above during the same restart.
+- [ ] `TUIC_*` vars from a subdirectory cwd (`git::find_repo_root`, `script_env.rs`): needs a
+  `make dev` restart (Rust change). Use the macOS Finder Service ("New TUICommander Tab Here") on a
+  subfolder *inside* a worktree (not the worktree root itself) and confirm the new tab's
+  `env | grep '^TUIC_'` still shows `TUIC_WORKTREE_PATH`/`TUIC_MAIN_REPO_PATH`/`TUIC_BRANCH` etc.,
+  describing the worktree root — not empty, and not describing the subfolder.
+- [ ] Smart Prompts active-repo-vs-worktree-cwd fix (`plans/worktree-automation-tuic-env-injection.md`,
+  Phase 8b): with a worktree terminal tab focused (not the main checkout), run a Smart Prompt that
+  uses `{branch}`/`{diff}` (e.g. Smart Commit) and confirm the generated message reflects the
+  *worktree's* branch/diff, not the main checkout's. Then focus a plain shell tab in an
+  *unregistered* directory and confirm the same prompt still falls back to resolving against the
+  active repo rather than failing with `unresolved_variables`.
+- [ ] `POST /worktrees/run-script` was verified via unit tests calling the real handler function
+  directly (including a real axum-router routing test), but never against an actual running
+  `make dev` instance over the wire on `:9877`. Low priority (the handler and router-wiring are
+  both already exercised) but worth a real `curl -u <token> https://127.0.0.1:9877/worktrees/run-script
+  -d '{"script":"echo hi","cwd":"/tmp"}'` if a spare moment allows — confirm `{exit_code, stdout,
+  stderr}` and that an unauthenticated LAN-origin request gets 403.
+- [ ] GitPanel/ChangesTab.tsx's "Generate commit message" cross-repo fix (executeSmartPrompt's new
+  `targetPath` param, `useSmartPrompts.ts`): register two repos, focus a terminal tab in repo A, then
+  open repo B's Git panel (Changes tab) and click "Generate commit message" with some staged/unstaged
+  changes in repo B. Confirm the generated message reflects repo B's diff (the repo the panel is
+  showing), not repo A's (the focused terminal's repo) — previously it would have used repo A's,
+  since `executeSmartPrompt` derived context from the active terminal, independent of which repo's
+  Git panel triggered it. Covered by unit tests at the `useSmartPrompts.ts` level (the exact mechanism
+  `ChangesTab` now relies on), but not by a full component-mount test — this is the live end-to-end
+  check for that gap. Frontend-only change, hot-reloads under `make dev`, no restart needed.
+- [ ] `SmartButtonStrip`'s same cross-repo fix, across its non-ChangesTab callers (register two repos,
+  focus a terminal in repo A, then trigger the strip from repo B's context): the Branches tab's
+  "Create PR" button (`BranchesTab.tsx`), and an Issue/PR popover's smart button (`GitHubPanel.tsx`
+  right-click on an issue, or `PrSection.tsx`/`PrDetailPopover.tsx` on a PR) for repo B — confirm each
+  resolves variables (and, for a headless prompt, runs) against repo B, not repo A. Covered by a new
+  component-mount test (`SmartButtonStrip.test.tsx`) asserting the prop is forwarded, but not by a live
+  check against these five real call sites. Frontend-only change, hot-reloads under `make dev`.
+- [ ] `repo action=worktree_setup_status` MCP tool action + `GET /worktrees/setup-status` HTTP route
+  (closes the "MCP client can't observe setup script completion" gap): unit-tested via direct handler
+  calls, but not against a live `make dev` instance. Create a worktree with a Setup Script configured
+  via an MCP client (or `curl -X POST /worktrees` then poll), then poll
+  `curl "https://127.0.0.1:9877/worktrees/setup-status?repoPath=<repo>&branch=<branch>"` (or
+  `repo action=worktree_setup_status path=<repo> branch=<branch>` via the `agent`/MCP tool surface) and
+  confirm it transitions `running` → `completed` (or `not_configured` with no script), matching what the
+  `worktree-setup-script-completed` event reports for the same worktree.
+
+## Command Blocks fullscreen-mode fix (2026-09-15)
+
+Root cause (verified live via a throwaway session and `terminal_grid.rs` unit tests, not just
+theorized): Claude Code's default fullscreen renderer draws in the alternate screen buffer, which
+never grows real scrollback for a fully-repainted TUI, so `line` values OSC 133/7770 compute
+during that time are transient on-screen cursor rows, not valid anchors. Fixed by tagging every
+`AgentBlock`/`Osc133Event` with `on_alt_screen`/`onAltScreen`, and filtering row-anchored consumers
+(gutter, scrollbar, fold, jump-nav, block-scoped search, "Copy Block Output") through the new
+`rowAnchoredBlocks()` helper (`terminals.ts`) — `CommandOverview` deliberately does not filter.
+This is a **Rust change** — it will not take effect in any already-running build (including the
+orchestrator instance this fix was developed inside) until rebuilt (`make build` or a `make dev`
+restart); do not restart the shared orchestrator to test this, per AGENTS.md's Dev Hot Reload
+section. All of the below needs a rebuilt build to check.
+
+- [ ] **Core fix** — open a fresh terminal tab, run `claude` (fullscreen renderer, the default),
+  send a couple of turns, then drop back to the shell (`/exit` or Ctrl+D). Confirm: no bogus
+  gutter marks, scrollbar ticks, or `Cmd+Shift+Up/Down` jump targets appear either during the
+  fullscreen session or once back at the shell prompt; `CommandOverview`'s row for that tab still
+  shows live prompt text/duration while the agent is fullscreen; running a real shell command
+  after exiting produces a normal, correctly-anchored block.
+- [ ] **Alt-screen re-entry** — with a plain alt-screen TUI (`vim`, `htop`, `less`) run inside a
+  hook-instrumented agent's session (or just inside a plain shell), confirm the same: no bogus
+  marks appear from whatever happens to print while that TUI has the alt screen, and shell blocks
+  before/after it stay correct.
+- [ ] **§5 transcript-dump reconstruction** — inside a fullscreen Claude Code session, press
+  `Ctrl+O` (transcript mode) then `[` (write to native scrollback). Confirm: gutter marks,
+  scrollbar ticks, fold, and `Cmd+Shift+Up/Down` jump-nav now populate against the dumped text,
+  anchored to the real prompt (`❯`) / turn-completion (`✻ ... · done`) lines; press `Esc` to
+  return to fullscreen and confirm nothing breaks. This only applies to a hook-instrumented Claude
+  Code session specifically (`agent_type == "claude"` — verified via the session's own state, not
+  guessed).
+- [ ] **§5/#11 transcript-dump de-duplication (2026-09-15 fix)** — repeat the `Ctrl+O`→`[` gesture
+  a second time in the same session (`Esc` back to the agent, `Ctrl+O`, `[` again). Confirm the
+  re-dumped copy does NOT leave a second, overlapping set of blocks: `Cmd+Shift+Up/Down` jump-nav
+  should only ever land on turns from the LATEST dump plus any real shell blocks from before the
+  first dump, never a duplicate of an earlier dump's turn. Previously flagged as a known, accepted
+  limitation ("note, do not fix"); fixed via `new_dump_generation`/`fromTranscriptDump` pruning
+  (`terminals.ts`'s `handleOsc133`, gated on a real alternate-screen visit between dumps).
+- [ ] **#6 scrollback-ring eviction fix (2026-09-15)** — needs a session with >10,000 lines of
+  real scrollback (`GRID_SCROLLBACK`, `state.rs`) to actually saturate the ring, so a short manual
+  session won't exercise it; the unit-level regression coverage
+  (`osc133_line_stays_eviction_stable_and_never_aliases_past_scrollback_saturation`,
+  `terminal_grid.rs`) is the practical verification for this one. If a long-running session with
+  heavy output is available, confirm gutter marks/scrollbar ticks/jump-nav for an OLD block don't
+  suddenly jump to a wrong row, and a NEW block recorded after heavy scrollback growth still
+  anchors correctly, once real eviction has occurred.
+- [ ] **§5 glyph-collision residual risk (code-review finding, assessed not fixed)** — the
+  transcript-dump detector opens a phantom block if an ordinary typed command at a bare shell
+  prompt happens to start with `❯ ` (some zsh themes, e.g. Pure/Spaceship, use this glyph) while
+  `agent_type` is still stuck at `"claude"` from a just-exited session. For the default zsh
+  auto-injected shell integration this window is roughly one prompt-redraw beat (the shell's own
+  OSC133 `A` marker clears `agent_type` almost immediately via `clear_agent_type_on_confirmed_shell`)
+  — with a `❯`-glyph zsh theme, exit Claude Code and immediately type an ordinary command at the
+  next prompt; confirm no phantom `AgentBlock`/`CommandOverview` entry appears for it. If one
+  does appear reproducibly (not just as a rare race), this needs a real fix, not just monitoring.
+
+- [ ] **Additional Readable Directories (HTTP read allow-list) — Rust change, needs a `make dev`
+  restart to take effect.** Unit- and integration-tested at the handler/router level (`fs_routes.rs`,
+  `mcp_http/mod.rs`), but not against a real running instance:
+  - Start a debug instance with Remote Access enabled. `curl
+    'http://127.0.0.1:9877/fs/read-external?path='"$HOME"'/.claude/plans/<some-file>.md'` with no repo
+    registered for that path → expect `200` (the default `~/.claude/plans` entry).
+  - `curl -X POST http://127.0.0.1:9877/fs/write-external -d '{"path":"'"$HOME"'/.claude/plans/x.md","content":"x"}'`
+    into the same directory → expect `403` (proves the write path was NOT widened).
+  - In Settings → Remote Access → File Access, remove the default entry, re-request the same file via
+    curl → confirm `403` with the friendly-sounding message body.
+  - In browser mode, click a `~/.claude/plans/...` link rendered from an agent's output (a plan-file
+    reference) and confirm it opens with no `error`-level log line in `GET /logs`.
+  - In the Settings UI, try adding a relative path (e.g. `notes`) and confirm the new inline validation
+    error appears and the entry is NOT added — then add a real `~/...` or absolute path and confirm it
+    IS added and persists across a settings reload.
+- [ ] StreamDock M18 macropad integration (`src-tauri/crates/tuic-streamdock/`,
+  `src-tauri/src/streamdock/`, Settings > StreamDock tab): device connection, live session-tile
+  rendering, gesture dispatch, config lifecycle, and the ambient LED ring, code-complete through
+  Phase 7 and gated by `check-gate.sh` (all Rust/frontend tests pass), but the in-process wiring
+  (`AppStateSource`/`AppStateSink`, `StreamDockManager::apply_config` reconcile, the new
+  `SessionFocusRequested`/`UiActionRequested` `AppEvent`s, `Coordinator::ambient_led_update`) has
+  never run against a live `make dev` process — **requires a restart to load** (Rust change, no
+  hot-reload). After restarting with the real VSD M18 attached and `Settings > StreamDock`
+  enabled: confirm the device connects (status strip shows `running` with the right serial),
+  starting/finishing a real session moves the corresponding key within ~300ms, closing a session
+  blanks its slot without reindexing neighbors, a tap on a session tile focuses that tab (and
+  answers a pending choice prompt if one is showing), a hold sends interrupt (`\x03`), the
+  bottom-row verb keys (`Approve`/`Reject`/`Interrupt`/`JumpWaiting`/`Overflow`) and the 3 plain
+  buttons work, and both brightness sliders move the backlight live with no restart. Also verify
+  hot-plug: unplug and replug the device and confirm it reattaches within ~2s. **New in Phase 7:**
+  confirm the 24-LED ring lights up at all on this unit (Boss's VSD firmware string
+  `"V3.VSDM18_HBOE.02.01"` should negotiate `FeatureSet::rgb = true` per `device::model`'s
+  firmware-prefix match — this has only been unit-tested against that exact string, never
+  observed against the real ring) and that it actually changes color: green with all sessions
+  quiet, peach the moment any session goes into "awaiting input," red when a session is
+  rate-limited/errored, and that it settles back to green once the triggering session clears
+  (not stuck on the last color). If no hardware is available, the focus/action event path itself
+  can be proven without a device via `curl -X POST :9877/sessions/{id}/focus` and
+  `curl -X POST :9877/ui/action` against the worktree build.
+  **Visual verification of `Settings > StreamDock` itself has NOT been done** — the tab is gated
+  behind `isTauri()` (same as Dictation), so it's invisible in plain browser-mode testing and can
+  only be screenshotted from the real Tauri desktop app, which needs the same restart called out
+  above. After restarting, open Settings > StreamDock and check: the status strip's colored dot
+  and label render correctly for each state (disabled/waiting/connected/error), the device
+  dropdown and Rescan button look right with 0 vs 1+ devices listed, both brightness sliders
+  render and drag smoothly, and the pinned-sessions list renders correctly with 0 vs several live
+  sessions. Follow `docs/frontend/STYLE_GUIDE.md` and take a screenshot per AGENTS.md's "Visual"
+  rule — none exist yet for this tab.
+
+- [ ] **Settings search extras port (BM25 ranking, hints, palette actions, flash) — frontend-only,
+  Vite HMR picks it up** — visual checks that jsdom can't prove: (1) open Settings, type a query —
+  results are ranked sensibly (the setting named by the query first), each row shows its hint text
+  under the `Tab › Section` trail without overflowing the row (hints are ellipsized); (2) pick a
+  result — the target control scrolls into view and briefly flashes with the accent-tinted
+  highlight (`Settings.module.css` `settingsSearchHighlight`), and re-picking the same result
+  restarts the flash; (3) `Cmd+P` — "Settings" category actions exist (e.g. "Shell (Terminal
+  settings)"); selecting one opens Settings on the right tab, scrolled to and flashing that
+  control, including while Settings is already open on another tab; (4) with AI Chat disabled the
+  palette offers no `AI Chat settings` entries, and in browser mode (`:9876`) no StreamDock ones
+  and no desktop-only controls (e.g. Global Hotkey), while other setting actions still work there;
+  (5) with Expert mode off, a palette action for an expert control (e.g. "Shell (Terminal
+  settings)") reveals that control and lands on it.
+
+- [ ] **Browser-client terminal copy over a real network (not just localhost)** —
+  `CanvasTerminal.tsx`'s `copySelection()` and `useTerminalContextMenus.ts`'s "Copy Block Output"
+  both used to await an HTTP round-trip (`terminal_get_selection_text` / `getBufferLines`) before
+  writing to the clipboard; over real network latency (Tailscale/remote access, not localhost,
+  where the round-trip is near-instant) this can outlast the browser's user-activation window and
+  silently no-op both `navigator.clipboard.writeText` and the `execCommand('copy')` fallback —
+  reproduced locally via a real headed-Chromium select+Cmd+C against `:9876` landing on the wrong
+  pane/timing. Fixed via a new `writeClipboardAsync()` (`utils/clipboard.ts`) that calls
+  `navigator.clipboard.write()` *synchronously* (satisfying the activation requirement immediately)
+  with a `ClipboardItem` whose data is the still-pending round-trip promise — a spec-sanctioned
+  pattern supported by Chrome/Firefox/Safari — so the Rust-side text (wrap-unwrapped, Claude
+  quote-gutters stripped) is preserved with no quality tradeoff on modern browsers. Falls back to
+  the old (activation-risking) synchronous path only when `ClipboardItem`/`navigator.clipboard.write`
+  aren't available. **Verify on a real remote connection** (Tailscale, not `127.0.0.1`) with actual
+  round-trip latency: drag-select terminal text (including a multi-line Claude quote with the `▎`
+  gutter, and a soft-wrapped long line) and use "Copy Block Output" from the context menu; press
+  Cmd/Ctrl+C or click the menu item, and confirm in both cases (a) the OS clipboard actually
+  updates and (b) the pasted text is fully clean (gutters stripped, wraps joined) — not degraded
+  quality, matching desktop/Tauri behavior exactly.
+  **Separately, found during this investigation and since fixed (2026-09-18):** the "Copy on
+  Select" setting (Settings > Terminal, `copyOnSelect` in `settingsStore`) was
+  fully unwired to the actual trigger — `CanvasTerminal.tsx`'s `onMouseUp` called `copySelection()`
+  unconditionally on any non-empty selection, with no `settingsStore.state.copyOnSelect` check
+  anywhere in the file, so disabling the toggle had no effect. Fixed by gating only the
+  auto-copy-on-drag branch on the setting — the selection itself is still always made, and Cmd/Ctrl+C
+  still always copies manually regardless of the setting, matching the documented intent
+  (`docs/user-guide/terminals.md`'s "Copy on Select" section). Covered by a new test in
+  `canvasTerminalClipboardFailure.test.ts`. **Manual check still worth doing:** in Settings, turn
+  "Copy on Select" off, drag-select terminal text, confirm nothing is copied and no "Copied to
+  clipboard" status appears, then press Cmd/Ctrl+C and confirm that DOES copy — in both the
+  desktop app and the browser/HTTP client.
+
+## Session State Explain (2026-09-21, **Rust change — needs `make dev` restart**)
+- New read-only troubleshooting dump for "why is this session's status badge what it is" —
+  ranked evidence per axis, `decide_now`, the `agent_state` ladder rung, screen/silence
+  bookkeeping, the last notification classification, and an always-on decision trail (including
+  rejected evidence attempts and what outranked them). Full design in `docs/backend/pty.md`'s
+  "Session State Explain" section.
+- Surfaces: desktop `explain_session_state` command, `GET /sessions/{id}/explain-state`, MCP
+  `debug action=explain_state`; frontend modal reachable from the Activity Dashboard row's new
+  icon button and the terminal tab context menu's "Explain State…" item.
+- **Verify against a real running session** (needs a rebuild first — this is Rust-side): open
+  the Activity Dashboard, click the small "?" button on a working session's row, confirm the
+  modal loads and every section renders (Visible/Evidence & decision/Agent & screen/Silence
+  timer/Decision trail); try it again on an idle session and on one currently awaiting input.
+  Right-click a terminal tab and confirm "Explain State…" opens the same modal for that
+  session, and is disabled/absent for a tab with no PTY session or an exited one.
+- **Verify Copy as JSON in the real desktop app, not just browser mode** — this is exactly the
+  surface where a prior WKWebView clipboard bug shipped once (issue #101,
+  `navigator.clipboard.writeText` silently failing inside a modal); `writeClipboard` is used
+  here specifically to avoid repeating it, but only a real Tauri build proves it.
+- **Try to catch a genuine mis-detection with it**: next time a session's badge looks wrong,
+  pull its explain-state dump before doing anything else and check whether `trail` shows a
+  rejected attempt, or `decide_now` disagrees with the displayed `shell_state` — either would
+  confirm the feature is actually useful for real troubleshooting, not just self-consistent in
+  tests.
+
+## Custom PTY env vars + tmux pane shell-readiness gate (2026-09-24, **Rust change — needs `make dev` restart**)
+- Fixes the p10k-wizard-hijack pane-spawn race (`plans/p10k-wizard-hijack-agent-pane-spawn-race.md`):
+  `tmux_routes.rs::materialize` now blocks until the freshly spawned shell reaches `SHELL_IDLE`
+  (5s bound, fail-open) before returning — a `respawn-pane`-delivered launch command can no
+  longer arrive while the shell is still sourcing `.zshrc`. See `docs/backend/pty.md`'s "Pane
+  Shell-Readiness Gate" section.
+- New global setting `AppConfig::custom_pty_env` — user-authored `KEY=value` pairs injected into
+  every spawned PTY (`pty::apply_custom_pty_env`, applied last, overrides everything except the
+  internal `TUIC_PTY_TTY`). Settings UI: Settings → Terminal → "Custom Environment Variables"
+  (`TerminalTab.tsx`, add/remove `KEY = value` rows, key-format + duplicate-key validation).
+  See `docs/backend/pty.md`'s "Custom PTY environment variables" section for the full
+  precedence order.
+- **Verify after rebuild (Rust) + reload (frontend):** open Settings → Terminal → "Custom
+  Environment Variables", add `TUIC_MANUAL_TEST` = `hello`, open a new terminal tab, run
+  `echo $TUIC_MANUAL_TEST` — expect `hello`. Then add
+  `POWERLEVEL9K_DISABLE_CONFIGURATION_WIZARD` = `true` on a machine with Powerlevel10k's
+  instant-prompt in verbose mode and confirm a burst of several simultaneous agent-teams pane
+  spawns no longer triggers the config wizard. Also confirm the setting is findable via the
+  Settings search box (typing "Environment Variables" should scroll to it).
+
+## Ghost pane-tab / Global Workspace stale-layout fix (2026-09-25, **frontend-only — needs app restart or reload**)
+- Fixes a live-reported bug: a new tab kept landing inside a 6-way split left over from an
+  Agent Teams swarm, and "Reset Panel Sizes" only worked until the next new terminal. Root
+  cause + fix details: `src/AGENTS.md`'s "`paneLayoutStore` Ghost Tabs Can Permanently Wedge A
+  Split..." section. Unit-tested (`useTerminalLifecycle.test.ts`, `useSplitPanes.test.ts`), but
+  the actual live scenario (a real tmux-shim-materialized pane whose PTY died outside the
+  normal close path) can't be reproduced from a unit test.
+- **Verify after restart/reload:** with the Global Workspace active and holding a split (any
+  auto-consolidated repo with 2+ terminals promoted), run "Reset Panel Sizes" from the Command
+  Palette, then open a brand-new terminal in that same repo — it should land as its own flat
+  tab, NOT get pulled back into a resurrected split. Separately, manually verify a pane whose
+  only tab is a session TUICommander no longer tracks (hardest to force manually — closest
+  approximation: kill a teammate pane's PTY process directly from a shell, e.g. `kill -9`, in a
+  way that bypasses the app's own close path) can still be closed via the pane's close-pane
+  action.
+
+## Global Workspace ambient-scope fix (2026-09-29, frontend-only)
+- Fixes the ambient-`scope` confusion documented in `src/AGENTS.md`'s "`globalWorkspaceStore`'s
+  Ambient `scope` Pointer..." section: sidebar badge inflated by dead ids, globe icon
+  disagreeing with the Activity Dashboard, removing a terminal via the Activity Dashboard not
+  sticking, and the sidebar pill's click having no visible effect. Extensively unit-tested
+  (new `GlobalWorkspaceEntry.test.tsx`, `PaneTree.test.tsx`, plus additions across
+  `globalWorkspaceScopes.test.ts`, `useWorktreeConsolidation.test.ts`,
+  `createBranchSelectionCoordinator.test.ts`, `TabBar.test.tsx`, `ActivityDashboard.test.tsx`,
+  `useAppShortcutHandlers.test.ts`) — the items below are the parts a unit test can't fully
+  prove (real click sequencing, real visual rendering).
+- **Sidebar pill is now one-way** — click "Global Workspace" with at least one terminal
+  manually promoted; confirm it shows the merged view. Click it again while already showing —
+  confirm nothing changes (no flicker, no layout reset). Click any ordinary terminal or branch
+  in the sidebar tree — confirm it exits Global Workspace and shows that terminal's own repo
+  (its normal view, or its own auto-consolidated worktree view if that repo has the setting on).
+- **Badge count** — promote 2-3 terminals across different repos via the Activity Dashboard's
+  globe button; confirm the sidebar badge matches exactly. Repeat with a repo that has
+  "consolidate worktrees" on and has its own worktree terminals — confirm the badge only counts
+  your manual promotions, not that repo's auto-consolidated ones.
+- **Globe icon parity** — promote a terminal, confirm its tab (both in the normal TabBar strip
+  and, if split, in a PaneTree pane) shows the globe icon, and the Activity Dashboard's promote
+  button shows the same "promoted" state. Click the tab's own globe icon to unpromote directly
+  from the tab; confirm the Activity Dashboard updates to match.
+- **Repo-name hover overlay** — while Global Workspace is showing (multiple repos' terminals
+  merged), hover a tab and confirm the repo-name overlay appears. Switch to a repo that has
+  "consolidate worktrees" on (its own automatic merged view, not Global Workspace) and hover a
+  tab there — confirm the overlay does NOT appear, since you're already in that one repo.
+- **Tab close still does a real close** — while Global Workspace is showing, click a tab's `×`.
+  Confirm the terminal is actually gone (not just removed from the Global Workspace view) —
+  check it no longer appears anywhere, including that terminal's own repo in the sidebar.
+
+## Resume banner on Claude Code exit, with session title (**Rust change — needs `make dev` restart**)
+- `tuic-hook` now scrapes `session_title` on SessionStart/UserPromptSubmit/SessionEnd and the
+  raw `reason` string on SessionEnd (new `cctitle`/`ccend` OSC 7770 verbs); `pty.rs` writes the
+  live session id/title/cwd into `SessionState` and takes a `resumable_session` snapshot the
+  moment the shell reclaims the foreground from Claude (`snapshot_resumable_session_on_agent_exit`). See
+  `src-tauri/AGENTS.md`'s "Agent Session Management" section, "Exit-time resume banner".
+- **Verify after rebuild + restart:** open a throwaway terminal, run real `claude`, use
+  `/rename foo`, send one prompt, then `/exit`. Expect a banner reading something like
+  `Resume "foo" — click to resume` to appear in that pane (it appears once the next
+  foreground observation sees the shell back — the next PTY chunk, e.g. the prompt redraw). Confirm typing at the shell prompt passes through normally with the banner
+  still visible (it's click-only, unlike the restore-time banner's Space/Enter behavior).
+  Click the banner and confirm it runs `claude --resume <id>` and the resumed session shows the
+  same conversation. Then click the × on a fresh occurrence and confirm it dismisses without
+  resuming. Separately, restore a branch/workspace with a saved agent tab and confirm that
+  banner still shows its title too.
+- **Also verify issue #119's hardening:** open 2+ Claude tabs in the SAME repo folder (matching
+  the original bug report's shape), let each reach an idle prompt, then check each tab resumes
+  its OWN conversation (not all landing in the same one). `SessionState.agent_session_id` is now
+  visible on `GET /sessions` (or `debug action=explain_state`) per-session — confirm each tab
+  reports a different id there, and that `terminalsStore.agentSessionIdIsAuthoritative` (via
+  browser devtools / a temporary log) is `true` for each once its own hook has fired.
+
+## Session Diff Review / Branch Diff Scroll overhaul (2026-09-29, **Rust change — needs `make dev` restart**)
+Full rewrite of both diff views: fixed the reported bugs (stale virtualized rows after a mode/
+session switch, dead collapse carets, sticky headers, wrong chronological line numbers, the
+global "scroll" mode hijacking every open per-file tab), then added turns, agent display names,
+jump-to-tab, live updates, navigation, diff-comparison settings, and an unseen tab icon. Plan:
+`plans/enchanted-puzzling-teacup.md`. Everything below is code-inspected and/or unit-tested
+(on the pre-rebase `wip` branch: 547 frontend files / 8600+ tests, 7100+ Rust tests, all green;
+replayed onto main 2026-10, see the last item) — this list is only the parts
+that need a real running instance because they depend on live PTY/transcript/visual state a unit
+test can't produce.
+
+- [ ] **Session/mode switching no longer bleeds content.** Open Session Diff Review on a repo
+  with 2+ Claude sessions. Switch sessions rapidly, and switch By File ↔ Chronological rapidly —
+  confirm no stale file headers or step cards ever linger from the previous view.
+  _(The collapse-caret half of this item is its own item below.)_
+- [ ] **Collapse caret toggles on a click anywhere in the file header row, not just the chevron**
+  _(verified on the pre-rebase `wip` branch only, at `651f46b558`: live browser testing against
+  Branch Diff Scroll's real DOM — happy-dom has no real flex layout, so no unit test could catch
+  this — found the header was STILL partially broken: `.filePath`'s `flex: 1` stretched its
+  invisible DOM box across nearly the whole row, so a click anywhere except the chevron/stats
+  badge hit the path span's own "open file" handler instead of toggling collapse. Fixed in the
+  shared `diffFileList.module.css` `.filePath` class, which `SessionFileHeader.tsx` also imports
+  (replayed byte-identical as `6eca144ec`). Re-verify on the rebased tree — the diff views were
+  merged with main's own collapse code during the replay — in Branch Diff Scroll AND Session Diff
+  Review, which was never live-clicked for lack of a real transcript)_.
+- [ ] **Sticky file headers sit at the true top** of the list (no longer offset by a summary-bar
+  height meant for a different consumer) _(verified on the pre-rebase `wip` branch only: Branch
+  Diff Scroll's "All Changes" summary header confirmed flush at the top with a real scroll,
+  screenshot in `.screenshots/session-diff-overhaul/`. Session Diff Review's own list uses the
+  same shared CSS default — `--diff-header-height: 0px` when no `headerHeight` prop is passed —
+  but wasn't independently screenshotted. Re-check both on the rebased tree)_.
+- [ ] **Diff Scroll ("All files") no longer hijacks other tabs.** Open a per-file diff tab, then
+  open Diff Scroll from a different tab/shortcut — the per-file tab must stay showing its own
+  single-file diff, not flip into scroll mode too.
+- [ ] **Live updates (needs a real live Claude session):** open Session Diff Review on the
+  session you're driving from a terminal tab in the SAME window. Have that agent make an edit.
+  - Chronological mode: with "Follow" checked, the view should auto-scroll to the new step. With
+    Follow unchecked, an "N new changes" pill should appear instead, and clicking it should jump
+    to the first unseen step.
+  - By File mode: a new file should append at the bottom with a "New content below" pill if
+    you're scrolled away from the bottom. An edit to a file currently on screen should apply in
+    place with a brief flash/fade. An edit to a file scrolled off screen should hold behind a
+    "Refresh (N)" pill until clicked.
+  - Confirm the session dropdown itself refreshes (a brand-new session appearing in the list)
+    without you clicking the manual refresh button.
+- [ ] **Turn picker.** In chronological mode, open the turn dropdown — each entry should show a
+  time, a +/- size, and the file(s) touched; hovering should show a prompt-preview tooltip;
+  selecting one should jump the list to that turn's first change.
+- [ ] **`^`/`v` same-file jump buttons** on a step's header in chronological mode — jump to the
+  previous/next change touching that same file, disabled at the first/last occurrence.
+- [ ] **`<`/`>` navigation** in both Session Diff modes and in Branch Diff Scroll — step
+  change-to-change (chronological) or file-to-file (By File / Branch Diff Scroll), disabled at
+  each end. _(Branch Diff Scroll's file-to-file stepping was verified live on the pre-rebase
+  `wip` branch only — disabled correctly at the first file, `>` scrolled to the next file,
+  screenshots in `.screenshots/session-diff-overhaul/`; re-check on the rebased tree. Session
+  Diff's own chronological/By File `<`/`>` has never been live-verified.)_
+- [ ] **Agent display names + jump-to-tab.** In a session with at least one subagent
+  (`Task`/`Agent` tool call), confirm the step badge shows a real name (from its `meta.json`),
+  not the raw hex id, and clicking it jumps to the PARENT session's terminal tab (subagents have
+  no PTY of their own — verify it does NOT try to jump to a nonexistent subagent tab). Verify a
+  session with no live matching terminal renders the name as plain, non-clickable text.
+- [ ] **Auto-open.** In Settings → General → Diffs (an expert setting — turn Expert on), set
+  "Auto-open Session Diff Review" to `Ask`, make
+  an edit in a tracked repo from a live agent session with no Session Diff tab open for it yet —
+  expect a notification-bell notice (not a toast) with an "Open Session Diff" action. Set it to `Auto` — expect the tab to open in
+  the background (not stealing focus). Set it to `off` — expect nothing. In all three cases,
+  confirm it does NOT refire while a tab for that exact session is already open.
+- [ ] **Unseen tab icon.** With a Session Diff tab open but NOT the active tab, trigger a live
+  edit in that session — the tab's icon should change to an unseen indicator, and clear the
+  moment you click back into the tab.
+- [ ] **Diff-comparison settings** (Settings → General → Diffs: ignore leading/trailing whitespace, ignore
+  whitespace amount, ignore case, soft wrap, truncate long changes; all but soft-wrap are expert): toggle each against a real diff
+  with a whitespace-only or case-only change and confirm it disappears/reappears as expected in
+  BOTH Session Diff and Branch Diff Scroll. Confirm the shared options popover in each view's own
+  toolbar reads/writes the same settings (flip one in Session Diff's toolbar, reopen Branch Diff
+  Scroll, confirm it's already applied there too). _(Partly verified on the pre-rebase `wip`
+  branch only: the `DiffOptionsMenu` popover opened from the per-file `DiffTab` toolbar with all
+  5 controls, and "Ignore trailing whitespace" turned a whitespace-only diff into "No changes".
+  Still needs: the other 3 whitespace/case options individually, the shared-settings check
+  across Session Diff's and Branch Diff Scroll's own toolbar instances, soft-wrap and
+  truncate-lines — and the verified part again on the rebased tree.)_
+- [ ] **Truncation.** Set "Truncate long changes" to something small (e.g. 20) and open a
+  large real diff — confirm it's cut at a hunk boundary with a "Show all N more lines" button
+  that reveals the rest on click.
+- [ ] **Background-subagent turn attribution** (narrow, hard to force live — code-inspected +
+  unit-tested via a synthetic transcript fixture, not yet observed against a real background
+  Task call): if you can reproduce a genuinely `background`-shaped subagent call whose result
+  reports back several turns later, confirm its edits show up under the turn it was actually
+  SPAWNED in, not the later turn that merely observed its completion.
+- [ ] **Canvas-only visual checks** (not observable over HTTP, per this repo's own testing
+  convention): the flash/fade animation's actual look, and the turn-picker tooltip's
+  rendering/positioning. _(The sticky-header CSS check that used to be listed here is its own
+  item, above.)_
+- [ ] **Watcher bounds** (replay addition): with Session Diff tabs open on the same session in
+  two windows, closing one keeps the other live-updating; a watch the backend refuses (64
+  distinct sessions / 32 subscribers per session) refreshes only via the slow fallback (10 s after a working-tree change),
+  and closing that tab never stops the other tab's updates.
+- [ ] Run the single aggregate `./scripts/check-gate.sh` once on the rebased tree. On the
+  pre-rebase `wip` branch the gate first got blocked by the permission classifier (at
+  `c29a9018b`) and then passed in full at that branch's tip of the time, `5c40f3de5` (exit 0,
+  7108 Rust tests passed / 16 skipped, vitest, plugin tests, both audits). That result does NOT
+  carry over: after the replay onto main it has not been run against this series at all —
+  per-pick replay checks were targeted only.
+
+## Tab-name / accent-color rename-echo ping-pong (2026-09-30, frontend-only)
+
+`session-renamed` and `session-accent-color-changed` are now applied through
+`terminalsStore.applyBackendRename`/`applyBackendAccentColor` (`{ echo: false }`) instead of a
+plain `update()`, so a backend-pushed name or color is never echoed back to
+`set_session_name`/`set_session_accent_color`. On this tree the accent color could loop
+(`set_session_accent_color` re-emits every change); `set_session_name` never emits, so a name
+echo was only a redundant round trip. Unit-tested (`terminals.renameEchoGuard.test.ts`,
+`useAppInit.test.ts` listener tests, `osc_title::a_real_title_immediately_followed_by_a_reset_emits_exactly_two_renames_then_settles`).
+
+- [ ] **The frontend's echo-suppression, live against a real running debug instance.** Start a
+  debug instance with an explicit `TUIC_APP_INSTANCE=<id>` (on this tree `make dev` does not
+  derive one per checkout), enable its HTTP server, create a throwaway session with its tab open
+  in the WebView, then drive two tmux-shim `set-option ... pane-border-style` calls with
+  different colors in quick succession while sampling `/events`: expect exactly two
+  `session-accent-color-changed` events and no further ones (an echoing frontend would make
+  `set_session_accent_color` re-emit). (A name echo is not observable this way:
+  `set_session_name` never emits on this tree.)
+  _(Verified on the pre-rebase `wip` branch only, against its own rename-emitting backend:
+  exactly 2 `session-renamed` events for 2 direct calls, zero phantom echoes. Re-verify on the
+  rebased tree.)_
+- [ ] **Reproducing the trigger from a REAL OSC-emitting process** (a live shell/agent whose
+  title changes, not a direct `PUT /name` call) still needs a human check: open a real terminal
+  tab, run a real agent (or `printf '\033]0;test title\007'` at a plain shell prompt) so its
+  title changes and then reverts, and confirm the tab title/accent border settle immediately
+  with no flicker.
+
+- [ ] **Frame-starvation watchdog (blank-tab self-heal)** — the dead-channel state has no known on-demand trigger, so the heal itself is covered by `frameStarvationWatchdog.test.ts` (12 unit tests, incl. the baseline-after-reset case) and `canvasTerminalFrameStarvation.mount.test.ts` (13 tests mounting the real component: arm on subscribe/show, cancel on hide/unmount, bounded retries, shared reattach `resubscribe`), each wiring point mutation-verified red. What still needs a live check is the no-regression half: switch repeatedly between several terminals, then `GET /logs?limit=100` and confirm there are no `No grid frame after a frame request — resubscribing` warnings on healthy tabs. _(NOTE: if that warning shows up on a healthy tab, `FRAME_STARVATION_MS` is too tight.)_
+
+## Worktree removal safety gate (2026-08-26, restored 2026-10-08, **Rust change — needs `make dev` restart**)
+
+Fix for the incident in `plans/docs/worktree-removal-incident-2026-08-26.md` (worktree
+deleted twice while an agent worked in it), restored onto main's removal design after
+the rebase dropped wip's backend refusal. Rust tests cover the logic directly
+(`cargo nextest run -E 'test(workspace_removal_guard_tests) | test(removal_refuses_a_live_worktree) | test(mcp_worktree_remove_refuses)'`);
+the end-to-end UI flow needs a live app. Verify against a throwaway repo on the
+worktree build's HTTP API (`:9877` — never `:9876`, never Boss's real repos).
+Sessions no longer take a `git worktree lock` for their lifetime (deliberately not
+restored — see `docs/backend/git.md` "Worktree Removal Safety"), so wip's lock and
+stale-lock-sweep checks are gone.
+
+- [ ] With a terminal open in a worktree, click Delete (sidebar `×` or Worktree
+  Manager). The "in use" confirmation should appear naming the attached
+  terminal(s), BEFORE the terminal closes, with Enter = Cancel — cancel it and
+  confirm nothing closed. Confirm it and verify the terminal closes, then the
+  worktree and branch are removed as before (no second question).
+- [ ] Open a terminal in the MAIN checkout, `cd` into a worktree, then click Delete
+  on that worktree. Expect the "in use" question again, this time naming the
+  live session(s) the backend found ("live session(s) still work in …"),
+  Enter = Cancel; cancelling keeps the worktree and its row; confirming removes it.
+- [ ] `DELETE :9877/worktrees/<id>?repoPath=<repo>&deleteBranch=false` on a clean
+  worktree with a live session (cwd inside) → expect **409** with
+  `code: "worktree_busy"`, `live_sessions`, and the worktree still on disk; repeat
+  with `&overrideBusy=true` → expect 200 and the worktree gone.
+- [ ] Same through MCP: `repo action=worktree_remove` refuses with
+  `worktree_busy:`; `override_busy=true` removes it.
+- [ ] After the session's process exits (`exit` in the shell, tab still lingering),
+  the removal is no longer refused.
+- [ ] Deleting a merged branch together with its worktree (branch context menu /
+  `POST :9877/repo/delete-local-branch` with `keepWorktree: false`) while a live
+  session works in the worktree is refused the same way (`worktree_busy:`, HTTP 409);
+  `overrideBusy` lifts it. Known gap: post-merge cleanup only logs the refusal — the
+  UI does not offer the "in use" override on that path.
+- [ ] Leave an uncommitted file in a worktree with no terminal attached, click
+  Delete. Expect the destructive "Destroy workspace state?" confirmation (not a
+  silent removal). Confirm and verify it's actually gone.
+- [ ] Select several worktrees in the Worktree Manager, including one with an
+  attached terminal, and batch-delete. The uncontroversial ones should go
+  through; the busy one gets its own confirmation, not silently included.
+- [ ] `curl :9877/logs` after clicking through a removal and confirm a
+  `git`-sourced `handleRemoveWorkspace` entry from the click shows up.
+  title changes, not a direct `PUT /name` call) **still needs a human check** — an attempt to
+  simulate it via raw `POST /sessions/{id}/write` bytes over curl was confounded by shell/kernel
+  local-echo behavior and an unexpectedly auto-launched Claude Code CLI session in the throwaway
+  PTY, and wasn't worth further automated debugging given the mechanism above is already proven
+  both by the Rust unit test
+  (`osc_title::a_real_title_immediately_followed_by_a_reset_emits_exactly_two_renames_then_settles`)
+  and the live check above. To close this out by hand: open a real terminal tab, run a real
+  agent (or `printf '\033]0;test title\007'` at a plain shell prompt) so its title changes and
+  then reverts, and confirm the tab title/accent border settle immediately with no flicker.
+
+- [ ] **Completion chime suppressed while Claude has declared background work** — frontend-only (`completionDecision.ts` `declared-background-work` reason; unit-tested). Live check after a rebuild: in a Claude session start a `run_in_background` task, let the turn end while the task keeps running with the tab in the background, and confirm no Completion chime plays until the task's follow-up turn finishes. `[HUMAN]` for the audio part only; `GET /logs` should show no `[Notify] ... completion` line while `declaredBackgroundWork` is true.
+
+- [ ] **Branches with an empty reflog no longer show "Unknown" in the sidebar** — Rust change (`classify_branch_merge` in `tuic-git/src/worktree.rs`), needs a `make dev` restart. Unit-tested (`a_branch_with_an_empty_reflog_is_still_classified`). Live check: with `gc.reflogexpire=now` having emptied `.git/logs/refs/heads/*` (e.g. the `.claude/worktrees/*` branches), `repo action=worktree_list` should report `commit_status` `merged`/`unmerged`/`pushed_unmerged` with no `error` instead of `unknown` / "branch creation is absent from reflog", and the sidebar badges should follow.
+
 ## Tasks detail integration (#1687-27a3)
 
 - [ ] After the Tasks shell is integrated and the next normal rebuild loads the updated plugin guide, open a work item from its list. Confirm the shell passes visibility, opens the selected provider/account/item, and receives authoritative detail updates. Component behavior is covered by the targeted detail tests and rb browser fixture; this item covers the separate shell integration. _(NOT VERIFIED 2026-10-12: needs the web frontend served and driven in a browser; the rb build box has no browser or built frontend and the lane builds Rust only through rb, so no UI was rendered. Isolated headless tuic-remote built from branch chore/1706-a443-to-test-runs (main 67ccd72c3) and run on the rb box; no desktop, no Boss instance.)_ _(audit 2026-10-13: VISUAL-OWED — TasksShell.test.tsx 4 + TasksDetail.test.tsx 12 passes (tasks.log): shell/detail selection and provider boundary; recorded/demo provider, not external authenticated provider…)_ _(triage 2026-10-14: WAITS — Needs Boss’s provider authentication, external service fixture or authorized live account operation.)_

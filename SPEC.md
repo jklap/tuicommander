@@ -323,7 +323,7 @@ There is no hybrid route and no fallback between them.
   `ego` CLI when its PTY integration is enabled. TUICommander allocates a terminal,
   runs the CLI executable, and infers state by parsing the rendered rows into
   `ParsedEvent`. Session state is recovered from the agent's own session files
-  on disk (see AGENTS.md, "Agent Session Management").
+  on disk (see src-tauri/AGENTS.md, "Agent Session Management").
 - **ACP.** AI Chat's `ego`, through the Agent Client Protocol v1 client in
   `src-tauri/src/acp/`. TUICommander launches `ego acp -C <root>` directly,
   adding `--profile <name>` only when a user selected an ego profile, and
@@ -456,6 +456,7 @@ Hold the primary modifier alone for 450 ms to show the first nine terminal-tab s
 |----------|--------|
 | ↑/↓ | Navigate prompts |
 | Enter | Insert prompt |
+| Tab/Shift+Tab | Cycle category chips (search stays focused) |
 | Ctrl+N | New prompt |
 | Ctrl+E | Edit selected |
 | Ctrl+F | Toggle favorite |
@@ -807,6 +808,7 @@ Some frontend-only stores persist to localStorage:
 - [x] Inter-Agent Messaging (`messaging` MCP tool: register, list_peers, send, inbox with channel push + polling fallback)
 - [x] Opt-in interrupting mail (`agent send urgency=interrupt`): safe Esc, ten-second confirmed-idle wait, full input submission and explicit urgent fallback; interrupted tools may leave partial work.
 - [x] Smart Prompts (29 built-in AI prompts with context variable resolution, shell/inject/headless-CLI execution, toolbar dropdown, SmartButtonStrip, Command Palette integration). The `api` execution mode runs one unattended ego turn over ACP (#787-ee50): a session with no MCP server, every question refused, the final text routed to the prompt's output target. Its old executor — a direct provider call from TUICommander — went with the embedded engine (#784-0aec) and did not come back
+- [x] Smart Prompts import/export (Settings > Smart Prompts: scoped export — everything / modified only / custom only — to a portable `.json`; import with per-prompt NEW/CONFLICT review before applying, `shell`/`api` prompts land disabled pending review)
 - [x] AI Chat panel (`Cmd+Alt+A`) — ego over ACP (#785-58ca), bound to a repository and ACP session rather than a terminal. TUICommander renders the journal, permissions, elicitation forms, plans and session controls while carrying no LLM client or provider API key of its own. The selected session is saved per root and restored after restart; the picker lists ego's durable sessions by title and activity time (#1071-46c9)
 - [x] AI Chat conversation deletion — capability-gated row controls confirm the conversation name, call ACP session/delete, remove successful deletions from tabs and the list, and retain refused conversations with the agent error (#1917).
 
@@ -868,6 +870,14 @@ Some frontend-only stores persist to localStorage:
 - [x] Intent tab titles override spawn labels while explicit user renames remain protected across reconnects
 - [x] Remote completion muting survives reconnects and deduplicates idle/exit signals per busy cycle
 - [x] IDE launcher with app icons
+- [x] Configurable link click activation — Click / ⌘Click/Ctrl+Click / Never — for detected terminal links
+- [x] Rule-driven Smart Selection for double-click word boundaries, configurable character-list or regex-alternate boundaries, precision-scored rule matching, and per-rule actions surfaced in the right-click menu, plus an Export/Import toolbar (scope-filtered, native Save dialog, NEW/CONFLICT review) mirroring Smart Prompts
+- [x] On / Use global default / Off tri-state control for every inheritable per-repo and per-agent boolean setting, replacing checkboxes that could only ever write a concrete value and never select "inherit" directly; fixed per-repo settings (and the global PR-visibility filters) silently failing to persist at all due to a camelCase/snake_case mismatch at the Tauri boundary
+- [x] Main window size/position restored across restarts, owned outside `tauri-plugin-window-state` with a self-correcting measure-and-correct restore step; shell tabs (not just agent tabs) restored on branch select; opt-in terminal scrollback persistence and replay above a fresh prompt
+- [x] Indicator customization — a single registry (`src/indicators/registry.ts`) is the source of truth for every color/icon/animation the app uses (terminal status dots, tab types, sidebar symbols, PR badges, git repo status, diff stats); the UI Legend (Settings → Appearance) is both the reference view and, in editable mode, the color/icon/animation editor, with per-group show/hide toggles (tab type tint, PR badges, git repo status, diff stats). Includes git repo status indicators: a distinct sidebar badge per in-progress operation (rebase/merge/cherry-pick/revert/bisect, including the main checkout) and a Changes-tab conflicts banner for unmerged files.
+- [x] OSC 1337 proprietary escape codes: `CursorShape`, `ClearScrollback`, `Copy`/`CopyToClipboard`+`EndCopy` (gated by the existing OSC 52 clipboard permission), `StealFocus`/`RequestAttention` (gated by a new settings toggle, default on), and `OpenURL` (always confirmed via the same dialog `ui action=confirm` MCP requests use, before opening, and allowlisted to http/https/mailto)
+- [x] Session Diff Review — reconstructs a step-by-step, per-file edit review from a Claude Code session transcript (no new agent instrumentation), with grouped-by-file (cumulative diff + collapsible edits) and flat chronological views, open-at-line/comment/copy/revert actions (per-step via reverse patch, per-file to session-start via byte-exact backup restore or reconstruction), and a confidence badge for files whose session-start content couldn't be determined
+- [x] StreamDock M18 macropad integration — a 15-key LCD grid + 3 plain buttons mirroring live session state, with stable (never reindexed) slot assignment, tap/double-tap/hold gesture dispatch derived from the device's own press/release timing, and a Settings tab for enable/device selection/brightness/pinning (see FEATURES.md §26)
 
 ### Pending (P2)
 - [ ] Error handling strategy config

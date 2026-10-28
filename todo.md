@@ -23,5 +23,143 @@ listed here.
 - **Estimated complexity:** S (single function + a couple of unit tests).
 - **Recommended priority:** P3 (correctness/DX polish; not a live vulnerability given the
   119 gate).
-</content>
-</invoke>
+
+### Command blocks: three items explicitly deferred during the turn-level rewrite, never filed
+- **Problem/opportunity:** The session that shipped `9ceae216` (turn-level command
+  blocks from the idle↔busy edge) explicitly named three follow-ups as "deferred, not
+  part of this fix" and never filed them anywhere in-repo — they exist only in an
+  ephemeral local `~/.claude/plans/` file:
+  1. Narrowing `claude_hook_map()`'s `Notification` matcher (`agent_hook.rs`) — currently
+     an unscoped, generic match; needs Claude Code's regex dialect confirmed first, and
+     risks silently breaking a shared global `settings.json` if done carelessly.
+  2. A WS/remote OSC 133 broadcast path — risks reintroducing the double-dispatch bug an
+     earlier fix (F3, pre-`BASE`) removed, unless gated by `isTauri()`.
+  3. Rewriting the `⏺`-heuristic pattern (`is_cc_tool_call_header` in `pty.rs`) — no
+     reliable syntactic marker currently exists for it; open-ended.
+  Separately: Gemini and Grok still fire a "busy" hook on every tool call
+  (`gemini_hook_map()`'s `("BeforeTool", "", ...)`, `grok_hook_map()`'s
+  `("PreToolUse", "", ...)`) — the exact green-tick-scrollbar-pollution pattern
+  `9ceae216` deliberately removed for Claude via `claude_map_has_no_broad_pretooluse_busy_entry`,
+  never extended to the other two agents.
+- **Proposed solution:** Each item needs its own design pass; for the Gemini/Grok
+  pollution specifically, the fix is likely structurally identical to what `9ceae216`
+  already did for Claude, pending verification that Gemini/Grok's busy/idle semantics
+  don't depend on the broad per-tool-call fire for some other reason.
+- **Expected benefits:** Closes a known cosmetic bug (Gemini/Grok green-tick pollution)
+  and unblocks three named improvements that currently exist only in a file no future
+  contributor would find.
+- **Trade-offs:** None of the three deferred items are urgent; the Gemini/Grok fix is
+  small but unverified against those agents' actual hook payload shapes.
+- **Estimated complexity:** S (Gemini/Grok fix) to M (the other three).
+- **Recommended priority:** P3 (Notification/WS-broadcast/heuristic), P2 (Gemini/Grok
+  green-tick pollution — user-visible, if minor).
+
+### Whether Claude Code's alt-screen use inside TUICommander is screen-reader- or fullscreen-gated is unresolved
+- **Problem/opportunity:** During the command-blocks investigation, it was observed
+  that Claude Code runs in alt-screen mode both normally and when forcing
+  `{"tui":"scrolling"}` — so it's unknown whether the gate into alt-screen is
+  screen-reader-mode-based or fullscreen-rendering-based. This matters: if it's
+  fullscreen-gated, nudging Claude Code out of fullscreen would give TUICommander real
+  per-turn boundary markers for every session, which would beat the `⏺`-heuristic
+  fallback outright and could retire a whole class of heuristic-detection bugs.
+- **Proposed solution:** Investigate CC's alt-screen entry conditions directly (env
+  vars, TTY capability probing) before any further block-detection work; this was
+  flagged as "the one finding that could still change the plan's shape."
+- **Expected benefits:** Could eliminate the `⏺`-heuristic fallback entirely for
+  Claude Code sessions, closing several existing heuristic-detection edge cases at once.
+- **Trade-offs:** Investigation-only until resolved; no code change implied yet.
+- **Estimated complexity:** S (investigation) — unknown for the follow-up work.
+- **Recommended priority:** P2 (could reshape the block-detection plan).
+
+### Smart Prompts `icon` field is a display bug, and has no UI to set it
+- **Problem/opportunity:** Every built-in Smart Prompt carries an `icon: string` (e.g.
+  `"git-commit"`, `"sparkle"`, `"shield"` — 24 unique names across 27 prompts, set as a
+  required positional argument to the `builtin()` helper in
+  `src/data/smartPromptsBuiltIn.ts`), but nothing in the codebase ever interprets those
+  names as icons. The only place `.icon` is read anywhere is
+  `src/components/SettingsPanel/tabs/SmartPromptsTab.tsx:590`, which prints the raw string
+  as text inside a 20px muted-gray box (`SmartPromptsTab.module.css:71-77`, sized for one
+  glyph) — the surrounding comment literally calls it a "placeholder." So today it reads
+  the word "sparkle" instead of a sparkle glyph. Separately, neither prompt editor
+  (`SmartPromptsTab`'s `PromptEditor` nor `PromptDrawer`'s `PromptEditor`) exposes an icon
+  field, and `promptLibraryStore.createPrompt()` never defaults one — so every custom
+  prompt has `icon: undefined` permanently, with no way for a user to ever set one.
+- **Proposed solution:** Build a small icon-name → glyph lookup (à la `AgentIcon.tsx`'s
+  `AGENT_PATHS` map, but keyed by the free-form icon-name strings instead of a closed
+  union) and render through it at the one call site instead of the raw string. Two open
+  decisions before implementing, deliberately left open rather than pre-decided:
+  1. **Scope** — fix the built-in display only (small, self-contained), or also add a
+     picker to both prompt editors so custom prompts stop being permanently icon-less —
+     modeled on `ColorSwatchPicker`/`colorPresets.ts` (`src/components/shared/`), the
+     existing "pick one of N fixed presets, active-state highlight, click to select"
+     pattern already used for accent color and per-repo sidebar color. *Leaning toward
+     doing both* — fixing only the built-ins would make the asymmetry more visible, not
+     less: built-ins get real icons while every custom prompt shows a blank gap next to
+     them.
+  2. **Glyph style** — the render context (`.promptIcon`) is explicitly
+     `color: var(--fg-muted)` at `font-size: var(--font-xs)`, which only affects
+     monochrome/text-presentation Unicode glyphs, not full-color emoji (emoji ignore CSS
+     `color`). Monochrome-only (e.g. `●` `↑` `✎` `✦` `◎` `✓` `▶` `⚙` `⚠`) stays visually
+     consistent with the row's other muted chrome and can reuse two symbols already
+     established elsewhere in the app (Toolbar's `▶` for "running", `⚠` for PR conflicts).
+     Mixing in a few colorful emoji where no decent monochrome symbol exists (🔍 magnifier,
+     👀 review, 🛡 shield) is more instantly recognizable at the cost of a few icons not
+     matching the row's muted styling. *Leaning toward monochrome-only* for visual
+     consistency with the badges/text already in that row.
+- **Expected benefits:** Fixes a visibly broken settings screen (raw words instead of
+  icons); if the picker is included, closes a real feature gap (custom prompts can never
+  be visually distinguished today) and removes the future asymmetry of "built-ins look
+  nice, customs look blank."
+- **Trade-offs:** The glyph map is a values judgment with no objectively correct answer —
+  reversible, but worth a quick look before landing. Adding the picker touches two editor
+  components (`SmartPromptsTab.tsx`'s and `PromptDrawer.tsx`'s `PromptEditor`) plus
+  `createPrompt`/`updatePrompt` call sites, roughly doubling the change size versus the
+  display-only fix.
+- **Estimated complexity:** S (display fix only) or M (display fix + picker in both
+  editors).
+- **Recommended priority:** P3 (cosmetic; not a regression, the field was always
+  unwired).
+
+### `TUIC_PTY_TTY` has no multi-pane disambiguation or device-path-staleness handling
+- **Problem/opportunity:** `TUIC_PTY_TTY` (stamped in
+  `pty.rs::spawn_pty_pair_with_retry`, the sole injection point) is the primary
+  mechanism `tuic-hook` uses to resolve which pty to write its OSC 7770 signal to. Two
+  residual risks were surfaced during its security review and never tracked: (1) no
+  multi-pane disambiguation — two agents running in two tmux/screen panes under one
+  outer pty share a single `TUIC_PTY_TTY`, with no way to attribute an emission to the
+  right pane; (2) device-path staleness — an escaped, daemonized grandchild process can
+  hold a stale `TUIC_PTY_TTY` after its own pty closes, and the OS can reassign that
+  device path to an unrelated later session.
+- **Proposed solution:** Not designed yet. A multi-pane fix likely needs a
+  pane-qualified identifier rather than a bare device path; the staleness case likely
+  needs the receiving TerminalGrid to validate the writer still corresponds to a live,
+  owned session rather than trusting the device path alone.
+- **Expected benefits:** Removes two named-but-unhandled correctness edge cases in a
+  mechanism every hook-instrumented agent session depends on.
+- **Trade-offs:** Both are narrow and low-severity today (no report of either actually
+  firing); designing a fix before a concrete failure is observed risks solving the wrong
+  shape of problem.
+- **Estimated complexity:** M (needs design work, not just a patch).
+- **Recommended priority:** P3.
+
+### `MarkdownTab.test.tsx` reports a stable async leak in `ContentRenderer.tsx`, not `MarkdownTab.tsx`
+- **Problem/opportunity:** `pnpm exec vitest run src/__tests__/components/MarkdownTab.test.tsx`
+  reports `Leaks 1 leak` (a `requestAnimationFrame` call) on every run, reproducibly.
+  Investigated while verifying a different, now-fixed leak claim in `MarkdownTab.tsx`'s own
+  `focusWrapper` — the leak persists identically whether or not that fix is applied, and its
+  stack trace instead points at `src/components/ui/ContentRenderer.tsx:434`'s `requestAnimationFrame`
+  call inside a `createEffect`, which **already has** an `onCleanup(() => cancelAnimationFrame(raf))`
+  guard. The test file itself correctly tracks and unmounts every rendered component in
+  `afterEach` (`pendingUnmounts`), so this isn't an obviously missing unmount either. Root
+  cause not yet identified — possibly a timing interaction between Solid's effect scheduling,
+  jsdom's `requestAnimationFrame` polyfill, and vitest's `detectAsyncLeaks` snapshot point,
+  rather than a genuine missing-cleanup bug in application code.
+- **Proposed solution:** Needs focused investigation — reproduce with a minimal
+  `ContentRenderer` mount/unmount test in isolation, and check whether the leak also
+  reproduces in `ContentRenderer.test.tsx` directly or only when mounted via `MarkdownTab`.
+- **Expected benefits:** Either closes a genuine (if subtle) leak, or identifies a
+  vitest/jsdom/Solid interaction worth documenting so it isn't rediscovered.
+- **Trade-offs:** Low urgency — `detectAsyncLeaks` is a reporter in this config, not a hard
+  CI gate, so it doesn't currently block anything.
+- **Estimated complexity:** S (investigation) — unknown for any fix.
+- **Recommended priority:** P3.
