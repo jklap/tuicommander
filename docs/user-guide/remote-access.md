@@ -878,7 +878,7 @@ TLS listener rather than the presence of certificate configuration.
 
 **Beta** — the core HTTP/WebSocket API is stable, but the standalone daemon is new and may have rough edges. Report issues on GitHub.
 
-Remote host cards name DNS, refused connections, timeout, TLS, and authentication failures. A 403 Untrusted Host explains that the daemon rejected the host name, including when the response arrives in multiple HTTP chunks. When a short name cannot resolve, a matching running Tailscale peer supplies its advertised full DNS name. Failed connections show the automatic retry delay; active attempts clear the previous failure.
+Remote host cards name DNS, refused connections, timeout, TLS, and authentication failures. A 403 Untrusted Host explains that the daemon rejected the host name, including when the response arrives in multiple HTTP chunks. This refusal stops automatic connection retries and removes the retry delay. Use a name trusted by the daemon, or correct the daemon configuration, then press **Connect** to try again. The cause remains visible until that attempt. Unchanged failure states produce no additional warnings. When a short name cannot resolve, a matching running Tailscale peer supplies its advertised full DNS name. Retryable failures show the automatic retry delay; active attempts clear the previous failure.
 
 ## Troubleshooting
 
