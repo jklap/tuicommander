@@ -31,6 +31,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Refuse archival of unresolved story prerequisites with open dependents, and require restoring archived unresolved work before adding a dependency to it (#2426-821e).
 - Explain how to restore an archived plan when New plan selects its existing source, instead of silently hiding the result; preserve the plan and avoid duplicates (#2425-5cfa).
 - Show nested MCP capability switches as off and non-editable while their parent denies access, preserving saved child preferences until the parent is enabled (#2433-2f3f).
 - Match story title edit validation to the backend limit of 200 Unicode characters, without truncating drafts (#2427-a125).

@@ -1,3 +1,7 @@
+## Archived prerequisite retention (2426-821e) — Rust restart required
+
+- [ ] Coordinator critic: run `archiving_unresolved_prerequisite_does_not_hide_blocker`, the `archive_prerequisite_` regressions, and existing archive/dependency consumers on the final commit. The implementation lane reproduced RED on Linux rb; no post-fix GREEN is claimed.
+- [ ] After an authorized `make dev` restart or `make build`, confirm Archive story refuses an unresolved prerequisite with open dependents and shows their IDs. Confirm Done prerequisites can still be archived, and adding an archived unresolved dependency asks for restoration. Rust does not hot-reload; the daily app was not restarted.
 ## ACP launch environment (2320-f493) — Rust rebuild/restart required
 
 - [ ] Coordinator critic: run `story2320_connection_env` plus ACP launch/reuse consumers and the focused client/transport tests. The implementer recorded pre-implementation RED; no post-implementation Rust GREEN is claimed.
