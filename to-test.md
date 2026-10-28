@@ -1,3 +1,8 @@
+## Bare repository inventory (2413-19e4) — Rust restart required
+
+- [ ] Coordinator: run `bare_main_entry_has_no_missing_checkout_diagnostic`, `sidebar_removal_identity_2334_candidate_states`, `orphan_validation_refuses_a_bare_repository_entry`, and `orphan_whose_directory_is_gone_stays_out_of_fingerprint_cleanup` on the final commit. The pre-fix CLI regression reproduced on native macOS after build-slot automatically fell back from an unavailable rb status probe; no post-fix GREEN run was made.
+- [ ] After an authorized `make dev` restart or `make build`, refresh a bare repository and one of its linked checkouts. Bare metadata must not show repair guidance; real missing linked registrations must still do so. The daily app was not restarted; Rust does not hot-reload.
+
 ## Stdio MCP health recovery (2417-793a) — Rust rebuild/restart required
 
 - [ ] Coordinator: run the focused stdio client tests and registry health-recovery consumers on the final commit. The pre-fix regression reproduced a live child surviving two unanswered health probes on Linux rb; no post-fix GREEN run was made by the implementer.

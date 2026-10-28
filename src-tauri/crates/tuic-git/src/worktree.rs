@@ -3777,6 +3777,8 @@ pub(crate) struct WorktreeEntry {
     /// Branch from the `branch refs/heads/...` line — absent while HEAD is detached.
     pub(crate) branch: Option<String>,
     pub(crate) detached: bool,
+    /// Bare main metadata must remain in registration order, but is not a checkout.
+    pub(crate) bare: bool,
 }
 
 fn parse_worktree_entries(porcelain: &str) -> Vec<WorktreeEntry> {
@@ -3792,6 +3794,7 @@ fn parse_worktree_entries(porcelain: &str) -> Vec<WorktreeEntry> {
         let mut path: Option<String> = None;
         let mut branch: Option<String> = None;
         let mut detached = false;
+        let mut bare = false;
         let mut head = String::new();
 
         for line in block.split(if nul { '\0' } else { '\n' }) {
@@ -3803,6 +3806,8 @@ fn parse_worktree_entries(porcelain: &str) -> Vec<WorktreeEntry> {
                 head = oid.to_string();
             } else if line == "detached" {
                 detached = true;
+            } else if line == "bare" {
+                bare = true;
             }
         }
 
@@ -3812,6 +3817,7 @@ fn parse_worktree_entries(porcelain: &str) -> Vec<WorktreeEntry> {
                 head,
                 branch,
                 detached,
+                bare,
             });
         }
     }
@@ -3957,6 +3963,10 @@ pub(crate) fn checkout_inventory(
     });
     let pool = archive_pool.map(|p| std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf()));
     for entry in entries {
+        // Bare metadata is a registration anchor, not an unavailable checkout.
+        if entry.bare {
+            continue;
+        }
         let path = Path::new(&entry.path);
         let parent = path
             .parent()
@@ -5096,6 +5106,71 @@ mod tests {
     use std::process::Command;
     use tempfile::TempDir;
     use tuic_test_support::{fail_with_stderr_script, print_file_script, touch_script};
+
+    // Catches: bare metadata becomes a missing checkout, including through a linked base.
+    #[test]
+    fn bare_main_entry_has_no_missing_checkout_diagnostic() {
+        use crate::git_reads::{CliGitReads, GitReads, GixGitReads};
+        let mut failures = Vec::new();
+        for bare in [true, false] {
+            let root = TempDir::new_in(tuic_test_support::test_temp_root()).unwrap();
+            let seed = setup_test_repo();
+            let base = if bare {
+                let path = root.path().join("metadata.git");
+                git_cmd(seed.path())
+                    .args([
+                        "clone",
+                        "--bare",
+                        &seed.path().to_string_lossy(),
+                        &path.to_string_lossy(),
+                    ])
+                    .run()
+                    .unwrap();
+                path
+            } else {
+                seed.path().to_path_buf()
+            };
+            let live = root.path().join("live");
+            let missing = root.path().join("missing");
+            for (branch, path) in [("live", &live), ("missing", &missing)] {
+                git_cmd(&base)
+                    .args(["worktree", "add", "-b", branch, &path.to_string_lossy()])
+                    .run()
+                    .unwrap();
+            }
+            fs::remove_dir_all(&missing).unwrap();
+            let missing_spelling =
+                tuic_core::path_spelling::portable_spelling(&missing.to_string_lossy());
+            let live_spelling = tuic_core::path_spelling::portable_spelling(
+                &live.canonicalize().unwrap().to_string_lossy(),
+            );
+            for from in [&base, &live] {
+                for (backend, reader) in [
+                    ("cli", &CliGitReads as &dyn GitReads),
+                    ("gix", &GixGitReads::new() as &dyn GitReads),
+                ] {
+                    let inventory = reader.worktree_inventory(from, None).unwrap();
+                    let valid = inventory.worktree_diagnostics.len() == 1
+                        && inventory.worktree_diagnostics[0].path == missing_spelling
+                        && inventory.worktree_diagnostics[0].state
+                            == WorktreeDiagnosticState::Missing
+                        && inventory.worktree_paths.len() == if bare { 1 } else { 2 }
+                        && inventory
+                            .worktree_paths
+                            .get("live")
+                            .is_some_and(|row| row.path == live_spelling)
+                        && inventory.detached_worktrees.is_empty();
+                    if !valid {
+                        failures.push(format!(
+                            "bare={bare}, from={}, {backend}: {inventory:?}",
+                            from.display()
+                        ));
+                    }
+                }
+            }
+        }
+        assert!(failures.is_empty(), "{}", failures.join("\n"));
+    }
 
     // Catches: sidebar discovery and removal disagree about a Git-created checkout identity.
     #[test]

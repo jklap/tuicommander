@@ -354,3 +354,5 @@ Missing or moved registrations appear as read-only diagnostic rows with their re
 If `git worktree add --force` puts a branch in several checkouts, the lexicographically smallest path keeps the existing branch workspace. Other checkouts appear as read-only diagnostics. Use a distinct branch when you need an independent selectable workspace. Bisect and rebase keep the original branch identity when Git records it.
 
 Unavailable detached registrations are excluded from automatic orphan cleanup in both Ask and On modes, including the Ask countdown. They remain repair diagnostics until restored or explicitly removed. Safe-only removal rechecks availability, so a directory moved after assessment cannot be pruned automatically. Explicit user-confirmed removal remains available.
+
+Bare repository metadata does not appear as a missing checkout. Linked checkouts from a bare repository remain available; deleted or broken linked checkouts still show repair guidance.
