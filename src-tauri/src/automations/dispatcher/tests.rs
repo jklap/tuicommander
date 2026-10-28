@@ -532,6 +532,7 @@ async fn event_run_prompt_carries_the_issue_url_and_never_its_text() {
         repositories: vec!["sstraus/tuic-test-sandbox".into()],
         label: "tuic-run".into(),
         definition_id: "once".into(),
+    workflow: None,
     };
     std::fs::write(
         fixture._root.path().join("automations.json"),

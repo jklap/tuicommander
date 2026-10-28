@@ -35,6 +35,7 @@ fn config(repositories: &[&str]) -> AutomationsConfig {
             repositories: repositories.iter().map(|r| (*r).into()).collect(),
             label: "tuic-run".into(),
             definition_id: "pilot".into(),
+        workflow: None,
         },
         ..Default::default()
     }

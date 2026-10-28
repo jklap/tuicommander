@@ -35,6 +35,7 @@ fn intake() -> EventIntake {
         repositories: vec![SANDBOX.into()],
         label: "tuic-run".into(),
         definition_id: "pilot".into(),
+    workflow: None,
     }
 }
 

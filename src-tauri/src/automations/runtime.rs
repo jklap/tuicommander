@@ -328,6 +328,7 @@ mod tests {
                 repositories,
                 label: "tuic-run".into(),
                 definition_id: "not-dispatched".into(),
+            workflow: None,
             },
             ..Default::default()
         };

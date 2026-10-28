@@ -23,6 +23,15 @@ pub struct EventIntake {
     pub label: String,
     /// Id of the enabled definition an eligible issue starts.
     pub definition_id: String,
+    /// Opt in to a pinned published native story workflow.
+    pub workflow: Option<EventWorkflow>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct EventWorkflow {
+    pub definition_id: String,
+    pub definition_revision: i64,
 }
 
 impl EventIntake {
