@@ -862,13 +862,18 @@ export const Terminal: Component<TerminalProps> = (props) => {
 
 	// Eagerly attach listeners for existing sessions (before terminal.open())
 	// This prevents data loss when PTY output arrives while terminal is on a background tab
+	let sessionListenersReady: Promise<boolean> = Promise.resolve(false);
 	const existingSessionId = terminalsStore.get(props.id)?.sessionId;
 	if (existingSessionId) {
 		sessionId = existingSessionId;
 		setCurrentSessionId(existingSessionId);
 		// attachSessionListeners syncs shell state from Rust via get_shell_state
-		attachSessionListeners(existingSessionId).catch((err) =>
-			appLogger.error("terminal", "Failed to attach session listeners", err),
+		sessionListenersReady = attachSessionListeners(existingSessionId).then(
+			() => true,
+			(err) => {
+				appLogger.error("terminal", "Failed to attach session listeners", err);
+				return false;
+			},
 		);
 	}
 
@@ -905,8 +910,13 @@ export const Terminal: Component<TerminalProps> = (props) => {
 						});
 					}
 					await pty.resize(sessionId, grid.rows, grid.cols);
+					// Reuse the eager/resume attachment, but recover an initial handshake failure.
+					if (!(await sessionListenersReady)) {
+						if (disposed) return;
+						detachSessionListeners();
+						await attachSessionListeners(sessionId);
+					}
 					reconnected = true;
-					await attachSessionListeners(sessionId);
 					appLogger.info("terminal", `initSession(${props.id}) — reconnected to ${sessionId}`);
 					detectAgentForTerminal(props.id, "idle").catch(() => {});
 				} catch {
@@ -1063,6 +1073,14 @@ export const Terminal: Component<TerminalProps> = (props) => {
 				} else {
 					sessionId = terminalsStore.get(props.id)?.sessionId ?? null;
 					setCurrentSessionId(sessionId);
+					if (sessionId)
+						sessionListenersReady = attachSessionListeners(sessionId).then(
+							() => true,
+							(err) => {
+								appLogger.error("terminal", "Failed to attach resumed session listeners", err);
+								return false;
+							},
+						);
 					if (isVisible())
 						initSession().catch((e) =>
 							appLogger.error("terminal", "initSession failed after resume", { error: String(e) }),
