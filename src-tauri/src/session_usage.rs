@@ -86,7 +86,7 @@ impl SessionUsage {
 
 #[derive(Clone)]
 enum UsageRead {
-    Session(SessionUsage),
+    Session(Box<SessionUsage>),
     Ego { report: Arc<Value>, stale: bool },
 }
 
@@ -159,8 +159,14 @@ async fn cached(
     ttl: Duration,
     fetch: impl std::future::Future<Output = Result<SessionUsage, String>>,
 ) -> Result<SessionUsage, String> {
-    match cached_read(key, ttl, async { fetch.await.map(UsageRead::Session) }).await? {
-        UsageRead::Session(snapshot) => Ok(snapshot),
+    match cached_read(key, ttl, async {
+        fetch
+            .await
+            .map(|snapshot| UsageRead::Session(Box::new(snapshot)))
+    })
+    .await?
+    {
+        UsageRead::Session(snapshot) => Ok(*snapshot),
         UsageRead::Ego { .. } => Err("usage cache identity mismatch".into()),
     }
 }
