@@ -892,7 +892,13 @@ Remote host cards name DNS, refused connections, timeout, TLS, and authenticatio
 A desktop secret request shows a full one-time URL in its private window.
 Open **Open on a trusted browser or phone** to select or copy the URL, open the
 link, or scan its QR code. The address uses the same network and HTTPS policy as
-Remote Mobile Connection. If Remote Access is off, enable it in Settings and
+Remote Mobile Connection. Both choose the first backend-ranked address: Tailscale
+with an active HTTPS listener, then Wi-Fi/LAN, then HTTP-only Tailscale, then
+another detected network address. Interface order breaks ties within each group.
+IPv6 literals use brackets. You can choose another address in Remote Access or
+the pairing dialog; detection does not guarantee that the phone can reach it.
+If no address is detected, the private form shows network setup guidance instead
+of a phone URL. If Remote Access is off, enable it in Settings and
 request a new form. Enter only the requested fields. Entry uses the existing server authentication and transport;
 use HTTPS to protect values in transit. No separate private listener is created. The headless daemon cannot originate requests in this slice.
 See [Private secret forms](secrets.md).

@@ -1966,7 +1966,10 @@ before launch to select another directory. A relative value returns
 GET /system/local-ips
 ```
 
-Returns list of local network interfaces and addresses.
+Returns local network interfaces and addresses, ranked for pairing and phone secret
+entry: active Tailscale HTTPS, Wi-Fi/LAN, HTTP-only Tailscale, then other
+networks. Equal-ranked entries retain interface order. All candidates remain
+available for manual selection; an empty list means no detected address.
 
 ### Local IP (Primary)
 
