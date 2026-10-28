@@ -405,3 +405,83 @@ async fn dropped_review_cancels_its_owned_acp_reservation() {
         error.message
     );
 }
+
+// Catches: a stale sibling-checkout snapshot consumes the latest head's publication authority.
+#[tokio::test]
+async fn stale_registered_checkout_cannot_strand_current_head_review() {
+    let dir = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+    let _config = crate::config::set_config_dir_override(dir.path().into());
+    let paths: Vec<String> = ["canonical", "sibling"]
+        .into_iter()
+        .map(|name| {
+            let path = dir.path().join(name);
+            std::fs::create_dir_all(&path).unwrap();
+            for args in [
+                vec!["init"],
+                vec!["remote", "add", "origin", "https://github.com/cli/cli.git"],
+            ] {
+                super::super::publish::run_git(&path, &args).unwrap();
+            }
+            path.to_string_lossy().into_owned()
+        })
+        .collect();
+    std::fs::write(
+        dir.path().join("repositories.json"),
+        serde_json::to_vec(&serde_json::json!({"repos": {
+            &paths[0]: {}, &paths[1]: {}
+        }}))
+        .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(crate::config::registered_repo_paths().len(), 2);
+    let owner = RunOwner::acquire_at(&dir.path().join("runs.sqlite3"), now()).unwrap();
+    let config = AutomationsConfig {
+        definitions: vec![definition()],
+        pull_request_reviews: PullRequestReviews {
+            repositories: vec!["cli/cli".into()],
+            definition_id: "review".into(),
+        },
+        ..Default::default()
+    };
+    let recorded = metadata();
+    let old_head = recorded["head"]["sha"].as_str().unwrap();
+    let latest = "b".repeat(40);
+    let status = |head: &str| {
+        crate::github::parse_pr_node(&serde_json::json!({
+            "headRefName":"fixture", "number":recorded["number"], "url":recorded["html_url"],
+            "state":"OPEN", "headRefOid":head
+        }))
+        .unwrap()
+    };
+    let mut snapshot = ReviewSnapshot::default();
+    snapshot.replace(paths[0].clone(), vec![status(old_head)]);
+    let old = snapshot
+        .admit(owner.store(), &config, now())
+        .unwrap()
+        .remove(0);
+    owner
+        .store()
+        .transition(&old.id, RunStatus::Completed, RunDetails::default(), now())
+        .unwrap();
+    snapshot.replace(paths[0].clone(), vec![status(&latest)]);
+    let current = snapshot
+        .admit(owner.store(), &config, now())
+        .unwrap()
+        .remove(0);
+    // After bus lag, the sibling's retained old head may arrive before the canonical resync.
+    snapshot.lost_updates();
+    snapshot.replace(paths[1].clone(), vec![status(old_head)]);
+    assert_eq!(
+        snapshot.admit(owner.store(), &config, now()).unwrap(),
+        Vec::<AutomationRun>::new()
+    );
+    let effects = Effects::default();
+    effects.metadata.lock()["head"]["sha"] = latest.clone().into();
+    execute(owner.store(), &current, &effects).await.unwrap();
+    execute(owner.store(), &current, &effects).await.unwrap();
+    assert_eq!(
+        *effects.posts.lock(),
+        vec![(14846, latest, "Review body".into())],
+        "the current head must publish exactly once despite an old sibling snapshot"
+    );
+}
