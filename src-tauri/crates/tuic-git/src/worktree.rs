@@ -11536,13 +11536,13 @@ branch refs/heads/feat
             .args(["reflog", "expire", "--expire=all", "refs/heads/expired"])
             .run()
             .unwrap();
-        assert!(
+        assert_eq!(
             git_cmd(&repo)
                 .args(["reflog", "show", "refs/heads/expired"])
                 .run()
                 .unwrap()
-                .stdout
-                .is_empty()
+                .stdout,
+            ""
         );
 
         for _ in 0..2 {
