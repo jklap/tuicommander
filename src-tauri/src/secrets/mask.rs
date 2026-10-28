@@ -58,7 +58,10 @@ pub(crate) fn representations(value: &str) -> Vec<Zeroizing<String>> {
                     &base64::engine::general_purpose::URL_SAFE_NO_PAD,
                 ] {
                     let encoded = Zeroizing::new(engine.encode(&bytes));
-                    result.push(Zeroizing::new(encoded[prefix * 8 / 6..((prefix + value.len()) * 8).div_ceil(6)].to_owned()));
+                    result.push(Zeroizing::new(
+                        encoded[prefix * 8 / 6..((prefix + value.len()) * 8).div_ceil(6)]
+                            .to_owned(),
+                    ));
                 }
             }
         }
@@ -337,7 +340,6 @@ impl StreamMask {
             if length > 0 {
                 cutoff = cutoff.min(decoded_starts[decoded.len() - length]);
             }
-
         }
         // Percent escapes may straddle reads before they decode to a prefix.
         if let Some(i) = flat.iter().rposition(|b| *b == b'%')
@@ -356,8 +358,13 @@ impl StreamMask {
         for (mark, previous) in marked.iter_mut().zip(&self.pending_marks) {
             *mark |= previous;
         }
-        let masked: Zeroizing<Vec<u8>> = Zeroizing::new(bytes.iter().zip(&marked)
-            .map(|(byte, hidden)| if *hidden { b'*' } else { *byte }).collect());
+        let masked: Zeroizing<Vec<u8>> = Zeroizing::new(
+            bytes
+                .iter()
+                .zip(&marked)
+                .map(|(byte, hidden)| if *hidden { b'*' } else { *byte })
+                .collect(),
+        );
         while !self.pending.is_char_boundary(cutoff) {
             cutoff -= 1;
         }

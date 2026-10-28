@@ -4307,7 +4307,14 @@ pub(crate) fn spawn_reader_thread(
                 }
             }
 
-            let remaining = flush_eof(&mut utf8_buf, &mut esc_buf, &mut processor, &silence, &session_id, &state);
+            let remaining = flush_eof(
+                &mut utf8_buf,
+                &mut esc_buf,
+                &mut processor,
+                &silence,
+                &session_id,
+                &state,
+            );
             // The remainder goes through the assembler, not straight out: it may
             // close a line the last read left partial. Then drain unconditionally
             // — teardown has no later tick to flush the batch.
