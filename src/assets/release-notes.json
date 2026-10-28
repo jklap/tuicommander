@@ -277,5 +277,18 @@
       "Buttons, switches, sliders and settings controls share consistent desktop sizes and 44px mobile touch targets."
     ],
     "date": "2026-10-26"
+  },
+  "2.0.0-beta.4": {
+    "highlights": [
+      "AI Chat now connects when you open it, stays in sync across desktop and mobile, and compacts long conversations itself.",
+      "AI Chat has slash command completion and a compact composer, and you can send it quoted Markdown selections.",
+      "Terminal Compose sends with Enter (Ctrl+Enter adds a new line) and shows queued commands in a pill.",
+      "You can draft stories with Fill with AI and see stories from all plans together in List and Kanban views.",
+      "The status bar shows ego context and cost, and Claude usage now appears for enterprise and spend-based plans.",
+      "Headless daemons can read a credential file, serve real HTTPS/WSS with manual TLS, and run GitHub issue intake.",
+      "Mouse wheel scrolling in terminal apps is more controlled, and remote SSH terminals open without blank screens.",
+      "Git handling is more reliable with non-origin default branches, merge.ff=only merges, and no phantom HEAD branch."
+    ],
+    "date": "2026-10-28"
   }
 }
