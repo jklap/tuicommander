@@ -1,3 +1,8 @@
+## Nested MCP parent denial (2433-2f3f)
+
+- [ ] Coordinator critic: run `src/__tests__/components/SettingsPanel/LocalMcpPanel.test.tsx` and existing native-catalog consumers. The pre-fix regression reproduced a checked child under a denied parent. No implementation-lane GREEN run is claimed; TypeScript passes.
+- [ ] Visual check: confirm blocked member switches show off and disabled, with a readable enable-parent hint. The isolated real-component browser fixture did not produce a screenshot or DOM before the 45-second bound. Its Chrome process and Vite server were stopped. Log: `~/Gits/.tmp/tuic-2433-visual.log`. No visual pass is claimed.
+
 ## Development backend command mismatch (2409-aa48)
 
 - [ ] Visual check of the AI Chat mismatch message and absent Retry. An isolated browser fixture mounted the real component, but Chrome did not produce a screenshot before the 45-second bound; its own process and Vite server were stopped. Log: `~/Gits/.tmp/results/tuic-2409-visual.log`. No visual pass is claimed.

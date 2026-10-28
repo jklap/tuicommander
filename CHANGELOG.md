@@ -27,6 +27,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Show nested MCP capability switches as off and non-editable while their parent denies access, preserving saved child preferences until the parent is enabled (#2433-2f3f).
+
 - Explain missing local development IPC commands as a backend/frontend version mismatch with manual restart guidance; hide AI Chat Retry when retrying cannot update the running backend (#2409-aa48).
 
 - Share idle sleep-prevention process checks on a five-second cadence outside the native assertion lock, while retaining holds for new backend work and unknown or stale process state (#2419-4d16).
