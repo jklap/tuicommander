@@ -1,3 +1,7 @@
+## Terminal Compose growth (2447-9d28)
+
+- [ ] Confirm the compact editor feels right in CLI overlay and docked Chat: empty one line, wrapping and Ctrl+Enter grow to the former 96px height, longer drafts scroll inside, and clearing or successful sending shrinks it. Automated worktree-browser geometry evidence is recorded in the story worklog.
+
 ## Headless file credentials (2343-5358) — daemon rebuild/restart required
 
 - [ ] Coordinator critic: verify the final Linux unsupervised update/relaunch uses the startup executable path and authenticates the rotated file token. The captured pre-fix running executable had the Linux ` (deleted)` suffix and restart failed with OS error 2. Rebuild the daemon to load the fix; no daily app restart was performed.
