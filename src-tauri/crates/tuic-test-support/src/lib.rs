@@ -46,19 +46,60 @@ const TEST_GITCONFIG: &str = "\
 \tautocrlf = false
 ";
 
-static OWNED_GIT_CONFIG: std::sync::OnceLock<(u32, std::path::PathBuf)> =
-    std::sync::OnceLock::new();
+#[derive(Debug)]
+struct OwnedGitConfig {
+    owner: u32,
+    path: std::path::PathBuf,
+    #[cfg(windows)]
+    wide_path: Vec<u16>,
+}
 
-// Normal exit (including process::exit) runs this finalizer. Abort, SIGKILL and
-// other termination that skips finalizers can still leave the owned file behind.
+static OWNED_GIT_CONFIG: std::sync::OnceLock<OwnedGitConfig> = std::sync::OnceLock::new();
+
+// CRT normal exit runs this finalizer. Windows ExitProcess is covered by the
+// callback below. Abort/SIGKILL can still leave the owned file behind.
 #[ctor::dtor]
 fn remove_test_git_config() {
-    if let Some((owner, path)) = OWNED_GIT_CONFIG.get()
-        && *owner == std::process::id()
+    if let Some(config) = OWNED_GIT_CONFIG.get()
+        && config.owner == std::process::id()
     {
         // Tests may replace GIT_CONFIG_GLOBAL or change cwd. Never derive the
         // cleanup target from their environment, or remove a fork parent's file.
-        let _ = std::fs::remove_file(path);
+        let _ = std::fs::remove_file(&config.path);
+    }
+}
+
+// Windows std::process::exit calls ExitProcess, not the CRT exit path used by
+// ctor::dtor. A process-detach TLS callback covers that path without trusting a
+// test-modified environment or a surviving worker thread.
+#[cfg(windows)]
+#[used]
+#[unsafe(link_section = ".CRT$XLB")]
+static GIT_CONFIG_PROCESS_DETACH: unsafe extern "system" fn(
+    *mut std::ffi::c_void,
+    u32,
+    *mut std::ffi::c_void,
+) = git_config_process_detach;
+
+#[cfg(windows)]
+unsafe extern "system" fn git_config_process_detach(
+    _module: *mut std::ffi::c_void,
+    reason: u32,
+    _reserved: *mut std::ffi::c_void,
+) {
+    const DLL_PROCESS_DETACH: u32 = 0;
+    if reason == DLL_PROCESS_DETACH
+        && let Some(config) = OWNED_GIT_CONFIG.get()
+        && config.owner == std::process::id()
+    {
+        #[link(name = "kernel32")]
+        unsafe extern "system" {
+            #[link_name = "DeleteFileW"]
+            fn delete_file_w(path: *const u16) -> i32;
+        }
+        // SAFETY: the constructor retained this NUL-terminated absolute path.
+        // Do not allocate or acquire Rust locks under the loader's detach lock.
+        unsafe { delete_file_w(config.wide_path.as_ptr()) };
     }
 }
 
@@ -77,8 +118,18 @@ fn isolate_git_config(root: &std::path::Path) {
     let path = std::path::absolute(root.join(format!("gitconfig.{owner}")))
         .expect("resolve the test gitconfig path");
     std::fs::write(&path, TEST_GITCONFIG).expect("write the test gitconfig");
+    #[cfg(windows)]
+    let wide_path = {
+        use std::os::windows::ffi::OsStrExt;
+        path.as_os_str().encode_wide().chain(Some(0)).collect()
+    };
     OWNED_GIT_CONFIG
-        .set((owner, path.clone()))
+        .set(OwnedGitConfig {
+            owner,
+            path: path.clone(),
+            #[cfg(windows)]
+            wide_path,
+        })
         .expect("record the process-owned test gitconfig");
     // SAFETY: called from the process constructor, before libtest starts threads.
     unsafe {
@@ -159,6 +210,15 @@ pub fn host_shell() -> (&'static str, &'static str) {
         ("cmd", "/C")
     } else {
         ("sh", "-c")
+    }
+}
+
+/// Evaluate a value whose output marker is absent from the submitted command.
+pub fn relay_answer_command() -> &'static str {
+    if cfg!(windows) {
+        "set /a tuic_relay_answer=6*7\r\necho %tuic_relay_answer%relay\r\n"
+    } else {
+        "echo $((6*7))relay\n"
     }
 }
 

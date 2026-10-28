@@ -5281,7 +5281,13 @@ mod tests {
             }
             let inventory = GixGitReads::new().worktree_inventory(&base, None).unwrap();
             let listed = inventory.worktree_paths.iter().find(|(_, row)| {
-                Path::new(&row.path) == checkout.canonicalize().unwrap_or(checkout.clone())
+                row.path
+                    == tuic_core::path_spelling::portable_spelling(
+                        &checkout
+                            .canonicalize()
+                            .unwrap_or(checkout.clone())
+                            .to_string_lossy(),
+                    )
             });
             if matches!(state, "detached" | "missing") {
                 assert!(

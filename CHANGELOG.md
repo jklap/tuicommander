@@ -15,6 +15,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Preserve quoted Windows profile paths when resuming agents, retain per-repository worktree-storage overrides across native path spellings, and report cross-project workflow requests as client errors (#2310-6e76).
+
 - Start terminal Compose at one line, grow with the draft up to its existing 96px editor height, and scroll longer drafts inside (#2447-9d28).
 
 - Keep known remote daemon versions visible after connection failures and explain updating and restarting an outdated daemon as a possible remedy for HTTP 403 Untrusted Host (#2445-fc5d).

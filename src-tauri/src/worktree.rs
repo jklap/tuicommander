@@ -565,6 +565,12 @@ pub(crate) fn resolve_worktree_dir_for_repo(repo_path: &Path, app_worktrees_dir:
     let strategy = repo_settings
         .repos
         .get(repo_path_str.as_ref())
+        .or_else(|| {
+            let key = tuic_core::path_spelling::portable_spelling(&repo_path_str);
+            repo_settings.repos.iter().find_map(|(path, entry)| {
+                (tuic_core::path_spelling::portable_spelling(path) == key).then_some(entry)
+            })
+        })
         .and_then(|entry| entry.worktree_storage.clone())
         .unwrap_or_else(|| crate::config::load_repo_defaults().worktree_storage);
     resolve_worktree_dir(repo_path, &strategy, app_worktrees_dir)

@@ -255,6 +255,10 @@ mod tests {
     use tuic_git::test_fixtures::setup_test_repo_with_commit;
 
     fn run_git(repo: &Path, args: &[&str]) {
+        let args: Vec<_> = args
+            .iter()
+            .map(|arg| tuic_core::path_spelling::portable_spelling(arg))
+            .collect();
         tuic_git::git_cli::git_cmd(repo).args(args).run().unwrap();
     }
 

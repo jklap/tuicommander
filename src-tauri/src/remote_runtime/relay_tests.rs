@@ -274,7 +274,7 @@ async fn desktop_attaches_through_the_relay_and_runs_a_command() {
     let created: serde_json::Value = client
         .post(format!("{base}/sessions"))
         .header("cookie", format!("tui-session={token}"))
-        .json(&serde_json::json!({}))
+        .json(&serde_json::json!({"shell": crate::test_support::host_shell().0}))
         .send()
         .await
         .unwrap()
@@ -290,14 +290,13 @@ async fn desktop_attaches_through_the_relay_and_runs_a_command() {
     client
         .post(format!("{base}/sessions/{session}/write"))
         .header("cookie", format!("tui-session={token}"))
-        .json(&serde_json::json!({ "data": "echo $((6*7))relay\n" }))
+        .json(&serde_json::json!({ "data": tuic_test_support::relay_answer_command() }))
         .send()
         .await
         .unwrap()
         .error_for_status()
         .unwrap();
-    // The typed-in line contains `$((6*7))`, never `42relay`: only the shell's
-    // answer does.
+    // Only the shell evaluation emits the marker; the submitted command does not.
     let seen = async {
         loop {
             let output = client

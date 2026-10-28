@@ -1,3 +1,8 @@
+## Windows CI repairs (2310-6e76, round g) — Rust rebuild/restart required
+
+- [ ] Coordinator: run the exact owner filter in `reports/2310-windows-ci-round-g.md` on native Windows. It covers all 24 failing owners, unchanged assertions/deadlines, profile decoding, workflow HTTP errors and gitconfig process-exit cleanup. rb RED and Linux Clippy are not native Windows GREEN.
+- [ ] After an authorized `make dev` restart or `make build`, verify that a Windows agent resumes from a profile path with spaces/backslashes and that its repository worktree-storage override still applies. Rust does not hot-reload; the daily app was not restarted.
+
 ## Terminal Compose growth (2447-9d28)
 
 - [ ] Confirm the compact editor feels right in CLI overlay and docked Chat: empty one line, wrapping and Ctrl+Enter grow to the former 96px height, longer drafts scroll inside, and clearing or successful sending shrinks it. Automated worktree-browser geometry evidence is recorded in the story worklog.
