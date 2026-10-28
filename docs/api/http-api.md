@@ -3632,7 +3632,11 @@ The shared desktop/mobile presenter owns quota wording and converts reset and
 report instants to the viewing client’s local short date and time.
 Availability is `available` or `unavailable`; unknown identity/timestamp fields
 are null, not inferred from defaults. Scope is `account_quota` or `session_usage`.
-Claude/Codex quota windows describe shared account windows, not session spend. ego v3
+Claude/Codex quota windows describe shared account windows, not session spend.
+Claude mobile refreshes retain the local credential plan in the profile-scoped cache
+shared with desktop. A missing credential plan stays absent; stale fallback data
+keeps its original plan and is marked stale.
+ego v3
 lines retain token categories, currencies, unknown costs and separate subscription
 API-equivalent estimates. `observed_at_ms` for ego is report creation, not latest
 settlement. Remote sessions are forwarded to their owning daemon or are unavailable.

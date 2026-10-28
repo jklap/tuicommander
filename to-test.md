@@ -1,3 +1,25 @@
+## Sleep-prevention inventory cadence (2419-4d16) — Rust restart required
+
+- [ ] After Boss manually restarts a rebuilt `make dev` or installs `make build`, enable Prevent sleep when busy with disposable idle agent tabs. Confirm native assertions still cover active turns, background jobs and keep-open agents while hidden. Confirm idle process inventory checks no longer run once per second and legacy refreshes do not add scans. Rust does not hot-reload; this peer did not restart the daily app. GREEN and the independent concurrency critic belong to integration.
+## Complete labelled issue intake (2415-dccf) — Rust restart required
+
+- [ ] Coordinator: run the focused intake regressions, overlapping client delivery tests, and existing capacity-retry/event-deduplication tests on the final commit. The implementer ran only pre-fix RED; no post-fix GREEN run is claimed.
+- [ ] After an authorized `make dev` restart or `make build` (or rebuilding and restarting `tuic-remote`), confirm an allowlisted labelled open issue outside the latest 30 unfiltered issues can start a run. Rust does not hot-reload; the daily app was not restarted.
+## Empty branch reflog recovery (2437-b45b) — Rust restart required
+
+- [x] The pre-fix `empty_branch_reflog_does_not_abort_repository_merge_listing` regression fails on Linux rb with `branch creation is absent from reflog`. Log: `~/Gits/.tmp/results/tuic-2437-red.log`.
+- [ ] Coordinator critic: run the empty/missing reflog regressions and existing populated-history classification tests on the final commit. No implementation-lane GREEN run was performed.
+- [ ] After an authorized `make dev` restart or `make build`, confirm the affected repository structure loads without repeated empty-reflog warnings. Rust does not hot-reload; the daily app was not restarted.
+
+## Claude mobile quota plan cache (2420-f7a6) — Rust restart required
+
+- [ ] Coordinator: run `session_quota_refresh_preserves_plan_in_shared_cache`, `api_cache_isolated_by_profile`, and `rate_limit_backoff_isolated_by_profile` against the final commit. The targeted RED on rb reproduced a missing plan before the fix; no implementation-lane GREEN was run.
+- [ ] After an authorized `make dev` restart or `make build`, refresh Claude quota from mobile and confirm desktop retains the same subscription plan. The daily app was not restarted; Rust changes do not hot-reload.
+## Ideas repository identity (2414-9805) — Rust rebuild/restart required
+
+- [ ] Coordinator: run `config::ideas::tests` on the final commit, plus the existing Ideas store/panel consumers. RED reproduced the canonical-versus-registered split on Linux rb; no post-fix GREEN run was made by the implementer. Run the same regression on Windows to verify native extended/portable path handling.
+- [ ] After an authorized `make dev` restart or `make build`, create/list/update Ideas through an agent bound to a registered symlink repository and check the same collection in the panel. The daily app was not restarted; Rust does not hot-reload.
+
 ## Workflow resume after manual QA (2416-52e8) — Rust restart required
 
 - [ ] Coordinator critic: run the focused workflow runtime regressions for approved QA, pending QA, blocked/cancelled stories, Ready/Review starts and restart recovery. The implementation lane ran only the pre-fix RED test on rb; no GREEN result is claimed.

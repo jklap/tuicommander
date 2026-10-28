@@ -404,8 +404,16 @@ of WebView visibility or JavaScript execution. It uses live PTY ownership,
 backend turn/background state, the existing process-tree helper exclusions,
 detached `tuic bg` runner identity and managed `keep_open` holds. ACP active or
 queued turns and live ACP `keep_open` peers also count. Unknown process inventory
-fails closed for a live agent. The assertion is retried after native acquisition
-failure. Display sleep remains allowed; the setting can release the assertion.
+fails closed for a live agent. Idle agents share one process inventory attempt
+per five seconds, including failed attempts and legacy refresh calls. Acquisition
+runs outside the native assertion lock. Backend work is still checked every second
+and again before each native transition. A cached negative applies only to the
+same PTY, managed identity, agent type, foreground root and turn; a new lifecycle,
+in-flight query or observation at least five seconds old retains the hold until
+a fresh inventory resolves it. A slow inventory query can therefore extend a
+hold, not release it from stale evidence. Quiet descendants without a backend
+work signal can take up to five seconds plus OS query time to be observed.
+The assertion is retried after native acquisition failure. Display sleep remains allowed; the setting can release the assertion.
 The remote daemon does not start the desktop host's sleep-prevention owner.
 
 The 2026-10-27 incident was a frontend busy-only policy gap, present since
@@ -954,7 +962,7 @@ struct PromptEntry {
 
 **Type:** `serde_json::Value` with backend-owned keyed mutations. The legacy `notes` array and extra document fields remain compatible.
 
-**Commands:** `load_notes()`, `save_notes(base, config)`. Planner `add_idea`, `list_ideas`, and `update_idea` use the same `ConfigFile` strict locked writer. UI saves remove only ids present in their baseline and merge only changed fields of existing records; concurrent additions survive and deleted records are not resurrected. Other top-level fields retain merge-patch semantics. Invalid JSON fails rather than becoming an empty snapshot. Planner additions retain a `source` string and the envelope project's `repoPath`. Successful mutation routes dual-emit `ideas-changed`; frontend reloads wait for queued local writes and never save a reload.
+**Commands:** `load_notes()`, `save_notes(base, config)`. Planner `add_idea`, `list_ideas`, and `update_idea` use the same `ConfigFile` strict locked writer. UI saves remove only ids present in their baseline and merge only changed fields of existing records; concurrent additions survive and deleted records are not resurrected. Other top-level fields retain merge-patch semantics. Invalid JSON fails rather than becoming an empty snapshot. Planner additions retain a `source` string and use the owning repository's registered UI key as `repoPath`. Ideas reads and project mutations resolve filesystem-equivalent canonical paths, Windows extended/portable spellings and symlink aliases to that key. `load_notes` normalizes existing row paths in its response without rewriting the file. Paths with no matching registration remain unchanged; global Ideas stay global. Progress and story database project keys do not change. Successful mutation routes dual-emit `ideas-changed`; frontend reloads wait for queued local writes and never save a reload.
 
 ### Keybindings (`keybindings.json`)
 

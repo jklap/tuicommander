@@ -315,6 +315,10 @@ that differs from its branch ref bypasses the proof cache; destructive lifecycle
 preflights always bypass it.
 MCP `branch_integrations` and `branch_integration`, the branch panel's merged
 set, and workspace lifecycle share `classify_branch_merge` in `tuic-git`.
+An empty or absent branch reflog is normal after expiry or when reflogs are disabled.
+The classifier returns `unknown` without an error or merge proof for that branch;
+repository structure and sibling branch classifications still load on repeated
+refreshes. This verdict does not authorize branch deletion.
 The integration query does not treat `in_sync` as merged and supplies no proof
 for it. Explicitly finished empty checkouts can still be recycled; that marker
 is allocation consent, not merge evidence. Orphan discovery excludes detached
