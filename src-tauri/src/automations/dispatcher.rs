@@ -42,6 +42,20 @@ pub(crate) trait DispatchEffects: Send + Sync {
         &self,
         request: LaunchRequest,
     ) -> impl Future<Output = Result<LaunchBinding, String>> + Send;
+    fn start_event_workflow(
+        &self,
+        _run: &AutomationRun,
+        _workspace: &str,
+        _prompt: &str,
+    ) -> impl Future<Output = Result<super::run::EventWorkflowBinding, String>> + Send {
+        async { Err("Native event workflows unavailable".into()) }
+    }
+    fn stop_event_workflow(
+        &self,
+        _binding: &super::run::EventWorkflowBinding,
+    ) -> Result<(), String> {
+        Err("Native event workflow cancellation unavailable".into())
+    }
     fn stop(&self, binding: &LaunchBinding) -> Result<(), String>;
     fn publish(&self, _run: &AutomationRun) {}
 }
@@ -195,6 +209,30 @@ impl<E: DispatchEffects> Dispatcher<E> {
         self.require_current(run)?;
         if !Path::new(&path).is_dir() {
             return Err("Automation workspace disappeared before launch".into());
+        }
+        if run.event_workflow.is_some() {
+            let binding = self
+                .effects
+                .start_event_workflow(run, &path, &prompt)
+                .await?;
+            let saved = self.runs.transition(
+                &run.id,
+                RunStatus::Running,
+                RunDetails {
+                    workflow_binding: Some(binding.clone()),
+                    ..Default::default()
+                },
+                now_ms(),
+            );
+            if !matches!(&saved, Ok(saved) if saved.status == RunStatus::Running && saved.workflow_binding.as_ref() == Some(&binding))
+            {
+                self.effects.stop_event_workflow(&binding)?;
+                return Err(
+                    "Automation stopped before workflow binding; owned workflow cancelled".into(),
+                );
+            }
+            self.effects.publish(&saved?);
+            return Ok(());
         }
         let binding = self
             .effects

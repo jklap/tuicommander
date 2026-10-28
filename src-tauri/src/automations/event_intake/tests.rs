@@ -356,13 +356,21 @@ fn triage_must_accept_before_labelled_implementation_starts() {
         TriageOutcome::NeedsInput,
     ] {
         let (_dir, owner) = owner();
-        let config = triage_config();
+        let mut config = triage_config();
+        config.event_intake.workflow = Some(crate::automations::model::EventWorkflow {
+            definition_id: "reviewed-implementation".into(),
+            definition_revision: 3,
+        });
         let mut issue = triage_issue("COLLABORATOR");
         issue.labels = self::issue(1, SANDBOX, &["tuic-run"], "OPEN").labels;
         let run = admit_issues(owner.store(), &config, &[issue.clone()], 10)
             .unwrap()
             .remove(0);
         assert_eq!(run.definition.id, "triage");
+        assert_eq!(
+            run.event_workflow, None,
+            "triage must not launch an implementation workflow"
+        );
         owner
             .store()
             .transition(
@@ -395,8 +403,114 @@ fn triage_must_accept_before_labelled_implementation_starts() {
         );
         if let Some(run) = later.first() {
             assert_eq!(run.definition.id, "pilot");
+            assert_eq!(
+                run.event_workflow.as_ref().map(|workflow| (
+                    workflow.definition_id.as_str(),
+                    workflow.definition_revision
+                )),
+                Some(("reviewed-implementation", 3)),
+                "accepted implementation must retain its pinned review workflow"
+            );
         }
     }
+}
+
+// Catches: filtered/duplicate decisions vanish, flood history on each snapshot,
+// or consume the key needed when a missing label is later added.
+#[test]
+fn event_refusals_are_durable_coalesced_and_do_not_consume_admission() {
+    use crate::automations::run::RunStatus;
+    let dir = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+    let path = dir.path().join("runs.sqlite3");
+    let owner = RunOwner::acquire_at(&path, 0).unwrap();
+    let config = config(&[SANDBOX]);
+    let filtered = [issue(3, SANDBOX, &["bug"], "OPEN")];
+    for now in [10, 20] {
+        assert_eq!(
+            admit_issues(owner.store(), &config, &filtered, now).unwrap(),
+            Vec::new()
+        );
+    }
+    let history = owner.store().history(None, 100, 0).unwrap();
+    assert_eq!(history.len(), 1);
+    assert_eq!(history[0].status, RunStatus::SkippedFiltered);
+    assert_eq!(history[0].updated_ms, 20);
+    assert_eq!(
+        history[0]
+            .outcome
+            .as_ref()
+            .unwrap()
+            .failure_reason
+            .as_deref(),
+        Some("Issue does not carry the event intake label")
+    );
+    let eligible = [issue(3, SANDBOX, &["tuic-run"], "OPEN")];
+    let admitted = admit_issues(owner.store(), &config, &eligible, 30).unwrap();
+    assert_eq!(admitted.len(), 1);
+    for now in [40, 50] {
+        assert_eq!(
+            admit_issues(owner.store(), &config, &eligible, now).unwrap(),
+            Vec::new()
+        );
+    }
+    drop(owner);
+    let owner = RunOwner::acquire_at(&path, 60).unwrap();
+    let history = owner.store().history(None, 100, 0).unwrap();
+    assert_eq!(history.len(), 3);
+    let duplicate = history
+        .iter()
+        .find(|run| run.status == RunStatus::SkippedDuplicate)
+        .unwrap();
+    assert_eq!(
+        duplicate
+            .outcome
+            .as_ref()
+            .unwrap()
+            .failure_reason
+            .as_deref(),
+        Some("Event already admitted")
+    );
+    assert_eq!(duplicate.updated_ms, 50);
+}
+
+// Catches: a later settings edit silently downgrading an admitted workflow event.
+#[test]
+fn event_workflow_selection_is_pinned_in_the_admission_record() {
+    let (_dir, owner) = owner();
+    let mut config = config(&[SANDBOX]);
+    config.event_intake.workflow = Some(crate::automations::model::EventWorkflow {
+        definition_id: "published-story".into(),
+        definition_revision: 3,
+    });
+    let runs = admit_issues(
+        owner.store(),
+        &config,
+        &[issue(3, SANDBOX, &["tuic-run"], "OPEN")],
+        10,
+    )
+    .unwrap();
+    config.event_intake.workflow = None;
+    assert_eq!(
+        owner
+            .store()
+            .get(&runs[0].id)
+            .unwrap()
+            .event_workflow
+            .as_ref()
+            .unwrap()
+            .definition_revision,
+        3
+    );
+    assert_eq!(
+        admit_issues(
+            owner.store(),
+            &config,
+            &[issue(3, SANDBOX, &["tuic-run"], "OPEN")],
+            20
+        )
+        .unwrap(),
+        Vec::new()
+    );
 }
 
 // Catches: filtered/duplicate decisions vanish, flood history on each snapshot,

@@ -20,6 +20,7 @@ fn request() -> DraftPr<'static> {
         head: HEAD,
         base: "trunk",
         issue_number: 3,
+        review: None,
     }
 }
 fn intake() -> EventIntake {

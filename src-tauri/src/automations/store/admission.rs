@@ -27,6 +27,7 @@ impl RunStore {
         &self,
         definition: &AutomationDefinition,
         trigger: RunTrigger,
+        workflow: Option<super::super::model::EventWorkflow>,
         max_concurrent_runs: u32,
         now_ms: i64,
     ) -> Result<Option<AutomationRun>, String> {
@@ -74,8 +75,10 @@ impl RunStore {
             tx.commit().map_err(error)?;
             return Ok(None);
         }
-        let run = reserve_in(&tx, definition, trigger, RunStatus::Reserved, now_ms)?
+        let mut run = reserve_in(&tx, definition, trigger, RunStatus::Reserved, now_ms)?
             .ok_or("Event reservation was not recorded")?;
+        run.event_workflow = workflow;
+        write(&tx, &run)?;
         tx.execute(
             "INSERT INTO automation_event_keys(automation_id,event_key,run_id) VALUES(?1,?2,?3)",
             params![namespace, key, run.id],

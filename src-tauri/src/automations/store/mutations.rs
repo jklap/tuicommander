@@ -58,6 +58,9 @@ impl RunStore {
             run.finished_ms = Some(now_ms);
             super::triage::missing_triage_decision(&mut run);
         }
+        if let Some(value) = details.workflow_binding {
+            run.workflow_binding = Some(value);
+        }
         if let Some(value) = details.task_id {
             run.task_id = Some(value);
         }

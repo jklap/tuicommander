@@ -82,6 +82,7 @@ pub(crate) fn admit_issues(
                     && let Some(run) = store.admit_event(
                         definition,
                         trigger,
+                        None,
                         config.max_concurrent_runs,
                         now_ms,
                     )?
@@ -119,9 +120,13 @@ pub(crate) fn admit_issues(
             )?;
             continue;
         }
-        if let Some(run) =
-            store.admit_event(definition, trigger, config.max_concurrent_runs, now_ms)?
-        {
+        if let Some(run) = store.admit_event(
+            definition,
+            trigger,
+            intake.workflow.clone(),
+            config.max_concurrent_runs,
+            now_ms,
+        )? {
             admitted.push(run);
         }
     }

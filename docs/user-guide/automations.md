@@ -282,3 +282,67 @@ have no trusted event identity and are ignored. An empty intake allowlist stays
 disabled and performs no evaluations. History retention also applies to these
 rows; summaries count rows, not poll observations. The saved run API exposes
 outcomes; this change does not add outcome controls to the Automations dialog.
+
+### Opt-in reviewed issue workflows
+
+To require independent review and checks before draft publication, set an explicit
+published story workflow on the owning daemon:
+
+```json
+"event_intake": {
+  "repositories": ["owner/name"],
+  "label": "tuic-run",
+  "definition_id": "issue-automation",
+  "workflow": { "definition_id": "published-story-workflow", "definition_revision": 1 }
+}
+```
+
+The workflow must belong to the automation's registered project and have configured
+deterministic checks. Use `new_per_run`: the existing automation workspace and
+precheck are retained, then that isolated workspace is bound to the native workflow
+before any worker starts. TUIC creates one native plan and GitHub-origin story for
+the event, with the prepared automation prompt as its problem statement (maximum
+20,000 characters). The workflow's profiles select its implementer and independent
+reviewer; the legacy automation `run_config` is not launched on this path.
+
+The admitted run pins the workflow selection and records its native run/story IDs.
+Removing or changing the setting cannot downgrade that run. The daemon follows
+native workflow completion, not an implementer's `done` report. Workflow pauses
+show as `needs_you`; the automation deadline cancels the bound workflow and stops
+its owned sessions. Existing configurations without `workflow` keep their previous
+execution and publication behavior. There is no automatic workflow default.
+
+Before creating the draft, TUIC reuses the native independent review and configured
+check gate against the current clean artifact, then reads the branch from GitHub
+and requires its pushed SHA to match that artifact. Missing or stale evidence
+refuses publication and records the reason in automation history. The draft body
+includes the independent review summary and findings. The implementer must still
+push its branch; this path does not merge or approve a GitHub PR. As with any
+branch-addressed GitHub PR creation, the remote SHA read and PR creation are separate
+API operations; do not let another writer move the branch during publication.
+
+#### Durable event outcomes
+
+The `run` and `list_runs` actions return `outcome` independently of execution
+status: `decision`, `pr_url`, `comment_url`, `failure_reason` and
+`publication_intent` (repository, head, base and issue number). Existing records
+without an outcome remain readable. A completed agent is not proof of a
+published PR. No comment publisher is added; `comment_url` remains null.
+
+Before publication, TUIC saves the exact intent and claims it once. It looks up
+all PR states for the same repository/head/base before creation and after a lost
+response. On restart it reconciles saved pending/unknown intents by lookup only,
+even if the worktree was removed. An unavailable, incomplete or empty lookup
+leaves `publication_unknown` with a reason; TUIC never automatically repeats an
+uncertain POST. Inspect the repository and saved intent before operator action.
+Historical runs from older builds are not automatically republished.
+
+Filtered issues with a valid GitHub issue identity, duplicate admissions,
+disabled definitions and capacity refusals retain skipped history rows and
+reasons. Repeated observations of the same event/reason update one row's
+`updated_ms`, not one row per poll. These rows do not consume the admission key;
+a later eligible issue or free slot can still be admitted. Invalid issue URLs
+have no trusted event identity and are ignored. An empty intake allowlist stays
+disabled and performs no evaluations. History retention also applies to these
+rows; summaries count rows, not poll observations. The saved run API exposes
+outcomes; this change does not add outcome controls to the Automations dialog.

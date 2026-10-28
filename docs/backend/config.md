@@ -1922,3 +1922,15 @@ Existing delivery rows with channel `github` and transitions `triage-comment` an
 unknown send requires operator reconciliation and is never automatically replayed.
 This extends version-1 snapshot JSON; downgrading to a build without triage support
 after saving triage configuration or runs is unsupported.
+
+### Event workflow selection
+
+`automations.json` can opt in with `event_intake.workflow` containing
+`definition_id` and positive `definition_revision`. Omission or null preserves
+legacy event behavior. Event admission pins this selection in `AutomationRun.event_workflow`;
+`workflow_binding` records the native `run_id` and `story_id`. Both fields default
+to null for earlier snapshots. The native workflow uses the prepared isolated
+workspace and its own role profiles. Publication reloads its authoritative
+review/check receipts and verifies GitHub's pushed branch SHA. Publication success
+or refusal updates the completed event's durable `outcome`, not its execution status.
+See [reviewed issue workflows](../user-guide/automations.md#opt-in-reviewed-issue-workflows).

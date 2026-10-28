@@ -63,6 +63,7 @@ fn decided(owner: &RunOwner, outcome: TriageOutcome) -> AutomationRun {
                 issue_number: 7,
                 policy_version: "1".into(),
             },
+            None,
             2,
             10,
         )
@@ -279,6 +280,7 @@ fn triage_decisions_survive_retention_and_abandoned_runs_need_input() {
                 issue_number: 8,
                 policy_version: "1".into(),
             },
+            None,
             2,
             40,
         )
@@ -319,7 +321,7 @@ fn triage_identity_is_independent_of_the_definition_id() {
     assert_eq!(
         owner
             .store()
-            .admit_event(&definition, run.trigger, 2, 40)
+            .admit_event(&definition, run.trigger, None, 2, 40)
             .unwrap(),
         None
     );

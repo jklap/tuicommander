@@ -3526,3 +3526,12 @@ accepted/rejected/needs-input decisions. The host adds the intake label or a
 rejection reason comment and label. The read-only profile is operator-attested;
 TUIC does not enforce absence of git/gh credentials. Uncertain writes are not
 replayed automatically. See [Automations](user-guide/automations.md#optional-triage-before-labelled-intake).
+
+#### Reviewed event issue publication
+
+Event intake can opt in through `event_intake.workflow` to an explicit published
+native story workflow revision. Dispatch creates the native story and reuses its
+isolated artifact, independent review and configured check receipts. Draft
+publication requires current evidence matching the pushed SHA and includes review
+findings. Configurations without a workflow retain legacy behavior. See the
+[guide](user-guide/automations.md#opt-in-reviewed-issue-workflows).

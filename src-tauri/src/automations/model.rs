@@ -27,6 +27,8 @@ pub struct EventIntake {
     /// DEFERRED (2026-10-28) — enforced ego isolation belongs to 2450-6845;
     /// this attestation does not strip host git/gh credentials.
     pub triage: Vec<IssueTriage>,
+    /// Opt in to a pinned published native story workflow.
+    pub workflow: Option<EventWorkflow>,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
@@ -37,6 +39,13 @@ pub struct IssueTriage {
     pub policy_version: String,
     pub read_only_attested: bool,
     pub rejection_label: String,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct EventWorkflow {
+    pub definition_id: String,
+    pub definition_revision: i64,
 }
 
 impl EventIntake {
@@ -63,6 +72,13 @@ impl EventIntake {
     fn validate(&self) -> Result<(), String> {
         if !self.enabled() {
             return Ok(());
+        }
+        if let Some(workflow) = &self.workflow
+            && (workflow.definition_id.trim().is_empty() || workflow.definition_revision < 1)
+        {
+            return Err(
+                "Event workflow needs a published definition id and positive revision".into(),
+            );
         }
         for repository in &self.repositories {
             let valid = repository.split_once('/').is_some_and(|(owner, name)| {

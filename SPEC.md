@@ -1495,3 +1495,12 @@ host adds the intake label for acceptance, or posts a rejection reason and adds 
 label, using durable at-most-once delivery claims. Unknown publication requires
 operator reconciliation, not replay. Triage ledger records outlive normal history
 retention. See [Automations](docs/user-guide/automations.md#optional-triage-before-labelled-intake).
+
+#### Reviewed event issue publication
+
+Event intake can opt in through `event_intake.workflow` to an explicit published
+native story workflow revision. Dispatch creates the native story and reuses its
+isolated artifact, independent review and configured check receipts. Draft
+publication requires current evidence matching the pushed SHA and includes review
+findings. Configurations without a workflow retain legacy behavior. See the
+[guide](docs/user-guide/automations.md#opt-in-reviewed-issue-workflows).

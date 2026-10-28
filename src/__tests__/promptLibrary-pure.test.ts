@@ -142,7 +142,13 @@ describe("promptLibrary pure functions", () => {
 				expect(delivered).toContain("before draft-PR publication (2325-10c4)");
 				expect(delivered).toContain("incoming PR/head-SHA event triggers (2327-1ca0)");
 				expect(delivered).toContain("never enable or launch a policy requiring the gate until it is verified");
-				expect(guide.builtInVersion).toBe(5);
+				expect(delivered).toContain(
+					"event_intake.workflow with an explicit published story definition_id and definition_revision",
+				);
+				expect(delivered).toContain(
+					"Existing configurations without workflow retain legacy completion-only publication",
+				);
+				expect(guide.builtInVersion).toBe(6);
 			});
 		});
 
