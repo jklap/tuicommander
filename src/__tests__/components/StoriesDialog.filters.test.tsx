@@ -232,6 +232,7 @@ it("catches All plans staying selected-plan-only or losing plan ownership after 
 		}),
 	);
 	await waitFor(() => expect(ui.getByRole("button", { name: "All plans" })).toHaveAttribute("aria-current", "true"));
+	await waitFor(() => expect(ui.getByLabelText("Archived plans")).toBeEnabled());
 	fireEvent.change(ui.getByLabelText("Status"), { target: { value: "open" } });
 	fireEvent.change(ui.getByLabelText("Story type"), { target: { value: "feature" } });
 	fireEvent.click(ui.getByLabelText("Archived plans"));
