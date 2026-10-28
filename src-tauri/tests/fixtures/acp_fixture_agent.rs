@@ -127,8 +127,8 @@ impl Agent {
         match step.get("step").and_then(Value::as_str) {
             Some("expect_env") => {
                 let name = required_str(step, "name", line);
-                let expected = required_str(step, "value", line);
-                assert_eq!(std::env::var(name).ok().as_deref(), Some(expected), "scenario line {line}: {name}");
+                let expected = step.get("value").and_then(Value::as_str);
+                assert_eq!(std::env::var(name).ok().as_deref(), expected, "scenario line {line}: {name}");
             }
             Some("expect") => self.expect(step, line),
             Some("expect_response") => self.expect_response(step, line),

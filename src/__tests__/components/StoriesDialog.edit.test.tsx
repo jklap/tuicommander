@@ -68,6 +68,41 @@ afterEach(() => {
 	storiesUi.setView("list");
 });
 
+it.each(["a", "é", "😀"])("story_edit_rejects_title_beyond_backend_limit (%s)", (character) => {
+	const save = vi.fn();
+	const ui = render(() => (
+		<StoryEditForm story={baseline} candidates={[]} busy={false} error="" onSave={save} onCancel={() => {}} />
+	));
+	const title = ui.getByLabelText("Title", { exact: true }) as HTMLInputElement;
+	const form = ui.getByRole("form", { name: "Edit story" });
+	const button = ui.getByRole("button", { name: "Save" }) as HTMLButtonElement;
+	fireEvent.input(title, { target: { value: character.repeat(201) } });
+	expect.soft(title.value).toBe(character.repeat(201));
+	expect.soft(button.disabled).toBe(true);
+	fireEvent.submit(form);
+	expect.soft(save).not.toHaveBeenCalled();
+	fireEvent.input(title, { target: { value: character.repeat(200) } });
+	expect.soft(button.disabled).toBe(false);
+	// Native UTF-16 maxlength must not stop a valid 200-scalar astral title.
+	expect.soft(title.maxLength === -1 || title.maxLength >= character.repeat(200).length).toBe(true);
+	fireEvent.click(button);
+	expect.soft(save).toHaveBeenLastCalledWith({ title: character.repeat(200) });
+});
+
+it("catches whitespace-only titles reaching save while preserving trimmed valid titles", () => {
+	const save = vi.fn();
+	const ui = render(() => (
+		<StoryEditForm story={baseline} candidates={[]} busy={false} error="" onSave={save} onCancel={() => {}} />
+	));
+	const title = ui.getByLabelText("Title", { exact: true });
+	fireEvent.input(title, { target: { value: "   " } });
+	fireEvent.submit(ui.getByRole("form", { name: "Edit story" }));
+	expect(save).not.toHaveBeenCalled();
+	fireEvent.input(title, { target: { value: ` ${"a".repeat(200)} ` } });
+	fireEvent.click(ui.getByRole("button", { name: "Save" }));
+	expect(save).toHaveBeenCalledExactlyOnceWith({ title: "a".repeat(200) });
+});
+
 it("catches priority saves resending duplicate criteria and losing their checks", async () => {
 	const ui = render(() => <StoriesDialog project="/edit-test" onClose={() => {}} />);
 	await ui.findByRole("heading", { name: baseline.title });

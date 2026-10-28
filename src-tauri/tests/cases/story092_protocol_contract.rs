@@ -99,7 +99,13 @@ async fn selected_profile_reaches_the_process_and_session_new_carries_no_host_po
 
     let connection = fixture
         .manager
-        .connect(&config, AcpConnectRequest { root: root.clone() })
+        .connect(
+            &config,
+            AcpConnectRequest {
+                root: root.clone(),
+                env: None,
+            },
+        )
         .await
         .expect("ego received the selected profile");
     fixture
