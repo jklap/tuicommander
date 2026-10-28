@@ -3971,7 +3971,19 @@ pub(crate) fn checkout_inventory(
         let parent = path
             .parent()
             .map(|p| std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf()));
-        if pool.is_some() && parent == pool {
+        // Archive writes beside the checkout, which may be external or belong
+        // to an earlier storage setting. Its durable completion marker proves
+        // ownership; the __archived basename alone does not.
+        if pool.is_some()
+            && (parent == pool
+                || (is_archived_checkout(path)
+                    && crate::git::resolve_git_dir(path)
+                        .and_then(|admin| {
+                            std::fs::read_to_string(admin.join("tuic-allocation")).ok()
+                        })
+                        .as_deref()
+                        == Some("finished")))
+        {
             continue;
         }
         if !path.is_dir() || crate::git::resolve_git_dir(path).is_none() {

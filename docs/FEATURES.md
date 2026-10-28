@@ -3293,6 +3293,8 @@ Plugin HTTP requests accept AbortSignal cancellation through both desktop IPC an
 
 Jira and GitLab expose a default project in their schema-driven plugin settings page. Jira uses a project ID; GitLab accepts a project path or ID. A project saved for an account in Tasks setup takes precedence. The default applies after the plugin reloads; empty means no fallback project. Account bindings remain in `data/work-items.json`, while these defaults use the settings service in `data/config.json`.
 
+Mobile terminal streaming restarts on visibility return after retry exhaustion retires its subscription; confirmed ended sessions do not reopen (#2422-a267).
+
 Mobile outage recovery: failed navigation shows a self-contained cached connection test with the server address, last error, manual retry and automatic backoff. It reopens the original address when the server returns. The running app shows a connection-test card for API or terminal-stream outages; bounded session reads and automatic recovery refresh failed view loads while mounted views preserve drafts (#1930-f4c2, #2294-078f).
 
 Settings owner validation covers typed shortcut records and bounded pane geometry. Geometry references existing groups; runtime tab membership and focus are not configurable settings (#1914-cdf6).

@@ -3,6 +3,19 @@
 - [ ] Coordinator: run `bare_main_entry_has_no_missing_checkout_diagnostic`, `sidebar_removal_identity_2334_candidate_states`, `orphan_validation_refuses_a_bare_repository_entry`, and `orphan_whose_directory_is_gone_stays_out_of_fingerprint_cleanup` on the final commit. The pre-fix CLI regression reproduced on native macOS after build-slot automatically fell back from an unavailable rb status probe; no post-fix GREEN run was made.
 - [ ] After an authorized `make dev` restart or `make build`, refresh a bare repository and one of its linked checkouts. Bare metadata must not show repair guidance; real missing linked registrations must still do so. The daily app was not restarted; Rust does not hot-reload.
 
+## Archived external worktrees (2412-11f3) — Rust restart required
+
+- [x] Pre-fix rb regression reproduced live inventory exposing an archived external checkout through CLI and Gix when the configured pool differs. Evidence: `~/Gits/.tmp/tuic-2412-red.log`.
+- [ ] Coordinator: run `archived_external_checkout_stays_out_of_live_inventory`, `discovery_2156_unowned_archive_name_keeps_checkout` and pooled-removal regressions against the final commit. GREEN belongs to the critic/integration lane.
+- [ ] After an authorized `make dev` restart or `make build`, confirm an archived external checkout stays absent from the sidebar and MCP worktree list after a storage-setting change. The daily app was not restarted; Rust does not hot-reload.
+## Orchestrator mail wake budget (2418-fd33) — Rust restart required
+
+- [x] The pre-fix real silence-timer regression fails on native macOS and Linux rb: the unchanged second Ready tick creates another wake reservation despite a retained user draft. Logs: `~/Gits/.tmp/results/tuic-2418-red-native-timer.log` and `tuic-2418-red-rb-force.log`.
+- [ ] Coordinator: run `stable_ready_ticks_do_not_rearm_not_started_mail_wake`, `a_composer_that_refused_the_first_wake_still_gets_one_at_the_next_idle`, `rearming_never_disturbs_a_wake_in_flight`, and `queued_codex_command_submits_when_ready_confirms_after_shell_idle` against the final commit. No implementation-lane GREEN run was performed.
+- [ ] Load the Rust change with an authorized `make dev` restart or `make build` when ready to end live sessions. The daily app was not restarted; Rust does not hot-reload.
+## Mobile terminal stream restart (2422-a267)
+
+- [ ] Coordinator: run `outputViewConnection.test.tsx` and `outputViewVisibility.test.tsx` against the final commit. The pre-fix hidden-exhaustion regression failed because visibility return kept the disposed subscription; GREEN belongs to the critic. No physical iOS or live-server outage check is claimed.
 ## Stdio MCP health recovery (2417-793a) — Rust rebuild/restart required
 
 - [ ] Coordinator: run the focused stdio client tests and registry health-recovery consumers on the final commit. The pre-fix regression reproduced a live child surviving two unanswered health probes on Linux rb; no post-fix GREEN run was made by the implementer.

@@ -345,7 +345,7 @@ checkout still holds the branch.
 
 ### Detached checkouts
 
-A checkout without a branch remains visible in the sidebar. Its row shows the directory name, short commit SHA and **detached**. The row is informational: it cannot select a branch or run branch actions. A repository header shows the detached count even when its rows are folded. Checkouts in TUIC’s configured recycling pool stay out of the active inventory; an unrelated folder named `__archived` does not hide worktrees.
+A checkout without a branch remains visible in the sidebar. Its row shows the directory name, short commit SHA and **detached**. The row is informational: it cannot select a branch or run branch actions. A repository header shows the detached count even when its rows are folded. Checkouts in TUIC’s configured recycling pool stay out of the active inventory. Checkouts archived by TUIC outside that pool also stay hidden, including after you change the storage setting. An unrelated folder named `__archived` does not hide worktrees.
 
 ### Worktree discovery diagnostics
 

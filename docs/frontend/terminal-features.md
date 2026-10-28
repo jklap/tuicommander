@@ -171,3 +171,7 @@ the command/message breakdown; the count remains available if details fail.
 The newline legend shows only Ctrl+Enter. A panel-relative CSS container query hides shortcut hints at widths up to 640px, including split terminals inside a wide window. The footer does not wrap its hints around the action controls.
 
 In the terminal Compose panel, Enter sends the draft. Ctrl+Enter and Shift+Enter insert a new line. Shift+Ctrl+Enter queues for the next idle moment when an agent is detected. Enter used to confirm an IME candidate does not submit the draft. These shortcuts do not change native terminal keybar controls.
+
+## Mobile stream recovery
+
+Mobile CLI output releases a terminal subscription when the transport reports exit, including retry exhaustion. Visibility resume starts a fresh subscription if none remains and the session poll has not confirmed the session ended. Retired stream callbacks cannot close a newer subscription or change its connection error state. Handshake retries retain their three-second initial delay and 30-second backoff cap; hidden pages do not start a scheduled retry.
