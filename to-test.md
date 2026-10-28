@@ -1,3 +1,8 @@
+## Ideas repository identity (2414-9805) — Rust rebuild/restart required
+
+- [ ] Coordinator: run `config::ideas::tests` on the final commit, plus the existing Ideas store/panel consumers. RED reproduced the canonical-versus-registered split on Linux rb; no post-fix GREEN run was made by the implementer. Run the same regression on Windows to verify native extended/portable path handling.
+- [ ] After an authorized `make dev` restart or `make build`, create/list/update Ideas through an agent bound to a registered symlink repository and check the same collection in the panel. The daily app was not restarted; Rust does not hot-reload.
+
 ## Stdio MCP health recovery (2417-793a) — Rust rebuild/restart required
 
 - [ ] Coordinator: run the focused stdio client tests and registry health-recovery consumers on the final commit. The pre-fix regression reproduced a live child surviving two unanswered health probes on Linux rb; no post-fix GREEN run was made by the implementer.

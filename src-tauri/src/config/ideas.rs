@@ -1,6 +1,58 @@
 //! One locked writer for UI deltas and planner Ideas. Never replace a stale notes array.
 use super::{ConfigFile, NOTES_FILE, apply_typed_json_merge_delta, json_merge_delta};
 use serde_json::{Value, json};
+use std::collections::HashMap;
+
+/// Ideas carry the registered UI key, not the filesystem's canonical spelling.
+/// Keep filesystem identity separate so existing canonical rows and symlink aliases
+/// resolve to that same key without changing Progress or story database ownership.
+struct RepositoryIdentities(HashMap<String, String>);
+
+impl RepositoryIdentities {
+    fn load() -> Self {
+        let repositories = super::load_repositories();
+        let mut identities = HashMap::new();
+        if let Some(repos) = repositories.get("repos").and_then(Value::as_object) {
+            for registered in repos.keys() {
+                identities.insert(Self::filesystem_key(registered), registered.clone());
+            }
+        }
+        Self(identities)
+    }
+
+    fn filesystem_key(path: &str) -> String {
+        let canonical = std::fs::canonicalize(path);
+        let spelling = canonical
+            .as_ref()
+            .map(|path| path.to_string_lossy())
+            .unwrap_or_else(|_| std::borrow::Cow::Borrowed(path));
+        tuic_core::path_spelling::portable_spelling(&spelling)
+    }
+
+    fn resolve(&self, path: &str) -> String {
+        self.0
+            .get(&Self::filesystem_key(path))
+            .cloned()
+            .unwrap_or_else(|| path.to_owned())
+    }
+
+    fn normalize_row(&self, row: &mut Value) {
+        if let Some(path) = row.get("repoPath").and_then(Value::as_str) {
+            row["repoPath"] = self.resolve(path).into();
+        }
+    }
+}
+
+pub(super) fn load_notes() -> Result<Value, String> {
+    let mut document: Value = super::load_json_config_strict(NOTES_FILE)?;
+    let identities = RepositoryIdentities::load();
+    if let Some(rows) = document.get_mut("notes").and_then(Value::as_array_mut) {
+        for row in rows {
+            identities.normalize_row(row);
+        }
+    }
+    Ok(document)
+}
 
 fn notes(document: &Value) -> Result<Vec<Value>, String> {
     let rows = match document.get("notes") {
@@ -95,11 +147,12 @@ pub(crate) fn add_idea(project: &str, content: &str, source: &str) -> Result<Val
     if source.is_empty() || source.chars().count() > 256 {
         return Err("invalid idea: source must contain 1 to 256 characters".into());
     }
+    let project = RepositoryIdentities::load().resolve(project);
     let idea = json!({
         "id": format!("note-{}", uuid::Uuid::new_v4()),
         "text": content, "createdAt": chrono::Utc::now().timestamp_millis(),
         "repoPath": project,
-        "repoDisplayName": std::path::Path::new(project).file_name().map(|s| s.to_string_lossy().into_owned()),
+        "repoDisplayName": std::path::Path::new(&project).file_name().map(|s| s.to_string_lossy().into_owned()),
         "usedAt": null, "images": [], "source": source,
     });
     ConfigFile::<Value>::new(NOTES_FILE).update_with_strict(|document| {
@@ -111,6 +164,7 @@ pub(crate) fn add_idea(project: &str, content: &str, source: &str) -> Result<Val
 }
 
 pub(crate) fn list_ideas(project: &str) -> Result<Vec<Value>, String> {
+    let project = RepositoryIdentities::load().resolve(project);
     Ok(notes(&super::load_notes()?)?
         .into_iter()
         .filter(|row| row["repoPath"].is_null() || row["repoPath"] == project)
@@ -119,12 +173,15 @@ pub(crate) fn list_ideas(project: &str) -> Result<Vec<Value>, String> {
 
 pub(crate) fn update_idea(project: &str, id: &str, content: &str) -> Result<Value, String> {
     let content = text(content)?;
+    let identities = RepositoryIdentities::load();
+    let project = identities.resolve(project);
     ConfigFile::<Value>::new(NOTES_FILE).update_with_strict(|document| {
         let mut rows = notes(document)?;
         let row = rows
             .iter_mut()
             .find(|row| row["id"] == id)
             .ok_or("invalid idea: id not found")?;
+        identities.normalize_row(row);
         if row["repoPath"] != project {
             return Err("invalid idea: does not belong to project".into());
         }
@@ -172,8 +229,11 @@ mod tests {
             .unwrap()
             .to_string_lossy()
             .into_owned();
+        let workspace = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
         super::super::replace_repositories_for_test(json!({"repos": {
-            &registered: {"workspaces": {}}
+            &registered: {"workspaces": {"worker": {
+                "worktreePath": workspace.path(), "parentRepoPath": registered
+            }}}
         }}))
         .unwrap();
         // Existing UI and older canonical rows must both reach the exact panel filter.
@@ -208,7 +268,11 @@ mod tests {
             panel_ids,
             vec![added["id"].as_str().unwrap(), "ui", "legacy", "global"]
         );
-        for project in [&registered, &canonical] {
+        for project in [
+            registered.as_str(),
+            canonical.as_str(),
+            workspace.path().to_str().unwrap(),
+        ] {
             let StoryReply::Ideas(listed) = call(project, json!({"action":"list_ideas"})) else {
                 panic!("ideas")
             };
