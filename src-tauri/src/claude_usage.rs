@@ -1266,24 +1266,39 @@ pub(crate) async fn session_quota(
     session_id: &str,
 ) -> Result<(UsageApiResponse, bool), String> {
     let profile = profile_for_session(state, Some(session_id))?;
-    if let Some(data) = try_get_fresh_cache(&profile) {
+    session_quota_for_profile(&profile, read_claude_credentials, |token| async move {
+        fetch_usage_from_api(&token).await
+    })
+    .await
+}
+
+// Keep credential and HTTP IO at the boundary so cache transitions can be tested
+// without touching a real account or issuing a generating request.
+async fn session_quota_for_profile<F, Fut>(
+    profile: &CredentialProfile,
+    read_credentials: impl FnOnce(Option<&str>) -> Result<(Option<String>, Option<PlanInfo>), String>,
+    fetch: F,
+) -> Result<(UsageApiResponse, bool), String>
+where
+    F: FnOnce(String) -> Fut,
+    Fut: std::future::Future<Output = Result<UsageApiResponse, FetchError>>,
+{
+    if let Some(data) = try_get_fresh_cache(profile) {
         return Ok((data, false));
     }
     let backing_off = RATE_LIMITED_UNTIL
         .lock()
-        .get(&profile)
+        .get(profile)
         .is_some_and(|until| Instant::now() < *until);
     if !backing_off {
-        let (token, _) = read_claude_credentials(profile.config_dir())?;
+        let (token, _) = read_credentials(profile.config_dir())?;
         let token = token.ok_or("Claude account unavailable")?;
-        if let Ok(Ok(data)) =
-            tokio::time::timeout(Duration::from_secs(15), fetch_usage_from_api(&token)).await
-        {
-            cache_response(&profile, &data);
+        if let Ok(Ok(data)) = tokio::time::timeout(Duration::from_secs(15), fetch(token)).await {
+            cache_response(profile, &data);
             return Ok((data, false));
         }
     }
-    get_stale_cache(&profile)
+    get_stale_cache(profile)
         .map(|data| (data, true))
         .ok_or_else(|| "Claude quota unavailable".into())
 }
@@ -2369,6 +2384,93 @@ mod tests {
         // Empty slug should not resolve to a meaningful path
         let result = resolve_slug_to_path("");
         assert!(result.is_none() || result.as_deref() == Some("/"));
+    }
+
+    /// Catches mobile refresh dropping the credential plan before publishing to
+    /// the cache shared with desktop reads. Also protects cache-only paths from IO.
+    #[tokio::test]
+    async fn session_quota_refresh_preserves_plan_in_shared_cache() {
+        let profile = CredentialProfile::ConfigDir("/fixture/quota-plan-2420".into());
+        let other = CredentialProfile::ConfigDir("/fixture/quota-plan-other-2420".into());
+        let expected = serde_json::json!({
+            "subscription_type": "max",
+            "rate_limit_tier": "default_claude_max_5x",
+            "scopes": ["user:inference", "user:profile"]
+        });
+        let plan: PlanInfo = serde_json::from_value(expected.clone()).unwrap();
+        let (data, stale) = session_quota_for_profile(
+            &profile,
+            |dir| {
+                assert_eq!(dir, Some("/fixture/quota-plan-2420"));
+                Ok((Some("test-token".into()), Some(plan)))
+            },
+            |token| async move {
+                assert_eq!(token, "test-token");
+                Ok(UsageApiResponse {
+                    five_hour: Some(RateBucket {
+                        utilization: 42.0,
+                        resets_at: None,
+                    }),
+                    ..Default::default()
+                })
+            },
+        )
+        .await
+        .unwrap();
+        assert!(!stale);
+        assert_eq!(serde_json::to_value(&data.plan).unwrap(), expected);
+        assert_eq!(data.five_hour.unwrap().utilization, 42.0);
+        // This is the exact fresh-cache read used by the desktop API path.
+        assert_eq!(
+            serde_json::to_value(try_get_fresh_cache(&profile).unwrap().plan).unwrap(),
+            expected
+        );
+        assert!(get_stale_cache(&other).is_none());
+
+        let (fresh, stale) = session_quota_for_profile(
+            &profile,
+            |_| panic!("fresh cache must not read credentials"),
+            |_| async { panic!("fresh cache must not fetch") },
+        )
+        .await
+        .unwrap();
+        assert!(!stale);
+        assert_eq!(serde_json::to_value(fresh.plan).unwrap(), expected);
+
+        API_CACHE.lock().get_mut(&profile).unwrap().fetched_at =
+            Instant::now() - API_CACHE_TTL - Duration::from_secs(1);
+        RATE_LIMITED_UNTIL
+            .lock()
+            .insert(profile.clone(), Instant::now() + Duration::from_secs(60));
+        let (old, stale) = session_quota_for_profile(
+            &profile,
+            |_| panic!("backoff must not read credentials"),
+            |_| async { panic!("backoff must not fetch") },
+        )
+        .await
+        .unwrap();
+        assert!(stale);
+        assert!(try_get_fresh_cache(&profile).is_none());
+        assert_eq!(serde_json::to_value(old.plan).unwrap(), expected);
+
+        // Catches leaking a different account's plan into a plan-less profile.
+        let (without_plan, stale) = session_quota_for_profile(
+            &other,
+            |_| Ok((Some("other-token".into()), None)),
+            |_| async { Ok(UsageApiResponse::default()) },
+        )
+        .await
+        .unwrap();
+        assert!(!stale);
+        assert!(without_plan.plan.is_none());
+        assert!(try_get_fresh_cache(&other).unwrap().plan.is_none());
+        assert_eq!(
+            serde_json::to_value(get_stale_cache(&profile).unwrap().plan).unwrap(),
+            expected
+        );
+        API_CACHE.lock().remove(&profile);
+        API_CACHE.lock().remove(&other);
+        RATE_LIMITED_UNTIL.lock().remove(&profile);
     }
 
     #[test]
