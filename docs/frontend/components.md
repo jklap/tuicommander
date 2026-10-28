@@ -480,7 +480,7 @@ label row above its pages, and the configured repositories follow under
   - **Voice** (`DictationSettings`) — see below
   - **Smart Prompts** (`SmartPromptsTab`)
 - **Integrations**
-  - **MCP** (`LocalMcpPanel` + `UpstreamMcpPanel`) — HTTP API server status, TUIC tools, upstream MCP servers
+  - **MCP** (`LocalMcpPanel` + `UpstreamMcpPanel` + `McpIntegrationsSection`) — HTTP API server status, TUIC tools, upstream MCP servers, and the list of every MCP bridge entry TUICommander wrote into other clients' configs with a per-client remove (moved here from the Agents tab)
   - **Remote Access** (`RemoteAccessPanel`) — Remote access, Tailscale HTTPS, QR/connect URL, cloud relay; local IP discovery failures stay inline with retry while the remaining controls stay available
   - **Remote Servers** (`RemoteServersTab`) — one merged editor (`RemoteConnectionEditor`: Kind SSH Tunnel / Remote Server — SSH / Direct / Local / Relay), then SSH Port-Forwarding Tunnels (`SshTunnelsSection` → `TunnelProfileList`) and Remote Machines (`RemoteMachinesTab` → `RemoteMachinesPanel`: discovered hosts, status, Connect/Update/Install/Edit/Remove). The retired `remote-machines` key opens it
   - **Plugins** (`PluginsTab`) — Plugin management, enable/disable, log viewer
@@ -782,7 +782,7 @@ system and never turns an absent provider value into zero.
 | `ConnectionStatusBadge` | Status dot + label shared by `TunnelStatusBadge` and the Remote Machines list; `remoteConnectionStatusColor`/`remoteConnectionStatusLabel` map a remote connection's status |
 | `KeyComboCapture` | Keyboard shortcut capture input (for keybinding editor) |
 | `SearchBar` | Reusable search bar with regex/case-sensitive toggles |
-| `SshConnectionFields` | Shared SSH form (host autocomplete, port, user, identity file + desktop Browse, agent keys, keepalive, host-key checking — fixed to AcceptNew for a Remote Server — and compression), used by the merged connection editor and `TunnelEditorModal` |
+| `SshConnectionFields` | Shared SSH form (host autocomplete, port, user, identity file + desktop Browse, agent keys, keepalive, host-key checking — fixed to AcceptNew for a Remote Server — and compression), used by the merged connection editor (`RemoteConnectionEditor`) |
 | `DiffFileList` | Virtualized per-file list shared by `PrDiffTab` and `BranchDiffScrollView`. Collapse state is hoisted (keyed by row, not list slot) via optional `collapsedKeys`/`onToggleCollapsed` props, falling back to an internal signal when a parent doesn't own it; `collapsedByDefault` starts chosen files collapsed. Exposes a nav handle (`scrollToIndex`/`currentIndex`/`rowCount`/`visibleIndices`, `components/shared/diffListNav.ts`) via `ref` for file-to-file `<`/`>` navigation |
 | `DiffOptionsMenu` | Toolbar popover for the 4 whitespace/case diff-comparison settings plus soft-wrap — reads/writes `settingsStore`/`uiStore` directly, no local state. Mounted in `SessionDiffTab`'s and `DiffTab`'s toolbars (the latter covers `BranchDiffScrollView` too, since it shares that toolbar) |
 
