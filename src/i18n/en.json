@@ -1323,7 +1323,6 @@
 	"stories.submitQa": "Submit for QA",
 	"stories.qaPassed": "QA passed",
 	"stories.qaFailed": "QA failed",
-	"stories.manualHint": "Prefix human checks with [MANUAL] to track them in QA.",
 	"stories.status.wontFix": "Won't fix",
 	"stories.stories": "Stories",
 	"stories.story": "Story",
