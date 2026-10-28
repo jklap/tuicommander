@@ -34,8 +34,9 @@ use tokio::sync::mpsc::UnboundedReceiver;
 use super::guards::{Authenticated, require_local_or_auth};
 use crate::AppState;
 use crate::acp::{
-    AcpAttachKind, AcpClientError, AcpClientErrorCode, AcpConnectionId, AcpDetachKind,
-    AcpHostRequestId, AcpSessionAuthority, AcpStreamFrame, AcpTurnId, EgoHoldRequest,
+    AcpAttachKind, AcpClientError, AcpClientErrorCode, AcpConnectRequest, AcpConnectionId,
+    AcpDetachKind, AcpHostRequestId, AcpSessionAuthority, AcpStreamFrame, AcpTurnId,
+    EgoHoldRequest,
 };
 use crate::acp_commands;
 
@@ -245,12 +246,12 @@ async fn connect(
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
     auth: Option<axum::Extension<Authenticated>>,
     State(state): State<Arc<AppState>>,
-    Json(body): Json<RootBody>,
+    Json(body): Json<AcpConnectRequest>,
 ) -> Response {
     if let Err(resp) = require_local_or_auth(&addr, auth.is_some()) {
         return resp.into_response();
     }
-    answer(acp_commands::connect(&state, body.root).await)
+    answer(acp_commands::connect(&state, body).await)
 }
 
 async fn reconnect(

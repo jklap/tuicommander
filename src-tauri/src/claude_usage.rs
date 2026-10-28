@@ -1293,11 +1293,26 @@ where
     if !backing_off {
         let (token, plan) = read_credentials(profile.config_dir())?;
         let token = token.ok_or("Claude account unavailable")?;
-        if let Ok(Ok(mut data)) = tokio::time::timeout(Duration::from_secs(15), fetch(token)).await
-        {
-            data.plan = plan;
-            cache_response(profile, &data);
-            return Ok((data, false));
+        match tokio::time::timeout(Duration::from_secs(15), fetch(token)).await {
+            Ok(Ok(mut data)) => {
+                RATE_LIMITED_UNTIL.lock().remove(profile);
+                data.plan = plan;
+                cache_response(profile, &data);
+                return Ok((data, false));
+            }
+            Ok(Err(error)) if error.status == 429 => {
+                // Share desktop's minimum backoff, but cap untrusted Retry-After
+                // at five minutes so a malformed hint cannot strand the profile.
+                let delay_secs = error
+                    .retry_after_secs
+                    .unwrap_or(RATE_LIMIT_BACKOFF.as_secs())
+                    .clamp(RATE_LIMIT_BACKOFF.as_secs(), 300);
+                RATE_LIMITED_UNTIL.lock().insert(
+                    profile.clone(),
+                    Instant::now() + Duration::from_secs(delay_secs),
+                );
+            }
+            _ => {}
         }
     }
     get_stale_cache(profile)
@@ -2473,6 +2488,134 @@ mod tests {
         API_CACHE.lock().remove(&profile);
         API_CACHE.lock().remove(&other);
         RATE_LIMITED_UNTIL.lock().remove(&profile);
+    }
+
+    /// Catches mobile 429 errors being discarded instead of suppressing subsequent
+    /// profile reads, including stale-cache and Retry-After boundary cases.
+    #[tokio::test]
+    async fn mobile_quota_429_sets_shared_profile_backoff() {
+        for (index, (retry_after_secs, expected_secs)) in [
+            (None, 120),
+            (Some(0), 120),
+            (Some(1), 120),
+            (Some(180), 180),
+            (Some(u64::MAX), 300),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let profile = CredentialProfile::ConfigDir(format!("/fixture/mobile-429-2430-{index}"));
+            let other =
+                CredentialProfile::ConfigDir(format!("/fixture/mobile-429-other-2430-{index}"));
+            let has_cache = index % 2 == 0;
+            if has_cache {
+                cache_response(&profile, &UsageApiResponse::default());
+                API_CACHE.lock().get_mut(&profile).unwrap().fetched_at =
+                    Instant::now() - Duration::from_secs(301);
+            }
+            let before = Instant::now();
+            let result = session_quota_for_profile(
+                &profile,
+                |_| Ok((Some("test-token".into()), None)),
+                |_| async move {
+                    Err(FetchError {
+                        status: 429,
+                        message: "rate limited".into(),
+                        retry_after_secs,
+                    })
+                },
+            )
+            .await;
+            assert_eq!(result.is_ok(), has_cache);
+            if let Ok((_, stale)) = result {
+                assert!(stale);
+            }
+
+            for _ in 0..3 {
+                let repeated = session_quota_for_profile(
+                    &profile,
+                    |_| panic!("429 backoff must suppress credential reads"),
+                    |_| async { panic!("429 backoff must suppress repeated GET requests") },
+                )
+                .await;
+                assert_eq!(repeated.is_ok(), has_cache);
+                if let Ok((_, stale)) = repeated {
+                    assert!(stale);
+                }
+            }
+            // Desktop consults this same profile-keyed map before its primary or fallback IO.
+            let until = *RATE_LIMITED_UNTIL.lock().get(&profile).unwrap();
+            assert!(until >= before + Duration::from_secs(expected_secs));
+            assert!(until <= Instant::now() + Duration::from_secs(expected_secs));
+            let (_, stale) = session_quota_for_profile(
+                &other,
+                |_| Ok((Some("other-token".into()), None)),
+                |_| async { Ok(UsageApiResponse::default()) },
+            )
+            .await
+            .unwrap();
+            assert!(!stale, "one profile must not rate-limit another");
+
+            RATE_LIMITED_UNTIL
+                .lock()
+                .insert(profile.clone(), Instant::now() - Duration::from_secs(1));
+            let (_, stale) = session_quota_for_profile(
+                &profile,
+                |_| Ok((Some("test-token".into()), None)),
+                |_| async { Ok(UsageApiResponse::default()) },
+            )
+            .await
+            .unwrap();
+            assert!(!stale);
+            assert!(
+                !RATE_LIMITED_UNTIL.lock().contains_key(&profile),
+                "success must clear expired backoff"
+            );
+            API_CACHE.lock().remove(&profile);
+            API_CACHE.lock().remove(&other);
+        }
+    }
+
+    /// Catches ordinary failures accidentally poisoning shared profile backoff.
+    #[tokio::test(start_paused = true)]
+    async fn mobile_quota_non_429_and_timeout_do_not_set_backoff() {
+        for status in [0, 401, 500] {
+            let profile =
+                CredentialProfile::ConfigDir(format!("/fixture/mobile-error-2430-{status}"));
+            for _ in 0..2 {
+                assert!(
+                    session_quota_for_profile(
+                        &profile,
+                        |_| Ok((Some("test-token".into()), None)),
+                        |_| async move {
+                            Err(FetchError {
+                                status,
+                                message: "failed".into(),
+                                retry_after_secs: Some(180),
+                            })
+                        },
+                    )
+                    .await
+                    .is_err()
+                );
+                assert!(!RATE_LIMITED_UNTIL.lock().contains_key(&profile));
+            }
+        }
+        let profile = CredentialProfile::ConfigDir("/fixture/mobile-timeout-2430".into());
+        cache_response(&profile, &UsageApiResponse::default());
+        API_CACHE.lock().get_mut(&profile).unwrap().fetched_at =
+            Instant::now() - Duration::from_secs(301);
+        let (_, stale) = session_quota_for_profile(
+            &profile,
+            |_| Ok((Some("test-token".into()), None)),
+            |_| std::future::pending(),
+        )
+        .await
+        .unwrap();
+        assert!(stale);
+        assert!(!RATE_LIMITED_UNTIL.lock().contains_key(&profile));
+        assert!(try_get_fresh_cache(&profile).is_none());
+        API_CACHE.lock().remove(&profile);
     }
 
     #[test]

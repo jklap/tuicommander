@@ -781,8 +781,17 @@ pub(crate) async fn delete_local_branch(
     Ok(())
 }
 
+#[cfg(test)]
+pub(crate) static ARCHIVE_POOL_READS: std::sync::LazyLock<
+    dashmap::DashMap<PathBuf, std::sync::Arc<std::sync::atomic::AtomicUsize>>,
+> = std::sync::LazyLock::new(dashmap::DashMap::new);
+
 /// Resolve TUIC's configured recycling pool against the canonical main checkout.
 pub(crate) fn archive_pool_for_repo(repo_path: &Path, app_worktrees_dir: &Path) -> PathBuf {
+    #[cfg(test)]
+    if let Some(reads) = ARCHIVE_POOL_READS.get(repo_path) {
+        reads.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    }
     let root = tuic_git::git::canonical_repo_root(repo_path);
     resolve_worktree_dir_for_repo(&root, app_worktrees_dir).join("__archived")
 }
@@ -793,11 +802,11 @@ pub(crate) fn get_worktree_paths_cached(
     repo_path: &str,
 ) -> Result<HashMap<String, WorkspaceWorktree>, String> {
     let p = repo_path.to_string();
-    let pool = archive_pool_for_repo(Path::new(&p), &state.worktrees_dir);
     state
         .git_cache
         .worktree_paths
         .try_get_with(repo_path.to_string(), || {
+            let pool = archive_pool_for_repo(Path::new(&p), &state.worktrees_dir);
             crate::git_reads::git_reads()
                 .worktree_inventory(Path::new(&p), Some(&pool))
                 .map(std::sync::Arc::new)

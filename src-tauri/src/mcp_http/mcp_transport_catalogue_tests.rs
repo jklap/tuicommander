@@ -1105,6 +1105,36 @@ fn instructions_collapse_off_points_at_tool_descriptions() {
     assert!(!out.contains("search_tools"));
 }
 
+#[test]
+fn instructions_prevent_invisible_native_subagents_for_every_client() {
+    // Catches: fallback clients losing the duty, or launch clients receiving it twice.
+    let state = test_state();
+    let mut failures = Vec::new();
+    for (client, fallback) in [
+        (Some("claude-code"), false),
+        (Some("codex"), false),
+        (Some("ego"), false),
+        (Some("gemini"), true),
+        (Some("cursor"), true),
+        (None, true),
+    ] {
+        for collapsed in [false, true] {
+            let out = build_mcp_instructions_for_mode(&state, client, collapsed);
+            let rule = "- Delegate or parallelize via TUIC `agent action=spawn`/`launch`, not client-native subagents; peers stay visible, mailable and managed.";
+            let expected_count = usize::from(fallback);
+            if out.lines().filter(|line| *line == rule).count() != expected_count {
+                failures.push(format!("{client:?}, collapsed={collapsed}: expected {expected_count} MCP delegation rules"));
+            }
+            if out.contains("cc_agent_hint") {
+                failures.push(format!(
+                    "{client:?}, collapsed={collapsed}: launch-only CC exception duplicated in MCP"
+                ));
+            }
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
 /// The ack rule is protocol and belongs to the instructions: no tool
 /// description can state a rule about the *first assistant message*.
 ///
@@ -1476,12 +1506,14 @@ fn mcp_instruction_surface_bytes_stay_within_budget() {
     // recorded zero entries — and it is paid for elsewhere: `repo` lost
     // eight progress actions in the same change. Raising a budget for prose
     // that carries no obligation is not the same trade.
+    // #2441-bbcf adds one cross-client delegation duty (137 bytes), not a catalogue.
+    // Reserve only the next 64-byte boundary; other instruction sections stay unchanged.
     assert!(
-        instructions_classic_empty <= 1600,
+        instructions_classic_empty <= 1728,
         "classic instructions grew past their budget — {measured}"
     );
     assert!(
-        instructions_collapsed_empty <= 1664,
+        instructions_collapsed_empty <= 1792,
         "collapsed instructions grew past their budget — {measured}"
     );
     assert!(

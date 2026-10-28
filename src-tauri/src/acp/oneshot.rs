@@ -303,7 +303,13 @@ async fn run_turn(
     // future that is not the one holding the ego child.
     let connection = state
         .acp
-        .connect(&config, AcpConnectRequest { root: root.clone() })
+        .connect(
+            &config,
+            AcpConnectRequest {
+                root: root.clone(),
+                env: None,
+            },
+        )
         .await?;
     let connection_id = connection.connection_id;
 
