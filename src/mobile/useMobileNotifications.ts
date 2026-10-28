@@ -24,8 +24,16 @@ interface PrevState {
 export function useMobileNotifications(sessions: Accessor<SessionInfo[]>, isSessionsListVisible: Accessor<boolean>) {
 	const canPlaySound = () =>
 		isSessionsListVisible() && document.visibilityState === "visible" && localStorage.getItem(SOUND_KEY) !== "false";
-	// Read the host preference on mount and after settings changes/reconnect.
-	onCleanup(notificationsStore.startRemoteSync());
+	// Establish the host baseline before refresh merges can interpret defaults as local edits.
+	let disposed = false;
+	let stopRemoteSync: (() => void) | undefined;
+	void notificationsStore.hydrate().then(() => {
+		if (!disposed) stopRemoteSync = notificationsStore.startRemoteSync();
+	});
+	onCleanup(() => {
+		disposed = true;
+		stopRemoteSync?.();
+	});
 	const isSilenced = (session: SessionInfo) =>
 		!!session.parent_session && notificationsStore.state.config.silence_remote_completions;
 	const prevStates = new Map<string, PrevState>();
