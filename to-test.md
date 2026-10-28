@@ -1,3 +1,8 @@
+## Story drafts from requests (2357-a8f2) — Rust rebuild/restart required
+
+- [ ] Coordinator critic: run the focused AI draft UI, Rust story_draft and one_shot_cancel tests, existing one-shot cleanup tests, native stories creation/amendment consumers, transport parity and i18n collisions on the final commit. The implementer ran feature RED only; no GREEN application run is claimed.
+- [ ] Capture isolated agent-test screenshots before Fill, during Fill and after Fill; exercise configured ego success, malformed/error reply, cancellation during initialization and an active turn. No daily app restart was performed. Rust changes require an authorized manual `make dev` restart or `make build` to load.
+
 ## Sleep-prevention inventory cadence (2419-4d16) — Rust restart required
 
 - [ ] After Boss manually restarts a rebuilt `make dev` or installs `make build`, enable Prevent sleep when busy with disposable idle agent tabs. Confirm native assertions still cover active turns, background jobs and keep-open agents while hidden. Confirm idle process inventory checks no longer run once per second and legacy refreshes do not add scans. Rust does not hot-reload; this peer did not restart the daily app. GREEN and the independent concurrency critic belong to integration.

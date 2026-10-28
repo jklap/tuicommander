@@ -354,10 +354,21 @@ impl StoryStore {
         Ok(plan)
     }
 
+    #[cfg(test)]
     pub fn create_story(&self, input: NewStory) -> Result<Story, String> {
+        self.create_story_with_problem(input, None)
+    }
+
+    pub fn create_story_with_problem(
+        &self,
+        input: NewStory,
+        problem: Option<String>,
+    ) -> Result<Story, String> {
         validate_new_story(&input)?;
+        validate_problem(problem.as_deref())?;
         self.require_unarchived_plan(&input.plan_id)?;
-        let story = build_story(input);
+        let mut story = build_story(input);
+        story.problem = problem;
         let mut conn = self.connect()?;
         let tx = immediate(&mut conn)?;
         require_active_plan(&tx, &story.plan_id)?;
@@ -625,7 +636,7 @@ impl StoryStore {
     }
 }
 
-fn validate_new_story(input: &NewStory) -> Result<(), String> {
+pub(super) fn validate_new_story(input: &NewStory) -> Result<(), String> {
     validate_text("story title", &input.title, 200)?;
     if let StoryOrigin::PlanStep { step } = &input.origin {
         validate_text("plan step", step, 200)?;
@@ -639,6 +650,13 @@ fn validate_new_story(input: &NewStory) -> Result<(), String> {
     }
     for path in &input.file_scope {
         validate_scope_path(path)?;
+    }
+    Ok(())
+}
+
+pub(super) fn validate_problem(problem: Option<&str>) -> Result<(), String> {
+    if let Some(problem) = problem {
+        validate_text("problem", problem, 20_000)?;
     }
     Ok(())
 }

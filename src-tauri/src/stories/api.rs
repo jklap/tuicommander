@@ -63,6 +63,9 @@ pub enum StoryAction {
     },
     CreateStory {
         input: NewStory,
+        /// Optional reviewed problem statement, persisted atomically with the story.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        problem: Option<String>,
     },
     /// Amend an unclaimed backlog/ready story atomically at its current revision.
     UpdateStory {
@@ -315,9 +318,11 @@ fn story_action_with_source(
             }
             Ok(StoryReply::Summary(summary))
         }
-        StoryAction::CreateStory { input } => {
+        StoryAction::CreateStory { input, problem } => {
             plan_in_project(&input.plan_id)?;
-            Ok(StoryReply::Story(store.create_story(input)?))
+            Ok(StoryReply::Story(
+                store.create_story_with_problem(input, problem)?,
+            ))
         }
         StoryAction::UpdateStory {
             story_id,
@@ -1001,6 +1006,7 @@ mod tests {
         let StoryReply::Story(story) = story_action(
             first_path,
             StoryAction::CreateStory {
+                problem: None,
                 input: NewStory {
                     story_type: None,
                     plan_id: plan.id.clone(),
@@ -1051,6 +1057,7 @@ mod tests {
                 story_action(
                     project,
                     StoryAction::CreateStory {
+                        problem: None,
                         input: NewStory {
                             story_type: None,
                             plan_id: plan.id.clone(),
@@ -1495,6 +1502,7 @@ mod tests {
                 story_action(
                     project,
                     StoryAction::CreateStory {
+                        problem: None,
                         input: NewStory {
                             story_type: None,
                             plan_id: plans[0].id.clone(),
@@ -1543,6 +1551,7 @@ mod tests {
             story_action(
                 project,
                 StoryAction::CreateStory {
+                    problem: None,
                     input: NewStory {
                         story_type: None,
                         plan_id: done_plan.id,
@@ -1795,6 +1804,7 @@ mod tests {
         let StoryReply::Story(mut story) = story_action(
             project,
             StoryAction::CreateStory {
+                problem: None,
                 input: NewStory {
                     story_type: None,
                     plan_id: plan.id.clone(),

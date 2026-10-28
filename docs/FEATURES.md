@@ -3466,3 +3466,11 @@ bare unknown names remain command attempts (#2421-6e0a).
 ### Ego terminal usage (#2386-6f7c)
 
 Ego terminal usage uses the exact live pid lease and `ego usage --json` v3 or v4. The shared badge shows observed context tokens, the observed context capacity when present, complete monetary spend, and complete subscription API-price equivalents. Spend and equivalents remain separate. Version 4 also shows explicitly reported remaining requests, tokens, input tokens, output tokens, or USD. Session observations must match the exact provider/model; a current OpenRouter credential balance is labelled `openrouter key`, not session spend. The hover text includes each limit's observation time, source, and reported reset. Unknown fields stay hidden; TUIC does not calculate remaining balances from limit minus usage or borrow another provider account. The executable comes from the live terminal, not the AI Chat setting.
+
+### Story drafts from requests
+
+New story accepts a plain request and fills an editable draft through the existing
+unattended ego turn. Fill never saves; explicit Create story persists reviewed
+fields and the optional problem atomically. Busy, cancel and error states preserve
+the request. Cancel stops only the owned one-shot connection. See the
+[native stories guide](user-guide/native-stories.md#draft-a-story-from-a-request).

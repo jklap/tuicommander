@@ -385,3 +385,10 @@ same backend-owned policy. Both use `spawn_blocking` for process inventory,
 locks and the native keepawake transition. Neither accepts a frontend busy flag.
 The dedicated `sleep-prevention` thread owns periodic reconciliation even when
 no WebView is loaded; it shares the same serialized native guard.
+
+### Story request draft commands
+
+`story_generate_draft` is asynchronous and awaits the existing owned ACP one-shot.
+`acp_one_shot_prepare` and `acp_one_shot_cancel` only reserve/signal an in-memory
+watch handle; they perform no filesystem, model or subprocess work on the caller.
+The driver keeps connection teardown on its detached task when a caller disappears.

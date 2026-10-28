@@ -350,6 +350,20 @@ export const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 		map: (args) => ({ method: "POST", path: "/acp/one-shot", body: { root: args.root, prompt: args.prompt } }),
 	},
 
+	acp_one_shot_prepare: {
+		map: () => ({ method: "POST", path: "/acp/one-shot/prepare" }),
+	},
+	acp_one_shot_cancel: {
+		map: (_args, p) => ({ method: "POST", path: `/acp/one-shot/${p("requestId")}/cancel` }),
+	},
+	story_generate_draft: {
+		map: (args) => ({
+			method: "POST",
+			path: "/acp/story-draft",
+			body: { project: args.project, request: args.request, requestId: args.requestId },
+		}),
+	},
+
 	// --- ego's command line (Providers) ---
 	// Not part of the ACP surface above: ACP carries a session, and which model
 	// a run defaults to is ego's own configuration. Both routes start a process,

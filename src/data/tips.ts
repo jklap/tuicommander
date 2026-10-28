@@ -10,6 +10,12 @@ const mod = isMacOS() ? "Cmd" : "Ctrl";
 
 export const TIPS: Tip[] = [
 	{
+		feature: "Story drafts from requests",
+		description:
+			"In New story, describe what you need and choose Fill with AI. Review and edit the generated fields before Create story saves them. Cancel fill stops the owned model turn and keeps your request.",
+		shortcut: null,
+	},
+	{
 		feature: "AI Chat across devices",
 		description:
 			"Select an AI Chat conversation on desktop, phone or tablet to show it on the other connected devices. An offline device catches up when it reconnects; session CLI and Chat views stay local.",

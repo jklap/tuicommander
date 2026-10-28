@@ -1,6 +1,7 @@
 mod api;
 #[cfg(test)]
 mod critic_tests;
+pub(crate) mod draft;
 #[cfg(test)]
 mod filter_tests;
 mod filters;

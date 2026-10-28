@@ -617,6 +617,16 @@ is not inferred, and nothing groups entries into workstreams.
 
 ## Native plans and stories
 
+New story supports a plain request followed by Fill with AI. Rust builds the prompt,
+reuses the existing isolated one-shot driver, validates JSON and native story fields,
+and normalizes unchecked criteria into one requirement per line. Generated fields
+remain an unsaved draft until explicit Create story. Optional `problem` beside
+`input` is validated and persisted in the creation transaction. Busy, malformed/error
+and cancelled outcomes preserve the request. A prepared cancellation handle closes
+the cancel-before-start race; Cancel stops the owned turn and shuts down its connection.
+Caller disappearance still cannot skip cleanup. Unused handles expire at the one-shot
+outer budget. Desktop IPC and guarded HTTP share the same services.
+
 `update_story` takes `story_id`, `expected_revision`, and a camel-case `patch`. Omitted fields stay unchanged. The patch accepts `title`, `priority` (1–3), `fileScope`, `origin` (including a plan step), nullable `storyType` (`feature`, `fix`, `refactor`, `chore`, `task`), optional `problem` and `risk` (`low`, `medium`, `high`), ordered `criteria`, and the final `dependencies` set. Null clears `storyType`, `problem` or `risk`; old story records default both to absent. Unknown fields, invalid values, cross-plan dependencies, duplicates, cycles and stale revisions are rejected without partial story writes. Only unclaimed Backlog/Ready stories without active or paused workflow ownership can be amended. Unique byte-identical criteria retain their checks after reorder; changed, new or ambiguous duplicate criteria become unchecked. A priority-only patch preserves all checks. Dependency changes recompute readiness. Planning and execution fingerprints include the amended requirements/revision, so existing evidence cannot certify changed work. StoriesDialog amendments use a fixed revision snapshot and changed-field patch, with Save/Cancel and retained drafts on conflict. QA is not amendment-eligible. Criteria use separate ordered entries so multiline requirement text is preserved during edits.
 
 The story service stores plan and story records outside the repository. It discovers

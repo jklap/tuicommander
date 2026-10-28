@@ -609,6 +609,17 @@ async fn story_action_command_for_state(
 
 #[cfg(feature = "desktop")]
 #[tauri::command]
+async fn story_generate_draft(
+    state: State<'_, Arc<AppState>>,
+    project: String,
+    request: String,
+    request_id: String,
+) -> Result<stories::draft::StoryDraft, acp::AcpClientError> {
+    stories::draft::generate(state.inner(), project, request, request_id).await
+}
+
+#[cfg(feature = "desktop")]
+#[tauri::command]
 async fn automation_action(
     state: State<'_, Arc<AppState>>,
     input: serde_json::Value,
@@ -2712,6 +2723,9 @@ pub fn run(mut context: tauri::Context<tauri::Wry>) {
             acp_commands::acp_respond_permission,
             acp_commands::acp_respond_elicitation,
             acp_commands::acp_one_shot_prompt,
+            acp_commands::acp_one_shot_prepare,
+            acp_commands::acp_one_shot_cancel,
+            story_generate_draft,
             ego_cli::ego_providers,
             ego_cli::usage::get_ego_usage,
             ego_cli::perimeter::ego_perimeter,

@@ -171,3 +171,21 @@ The same inputs work under `workflow` with `action:"story"` and `input` set to t
 Text is trimmed and must contain 1–16000 characters. Optional `source` must contain 1–256 characters after trimming. Without it, the source is the bound session id, or `local-api` for a sessionless request. Replies are `{type:"idea",value:Idea}` for add/update and `{type:"ideas",value:Idea[]}` for list. Idea records have camelCase fields: `id`, `text`, `createdAt` (Unix milliseconds), `repoPath`, `repoDisplayName`, `usedAt`, `images` and `source`.
 
 All mutations use the backend's locked notes writer. An `ideas-changed` desktop/SSE event reloads the panel without saving the read back. Local edits finish before reload; stale UI snapshots apply only their changed ids and fields to current disk state. They cannot remove unseen agent additions or restore a remotely deleted Idea. Concurrent text edits use the last committed text intent.
+
+## Draft a story from a request
+
+In **New story**, type the request in plain words and choose **Fill with AI**.
+The configured ego executable and model run one isolated, unattended turn through
+TUIC's existing one-shot path. No new provider client or API key is used.
+Title, story type, priority, problem and acceptance criteria fill the editable form.
+Nothing is saved by Fill: review and edit the fields, then choose **Create story**.
+Manual creation remains available without AI.
+
+A filling status and **Cancel fill** action stay visible during generation.
+Cancel stops the owned model turn and waits for connection shutdown when it has
+started; cancellation during initialization waits for initialization cleanup before
+shutdown, without submitting a prompt. Failed or malformed replies keep the request
+and existing form fields. Late cancelled replies never replace the draft.
+Generated criteria are one requirement per line; `[MANUAL]` stays a native QA marker.
+The reviewed problem is saved atomically with creation through the optional
+`problem` field beside `input` in the `create_story` action.

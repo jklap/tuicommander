@@ -4341,3 +4341,19 @@ it("maps frame workload persistence without changing the recording", () => {
 		body: { recording: "{}" },
 	});
 });
+
+// Catches: browser story fills losing the owned cancellation handle or bypassing the shared Rust draft validator.
+it("maps story draft generation and owned cancellation with IPC-equivalent fields", () => {
+	expect(mapCommandToHttp("acp_one_shot_prepare", {})).toEqual({ method: "POST", path: "/acp/one-shot/prepare" });
+	expect(mapCommandToHttp("acp_one_shot_cancel", { requestId: "fill-1" })).toEqual({
+		method: "POST",
+		path: "/acp/one-shot/fill-1/cancel",
+	});
+	expect(
+		mapCommandToHttp("story_generate_draft", { project: "/repo", request: "Search work", requestId: "fill-1" }),
+	).toEqual({
+		method: "POST",
+		path: "/acp/story-draft",
+		body: { project: "/repo", request: "Search work", requestId: "fill-1" },
+	});
+});

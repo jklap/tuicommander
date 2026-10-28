@@ -561,6 +561,18 @@ pub(crate) async fn acp_one_shot_prompt(
     crate::acp::oneshot::run_prompt(&state, root, prompt).await
 }
 
+#[cfg(feature = "desktop")]
+#[tauri::command]
+pub(crate) fn acp_one_shot_prepare(state: State<'_, Arc<AppState>>) -> String {
+    crate::acp::oneshot::prepare(state.inner())
+}
+
+#[cfg(feature = "desktop")]
+#[tauri::command]
+pub(crate) fn acp_one_shot_cancel(state: State<'_, Arc<AppState>>, request_id: String) -> bool {
+    crate::acp::oneshot::cancel(&state, &request_id)
+}
+
 #[cfg(all(test, feature = "desktop"))]
 mod tests {
     use std::sync::mpsc;
