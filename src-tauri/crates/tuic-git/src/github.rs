@@ -671,7 +671,7 @@ fn issues_repo_section(filter_mode: &str, viewer: &str) -> String {
 
 const ISSUE_NODE_FIELDS: &str = r#"number title state url createdAt updatedAt authorAssociation
         author { login }
-        labels(first: 10) { nodes { name color } }
+        labels(first: 10) { nodes { name color } pageInfo { hasNextPage endCursor } }
         assignees(first: 5) { nodes { login } }
         milestone { title }
         comments { totalCount }"#;

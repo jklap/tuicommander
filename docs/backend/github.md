@@ -603,7 +603,10 @@ GitHub applies assigned, created and mentioned client predicates with the resolv
 ### Host-owned issue triage publication (#2324-424d)
 
 When triage is configured, intake fetches every page of open issues without the
-intake label filter. The normal client issue filter remains separate. Issue nodes
+intake label filter. Each issue's label connection is also paginated to completion,
+including ordinary repositories in a mixed intake batch. Missing pages or invalid
+cursors fail the poll rather than publish incomplete label membership. The normal
+client issue filter remains separate. Issue nodes
 include `authorAssociation`; only OWNER/MEMBER/COLLABORATOR can start triage or
 implementation in an opted-in repository. The host publishes immutable decisions
 through the existing account-bound REST adapter: POST `issues/{number}/comments`
