@@ -401,7 +401,11 @@ Assisted configuration uses the published Settings owner contract, not agent-ses
 
 Open **More session actions** to load usage for that session. Claude and Codex
 show **Account quota** and reported reset times for the live session profile.
-These are shared account windows, not the selected model's session spend.
+These are shared account windows, not the selected model's session spend. If Claude
+rate-limits a mobile quota refresh, mobile and desktop reads share a 2–5 minute
+backoff for that account profile. The menu shows stale cached quota, or
+**Usage not available** when no cached quota exists; other profiles are not
+blocked. Mobile quota reads do not generate messages.
 
 ego shows **Session usage** from its own durable ledger, with **Cost** when
 reported. Terminal usage uses the terminal executable and does not require the

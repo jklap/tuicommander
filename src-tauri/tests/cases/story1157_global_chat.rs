@@ -102,6 +102,7 @@ async fn connect_as_peer(fixture: &Fixture) -> tuicommander_lib::acp::AcpConnect
             &Fixture::config(),
             tuicommander_lib::acp::AcpConnectRequest {
                 root: fixture.root(),
+                env: None,
             },
             PEER.to_owned(),
         )
@@ -169,6 +170,7 @@ async fn simultaneous_connects_for_different_peers_keep_separate_egos() {
             &config,
             tuicommander_lib::acp::AcpConnectRequest {
                 root: fixture.root(),
+                env: None,
             },
             peer.to_owned(),
         )
@@ -190,6 +192,7 @@ async fn failed_peer_initialize_allows_a_later_connect() {
     let fixture = Fixture::with("early-eof");
     let request = || tuicommander_lib::acp::AcpConnectRequest {
         root: fixture.root(),
+        env: None,
     };
     assert!(
         fixture

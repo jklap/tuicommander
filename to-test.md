@@ -2,6 +2,37 @@
 
 - [ ] Coordinator critic: run `cached_worktree_inventory_does_not_reload_archive_pool`, `cached_worktree_inventory_tracks_storage_changes`, and existing `discovery_2157` / `discovery_2156` inventory consumers on the final commit. RED reproduced three pool resolutions instead of one for both cache-entry orders on Linux rb; no post-fix GREEN run is claimed.
 - [ ] After an authorized `make dev` restart or `make build`, change global and per-repository worktree storage settings with disposable checkouts. Confirm archive-pool rows refresh and repeated inventory reads remain cached. Rust does not hot-reload; the daily app was not restarted.
+## Claude mobile 429 backoff (2430-4049) — Rust restart required
+
+- [ ] Coordinator critic: run `mobile_quota_429_sets_shared_profile_backoff`, `mobile_quota_non_429_and_timeout_do_not_set_backoff`, `session_quota_refresh_preserves_plan_in_shared_cache`, `api_cache_isolated_by_profile`, and `rate_limit_backoff_isolated_by_profile` on the final commit. Native macOS and Linux rb RED reproduced repeated credential IO after 429; post-fix GREEN belongs to integration.
+- [ ] After Boss manually restarts a rebuilt `make dev` or installs `make build`, confirm mobile quota refresh during a Claude 429 retains stale quota or reports unavailable without repeated GETs for the same profile. Other account profiles remain usable. Rust does not hot-reload; the daily app was not restarted.
+## Archived prerequisite retention (2426-821e) — Rust restart required
+
+- [ ] Coordinator critic: run `archiving_unresolved_prerequisite_does_not_hide_blocker`, the `archive_prerequisite_` regressions, and existing archive/dependency consumers on the final commit. The implementation lane reproduced RED on Linux rb; no post-fix GREEN is claimed.
+- [ ] After an authorized `make dev` restart or `make build`, confirm Archive story refuses an unresolved prerequisite with open dependents and shows their IDs. Confirm Done prerequisites can still be archived, and adding an archived unresolved dependency asks for restoration. Rust does not hot-reload; the daily app was not restarted.
+## ACP launch environment (2320-f493) — Rust rebuild/restart required
+
+- [ ] Coordinator critic: run `story2320_connection_env` plus ACP launch/reuse consumers and the focused client/transport tests. The implementer recorded pre-implementation RED; no post-implementation Rust GREEN is claimed.
+- [ ] After an authorized rebuild and restart, connect with disposable environment overrides, confirm only that child receives them, and confirm env-bearing live-peer reuse asks for disconnect first. Reconnect must drop overrides. Rust does not hot-reload; the daily app was not restarted.
+## MDKB hook telemetry state (2442-61f6)
+
+- [x] Critic verified final plugins `ca6707705df94603e7cc9c7db1ea7c58f8164bcd`: `src/__tests__/plugins/mdkbDashboard.test.ts` passes all five cases and `pnpm exec tsc --noEmit` passes. Enabled-empty Hooks regression failed before the fix. Log: `~/Gits/.tmp/results/critic-2442-r2-green.log`.
+- [ ] Capture the telemetry-off dashboard with shared plugin CSS. The isolated Chrome for Testing attempt timed out after 20 seconds without a screenshot; the generated renderer page is at `~/Gits/.tmp/results/tuic-2442-evidence/telemetry-off.html`. No visual pass is claimed.
+- [ ] Verify a live MDKB 3.13 stats report with telemetry disabled. Upstream `HooksSummary` and `collect_hooks` confirm the boolean contract; the installed CLI is 3.12.2 and does not emit the field.
+## Archived New plan source (2425-5cfa) — Rust rebuild/restart required
+
+- [ ] Coordinator: run `new_plan_archived_source_has_visible_result` and `adding_a_plan_source_derives_its_title_and_reuses_its_record` against the final commit. The regression failed on pre-fix Linux rb; GREEN belongs to the critic.
+- [ ] After an authorized `make dev` restart or `make build`, select a source owned by an archived plan. Confirm the visible error identifies the plan and points to Archived plans and Restore plan. The daily app was not restarted; Rust does not hot-reload.
+## Nested MCP parent denial (2433-2f3f)
+
+- [ ] Coordinator critic: run `src/__tests__/components/SettingsPanel/LocalMcpPanel.test.tsx` and existing native-catalog consumers. The pre-fix regression reproduced a checked child under a denied parent. No implementation-lane GREEN run is claimed; TypeScript passes.
+- [ ] Visual check: confirm blocked member switches show off and disabled, with a readable enable-parent hint. The isolated real-component browser fixture did not produce a screenshot or DOM before the 45-second bound. Its Chrome process and Vite server were stopped. Log: `~/Gits/.tmp/tuic-2433-visual.log`. No visual pass is claimed.
+
+## Development backend command mismatch (2409-aa48)
+
+- [ ] Visual check of the AI Chat mismatch message and absent Retry. An isolated browser fixture mounted the real component, but Chrome did not produce a screenshot before the 45-second bound; its own process and Vite server were stopped. Log: `~/Gits/.tmp/results/tuic-2409-visual.log`. No visual pass is claimed.
+
+- [ ] Coordinator critic: run `dev_missing_command_explains_backend_frontend_mismatch_without_retry`, `src/__tests__/invoke.test.ts`, and the existing backend-skew startup/HMR tests. The implementation lane reproduced the pre-fix raw command error and Retry; post-fix GREEN belongs to integration. TypeScript passes locally. No Rust changes or daily-app restart.
 
 ## Sleep-prevention inventory cadence (2419-4d16) — Rust restart required
 
@@ -3136,3 +3167,5 @@ Needs an iPhone (iOS 16.4+, 18.4+ preferred), the desktop TUICommander running a
 ## 2423-902c — Preferred phone secret-entry address
 
 - [ ] After a Rust rebuild and a manual app restart when convenient, request a private secret form with both a bridge/VPN and Tailscale present. Confirm its phone link uses active Tailscale HTTPS, or LAN when the TLS listener is inactive. Remote Access and Remote Mobile Connection must default to the same backend-ranked candidate. Restarting the current app ends its live sessions; no restart was performed by the agent.
+
+- [ ] Story title edit (#2427-a125): review the invalid-title border and Save tooltip at 201 characters; confirm 200 non-BMP characters remain intact. _(Headless capture attempted but Chrome returned no DOM or screenshot; unit RED and TypeScript evidence are retained separately.)_

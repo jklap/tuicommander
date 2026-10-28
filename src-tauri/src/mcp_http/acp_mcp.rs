@@ -1134,6 +1134,7 @@ mod tests {
                 },
                 AcpConnectRequest {
                     root: workspace.clone(),
+                    env: None,
                 },
                 PEER.to_owned(),
             )

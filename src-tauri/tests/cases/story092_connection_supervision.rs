@@ -50,6 +50,7 @@ async fn a_malformed_peer_identity_cannot_launch_or_drop_a_live_acp_connection()
             &Fixture::config(),
             AcpConnectRequest {
                 root: fixture.root(),
+                env: None,
             },
             "not-a-uuid".to_string(),
         )
@@ -96,6 +97,7 @@ async fn malformed_non_v1_and_early_eof_leave_no_registered_connection() {
                 &Fixture::config(),
                 AcpConnectRequest {
                     root: fixture.root(),
+                    env: None,
                 },
             )
             .await
@@ -133,6 +135,7 @@ async fn an_agent_that_never_answers_initialize_is_given_up_on() {
             &Fixture::config(),
             AcpConnectRequest {
                 root: fixture.root(),
+                env: None,
             },
             std::time::Duration::from_millis(200),
         ),
