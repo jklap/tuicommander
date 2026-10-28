@@ -823,7 +823,7 @@ mod warm_tests {
         );
     }
 
-    #[cfg(unix)]
+    // Shared by portable removal tests as well as Unix setup-script tests.
     pub(super) fn setup_repo(root: &std::path::Path) -> std::path::PathBuf {
         let repo = root.join("repo");
         std::fs::create_dir(&repo).unwrap();
