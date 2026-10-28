@@ -179,8 +179,7 @@ async fn headless_tls_invalid_pem_fails_configuration() {
     };
     let error = load_remote_tls(&config)
         .await
-        .err()
-        .expect("invalid PEM must fail");
+        .expect_err("invalid PEM must fail");
     assert!(
         error.to_string().contains("Invalid TLS cert/key"),
         "{error}"
@@ -188,8 +187,7 @@ async fn headless_tls_invalid_pem_fails_configuration() {
     std::fs::remove_file(&cert).unwrap();
     let error = load_remote_tls(&config)
         .await
-        .err()
-        .expect("missing PEM must fail");
+        .expect_err("missing PEM must fail");
     assert!(
         error.to_string().contains("Failed to read TLS cert"),
         "{error}"
