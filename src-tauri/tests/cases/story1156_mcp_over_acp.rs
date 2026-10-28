@@ -142,6 +142,7 @@ async fn ego_reaches_the_tuicommander_server_over_the_acp_connection() {
             &Fixture::config(),
             tuicommander_lib::acp::AcpConnectRequest {
                 root: fixture.root(),
+                env: None,
             },
             PEER.to_owned(),
         )
@@ -251,6 +252,7 @@ async fn a_session_is_refused_when_the_agent_never_advertised_mcp_acp() {
             &Fixture::config(),
             tuicommander_lib::acp::AcpConnectRequest {
                 root: fixture.root(),
+                env: None,
             },
             PEER.to_owned(),
         )
@@ -292,6 +294,7 @@ async fn ego_cancels_a_pending_mcp_request_by_its_acp_id() {
             &Fixture::config(),
             tuicommander_lib::acp::AcpConnectRequest {
                 root: fixture.root(),
+                env: None,
             },
             PEER.to_owned(),
         )
@@ -326,6 +329,7 @@ async fn an_idle_ego_is_woken_once_and_a_busy_one_is_left_alone() {
             &Fixture::config(),
             tuicommander_lib::acp::AcpConnectRequest {
                 root: fixture.root(),
+                env: None,
             },
             PEER.to_owned(),
         )

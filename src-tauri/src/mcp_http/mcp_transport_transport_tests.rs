@@ -5161,6 +5161,8 @@ fn a_native_tool_call_does_not_read_repo_settings() {
     use std::os::unix::ffi::OsStrExt;
 
     let dir = tempfile::tempdir().expect("tempdir");
+    let _config_guard = crate::config::set_config_dir_override(dir.path().to_path_buf());
+    let state = test_state();
     let fifo = dir.path().join("repo-settings.json");
     let c_path = std::ffi::CString::new(fifo.as_os_str().as_bytes()).unwrap();
     assert_eq!(
@@ -5168,9 +5170,6 @@ fn a_native_tool_call_does_not_read_repo_settings() {
         0,
         "mkfifo failed"
     );
-    let _config_guard = crate::config::set_config_dir_override(dir.path().to_path_buf());
-
-    let state = test_state();
     let sid = uuid::Uuid::new_v4().to_string();
     state.mcp.sessions.insert(
         sid.clone(),

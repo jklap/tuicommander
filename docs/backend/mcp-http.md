@@ -76,7 +76,7 @@ All native story transports share `archive_story`, `unarchive_story`, `archive_p
 
 `list_plans` and `list_stories` default to `archived: false`. Set `archived: true` to select archived records. The story filter combines with the other filters and is bound into pagination cursors. `filtered_plan_view` also accepts camel-case `filter.archived` (default false), which selects archived list ids and board columns without changing the active-plan state calculation. Direct reads remain available. Default plan views and workflow dispatch omit archived stories; archived plans and stories cannot start manual or workflow work. Restore the parent plan before starting its stories.
 
-Both archive and restore refuse claimed stories and plans that contain a claimed story. An active or paused plan-root workflow owns the plan's story set. A story-root workflow owns its target and execution stories, not unrelated siblings. Cleanup of an owned story or its parent plan is refused until the run ends. The workflow writer lock remains held through the archive transaction, so a concurrent run cannot start between the ownership check and the write.
+Both archive and restore refuse claimed stories and plans that contain a claimed story. Story archival also refuses any prerequisite that is not Done while an open dependent references it, including inside an archived plan. The refusal lists the dependent IDs and leaves the record and history unchanged. WontFix does not satisfy dependencies. Done prerequisites and unresolved stories with only closed dependents remain archivable. Adding a dependency to an archived unresolved story requires restoring it first; both dependency editors enforce this rule. Whole-plan archival does not change dependency readiness. An active or paused plan-root workflow owns the plan's story set. A story-root workflow owns its target and execution stories, not unrelated siblings. Cleanup of an owned story or its parent plan is refused until the run ends. The workflow writer lock remains held through the archive transaction, so a concurrent run cannot start between the ownership check and the write.
 
 `story_archive_history` (`story_id`) and `plan_archive_history` (`plan_id`) return `{type:"archive_history",value:[{revision,archived,actor}]}` in revision order. Events commit atomically with the record and retain caller provenance. Existing status transition history remains separate. Consecutive archive-only revisions preserve accepted-work integration receipts; a work change or a moved canonical Git ref still invalidates them. Example: `tuic story '{"action":"archive_story","story_id":"<id>","expected_revision":1}' --project /absolute/project`.
 
@@ -835,8 +835,9 @@ When intent markers are enabled for the connecting agent, initialize instruction
 
 ### Two instruction surfaces, and which one owns a rule
 
-Initialize instruction prose stays within the existing 1,600-byte classic and
-1,664-byte collapsed empty-state budgets. Compact wording preserves the answer
+Initialize instruction prose stays within 1,728-byte classic and
+1,792-byte collapsed empty-state budgets. The cross-client delegation rule adds
+one short fallback line for clients without a launch channel; other sections do not grow. Compact wording preserves the answer
 marker, urgent mail and progress reporting rules. The answer marker can start a
 row or the text of a Markdown list item; status, tool and hook/task notices stay
 excluded.
@@ -1518,6 +1519,14 @@ When the MCP client identifies as Claude Code (detected via `clientInfo.name` at
 This works around Claude Code's inability to change its working directory mid-session. The hint tells CC to spawn a subagent that uses absolute paths for all file operations (Read, Edit, Glob, Grep) and `cd <path> && ...` for shell commands.
 
 Non-Claude Code MCP clients do not receive this field.
+
+The Git and worktrees launch module tells launch-capable agents to delegate or
+parallelize through TUIC `agent action=spawn`/`launch`, never client-native
+subagents such as Claude Code Agent/Task. The Claude Code `cc_agent_hint` path
+above remains the CC-only exception for a single isolated worktree task. Clients
+without a launch instruction channel receive the consistent delegation rule in
+the cached MCP initialize prefix instead; launch-capable clients do not receive
+a second copy through MCP.
 
 ### MCP Tool: `repo` — Worktree List
 
@@ -3032,3 +3041,12 @@ expires on shutdown, cancellation or serving failure. Invalid PEM is fatal.
 ### Shared AI Chat selection
 
 `GET /acp/chat/selection` returns `{ workspace, sessionId }` for the host-configured canonical AI Chat workspace (`sessionId` is nullable). `PUT /acp/chat/selection` accepts `{ sessionId: string | null }` and requires local or authenticated access. It persists through the shared config delta writer. Last committed selection wins. Changes, including config deletion cleanup, dual-emit payload-free `ai-chat-selection-changed` on desktop IPC and `/events` SSE. Clients reread on this event and on reconnect; adopting a snapshot does not write it back. Repository focus and session CLI | Chat remain per device.
+
+### ACP connection launch environment
+
+`POST /acp/connections` and `acp_connect` accept the same optional string-map
+`env`. The manager passes it directly to the child configuration, before the
+host-issued peer identity, and does not retain it. Supplied env on an existing
+live peer is refused with disconnect-first guidance; an omitted env keeps
+normal adoption. Reconnect drops the previous overrides. Request diagnostics
+redact values, and connection snapshots contain no launch environment.

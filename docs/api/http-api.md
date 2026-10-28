@@ -59,7 +59,7 @@ All native story transports share `archive_story`, `unarchive_story`, `archive_p
 
 `list_plans` and `list_stories` default to `archived: false`. Set `archived: true` to select archived records. The story filter combines with the other filters and is bound into pagination cursors. `filtered_plan_view` also accepts camel-case `filter.archived` (default false), which selects archived list ids and board columns without changing the active-plan state calculation. Direct reads remain available. Default plan views and workflow dispatch omit archived stories; archived plans and stories cannot start manual or workflow work. Restore the parent plan before starting its stories.
 
-Both archive and restore refuse claimed stories and plans that contain a claimed story. An active or paused plan-root workflow owns the plan's story set. A story-root workflow owns its target and execution stories, not unrelated siblings. Cleanup of an owned story or its parent plan is refused until the run ends. The workflow writer lock remains held through the archive transaction, so a concurrent run cannot start between the ownership check and the write.
+Both archive and restore refuse claimed stories and plans that contain a claimed story. Story archival also refuses any prerequisite that is not Done while an open dependent references it, including inside an archived plan. The refusal lists the dependent IDs and leaves the record and history unchanged. WontFix does not satisfy dependencies. Done prerequisites and unresolved stories with only closed dependents remain archivable. Adding a dependency to an archived unresolved story requires restoring it first; both dependency editors enforce this rule. Whole-plan archival does not change dependency readiness. An active or paused plan-root workflow owns the plan's story set. A story-root workflow owns its target and execution stories, not unrelated siblings. Cleanup of an owned story or its parent plan is refused until the run ends. The workflow writer lock remains held through the archive transaction, so a concurrent run cannot start between the ownership check and the write.
 
 `story_archive_history` (`story_id`) and `plan_archive_history` (`plan_id`) return `{type:"archive_history",value:[{revision,archived,actor}]}` in revision order. Events commit atomically with the record and retain caller provenance. Existing status transition history remains separate. Consecutive archive-only revisions preserve accepted-work integration receipts; a work change or a moved canonical Git ref still invalidates them. Example: `tuic story '{"action":"archive_story","story_id":"<id>","expected_revision":1}' --project /absolute/project`.
 
@@ -2796,7 +2796,7 @@ opinion about it:
 | `protocol_violation` | 502 — the agent denied a method it advertised; the connection is now failed |
 
 ```
-POST   /acp/connections                                          {root}                    -> AcpConnectionSnapshot
+POST   /acp/connections                                          {root, env?}                    -> AcpConnectionSnapshot
 GET    /acp/connections/{connection_id}                                                    -> AcpConnectionSnapshot
 DELETE /acp/connections/{connection_id}                                                    -> AcpConnectionSettlement
 POST   /acp/connections/{connection_id}/kill                                               -> AcpConnectionSettlement
@@ -2829,6 +2829,16 @@ text. Other JSON routes retain the 2 MiB default body limit.
 that launch a process, and they are the three that take the
 loopback-or-authenticated guard. The executable is never in the body: it comes
 from the `ego_executable` setting.
+
+Connect accepts an optional `env` object of string names and values. Overrides
+apply only to the new child, never the host or another launch. Host-issued
+`TUIC_SESSION` takes precedence. A supplied map, including an empty map, is
+rejected with disconnect-first guidance if the root already has a live peer;
+omitting `env` adopts that peer as before. Reconnect starts without the previous
+overrides. Values are not stored in connection state, returned by read endpoints,
+or included in request diagnostics. The host does not censor agent-generated
+content if an agent itself prints a value.
+
 
 `prompt` returns an ID immediately. When the session already has a turn, the
 host queues the prompt and sends it only after the current ACP response leaves
@@ -3637,7 +3647,12 @@ are null, not inferred from defaults. Scope is `account_quota` or `session_usage
 Claude/Codex quota windows describe shared account windows, not session spend.
 Claude mobile refreshes retain the local credential plan in the profile-scoped cache
 shared with desktop. A missing credential plan stays absent; stale fallback data
-keeps its original plan and is marked stale.
+keeps its original plan and is marked stale. A mobile primary GET that returns HTTP 429 sets the
+same profile backoff used by desktop reads. The delay is at least 120 seconds;
+a numeric Retry-After can extend it up to 300 seconds. During backoff, reads
+return stale cache or unavailable without another request. Mobile quota reads
+never use the generating messages fallback. Timeouts and other errors do not
+activate rate-limit backoff.
 ego v3
 lines retain token categories, currencies, unknown costs and separate subscription
 API-equivalent estimates. `observed_at_ms` for ego is report creation, not latest

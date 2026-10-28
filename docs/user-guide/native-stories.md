@@ -63,7 +63,7 @@ To remove a cancelled prerequisite, any trusted caller, including a session-boun
 
 Caller identity does not restrict dependency removal. Managed MCP calls, the Plans and Stories dialog, and CLI or HTTP calls use the same state and revision rules within their project scope. A managed caller does not need to omit its session identity to remove a dependency.
 
-The same records are available through desktop IPC, guarded HTTP, and the `workflow action=story` MCP entry. `Done` records an approval with actor provenance. In a manual plan with no workflow run, approval immediately releases dependents whose other prerequisites are Done. Once a workflow run owns the plan, a dependent remains held until its accepted prerequisite has a current integration receipt: the checked source commit must be merged into the canonical branch and TUIC must pass the published checks on the merge result. A later unrecorded ref or tree change invalidates that proof. Import, export, and external sync are not part of this feature.
+The same records are available through desktop IPC, guarded HTTP, and the `workflow action=story` MCP entry. `Done` records an approval with actor provenance. In a manual plan with no workflow run, approval immediately releases dependents whose other prerequisites are Done. Once a workflow run owns the plan, a dependent remains held until its accepted prerequisite has a current integration receipt: the checked source commit must be merged into the canonical branch and TUIC must pass the published checks on the merge result. A later unrecorded ref or tree change invalidates that proof. Import, export, and bidirectional external sync are not supported. The optional mdkb search projection below is read-only.
 
 API and CLI callers can filter `list_stories` by native `state` (including `qa`), `priority`, and `story_type`. Add `limit` (1–100) to page the results, then send the returned `next_cursor` as `cursor` with the same plan and filters. The `value` field stays an array; no cursor means the final page. Omitting `limit` preserves a complete filtered list. For example: `tuic story '{"action":"list_stories","plan_id":"<id>","state":"ready","priority":1,"story_type":"fix","limit":25}' --project /absolute/project`. Dispatch order is not affected.
 
@@ -156,7 +156,7 @@ All native story transports share `archive_story`, `unarchive_story`, `archive_p
 
 `list_plans` and `list_stories` default to `archived: false`. Set `archived: true` to select archived records. The story filter combines with the other filters and is bound into pagination cursors. Direct reads remain available. Default plan views and workflow dispatch omit archived stories; archived plans and stories cannot start manual or workflow work. Restore the parent plan before starting its stories.
 
-Both archive and restore refuse claimed stories and plans that contain a claimed story. An active or paused plan-root workflow owns the plan's story set. A story-root workflow owns its target and execution stories, not unrelated siblings. Cleanup of an owned story or its parent plan is refused until the run ends. The workflow writer lock remains held through the archive transaction, so a concurrent run cannot start between the ownership check and the write.
+Both archive and restore refuse claimed stories and plans that contain a claimed story. Story archival also refuses any prerequisite that is not Done while an open dependent references it, including inside an archived plan. The refusal lists the dependent IDs and leaves the record and history unchanged. WontFix does not satisfy dependencies. Done prerequisites and unresolved stories with only closed dependents remain archivable. Adding a dependency to an archived unresolved story requires restoring it first; both dependency editors enforce this rule. Whole-plan archival does not change dependency readiness. An active or paused plan-root workflow owns the plan's story set. A story-root workflow owns its target and execution stories, not unrelated siblings. Cleanup of an owned story or its parent plan is refused until the run ends. The workflow writer lock remains held through the archive transaction, so a concurrent run cannot start between the ownership check and the write.
 
 `story_archive_history` (`story_id`) and `plan_archive_history` (`plan_id`) return `{type:"archive_history",value:[{revision,archived,actor}]}` in revision order. Events commit atomically with the record and retain caller provenance. Existing status transition history remains separate. Consecutive archive-only revisions preserve accepted-work integration receipts; a work change or a moved canonical Git ref still invalidates them. Example: `tuic story '{"action":"archive_story","story_id":"<id>","expected_revision":1}' --project /absolute/project`.
 
@@ -175,3 +175,32 @@ The same inputs work under `workflow` with `action:"story"` and `input` set to t
 Text is trimmed and must contain 1–16000 characters. Optional `source` must contain 1–256 characters after trimming. Without it, the source is the bound session id, or `local-api` for a sessionless request. Replies are `{type:"idea",value:Idea}` for add/update and `{type:"ideas",value:Idea[]}` for list. Idea records have camelCase fields: `id`, `text`, `createdAt` (Unix milliseconds), `repoPath`, `repoDisplayName`, `usedAt`, `images` and `source`.
 
 All mutations use the backend's locked notes writer. An `ideas-changed` desktop/SSE event reloads the panel without saving the read back. Local edits finish before reload; stale UI snapshots apply only their changed ids and fields to current disk state. They cannot remove unseen agent additions or restore a remotely deleted Idea. Concurrent text edits use the last committed text intent.
+
+## Search native stories with mdkb
+
+When an mdkb daemon with external-ingest support is running on the owning host,
+TUICommander pushes native stories into its project index under source
+`tuic-stories`. Search by a title, acceptance-criterion phrase or note with
+`mdkb search "phrase" --root /absolute/project`. Closed and archived stories
+remain searchable. The result is read-only: use the native story tools to change
+it, not mdkb. Plans remain their existing source documents.
+
+The story database remains authoritative. No story Markdown file is written to
+the project, and there is no `.tuic/stories` directory to commit or ignore.
+Committed story changes and notes wake a background sync on both desktop and
+headless hosts. Network calls never run inside a story mutation. An unavailable
+daemon does not prevent creating, editing, checking or closing a story.
+TUICommander retries every 30 seconds and compares story IDs and ingest revisions
+on each connection, sending only missing or newer records. It does not start or
+restart the daemon for this integration. The project must be admitted by mdkb's
+root whitelist.
+
+The persisted ingest revision also advances for notes, without changing the
+story revision used by workflow proof. A deletion retains an ingest tombstone;
+archiving is not deletion. Another isolated TUICommander instance can index the
+same project, so unknown IDs in mdkb are not deleted. Push failures are logged and
+retried. A document exceeding mdkb's 4 MiB request limit remains unsynchronized;
+its story mutation still succeeds. Restoring an older story database can leave
+mdkb with a newer revision: this conflict is logged, not silently overwritten.
+The indexed update time begins at migration for existing stories; it does not
+claim to reconstruct historical transition times.

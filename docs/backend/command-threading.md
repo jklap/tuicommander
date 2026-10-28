@@ -385,3 +385,12 @@ same backend-owned policy. Both use `spawn_blocking` for process inventory,
 locks and the native keepawake transition. Neither accepts a frontend busy flag.
 The dedicated `sleep-prevention` thread owns periodic reconciliation even when
 no WebView is loaded; it shares the same serialized native guard.
+
+## Event-run draft PR publication
+
+Completed event runs load validated automation definitions and read the workspace
+branch with `git rev-parse` through `spawn_blocking`. Filesystem locks and git
+process waits do not occupy a Tokio worker. The async continuation resolves the
+repository API and publishes the draft with the existing allowlist and branch
+checks. Prerequisite errors and blocking-task failures reach the existing
+publication warning; this boundary does not add retries or durable outcomes.

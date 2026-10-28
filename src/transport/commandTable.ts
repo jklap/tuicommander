@@ -213,7 +213,11 @@ export const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 		map: (args) => ({ method: "POST", path: "/acp/chat/open", body: args.request }),
 	},
 	acp_connect: {
-		map: (args) => ({ method: "POST", path: "/acp/connections", body: { root: args.root } }),
+		map: (args) => ({
+			method: "POST",
+			path: "/acp/connections",
+			body: { root: args.root, ...(args.env !== undefined ? { env: args.env } : {}) },
+		}),
 	},
 	acp_connection_snapshot: {
 		map: (_args, p) => ({ method: "GET", path: `/acp/connections/${p("connectionId")}` }),

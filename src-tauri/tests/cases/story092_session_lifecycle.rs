@@ -629,6 +629,7 @@ async fn an_acp_peer_keeps_one_identity_in_ego_and_its_conversation() {
             &Fixture::config(),
             tuicommander_lib::acp::AcpConnectRequest {
                 root: fixture.root(),
+                env: None,
             },
             peer.to_string(),
         )

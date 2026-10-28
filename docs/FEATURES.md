@@ -1017,6 +1017,7 @@ Every terminal tab has a stable UUID (`tuicSession`) injected as the `TUIC_SESSI
 
 ### 6.8 API Error Detection
 - Detects API errors (server errors, auth failures) from agent output and provider-level JSON error responses
+- Claude friendly auth/transport detection excludes tool receipts and their indented diagnostic continuations
 - Covers Claude Code, Codex CLI, Gemini CLI, Copilot, and raw API error JSON from providers (OpenAI, Anthropic, Google, OpenRouter, MiniMax)
 - Retains final failures in the red Error state through idle and unsuccessful auto-retry; supports Claude connection-loss prose, Codex native final-error rows and ego native provider-failure notifications. Native recovery countdowns do not set Error.
 - Triggers error notification sound and logs to the Error Log Panel
@@ -3007,7 +3008,7 @@ All native story transports share `archive_story`, `unarchive_story`, `archive_p
 
 `list_plans` and `list_stories` default to `archived: false`. Set `archived: true` to select archived records. The story filter combines with the other filters and is bound into pagination cursors. Direct reads remain available. Default plan views and workflow dispatch omit archived stories; archived plans and stories cannot start manual or workflow work. Restore the parent plan before starting its stories.
 
-Both archive and restore refuse claimed stories and plans that contain a claimed story. An active or paused plan-root workflow owns the plan's story set. A story-root workflow owns its target and execution stories, not unrelated siblings. Cleanup of an owned story or its parent plan is refused until the run ends. The workflow writer lock remains held through the archive transaction, so a concurrent run cannot start between the ownership check and the write.
+Both archive and restore refuse claimed stories and plans that contain a claimed story. Story archival also refuses any prerequisite that is not Done while an open dependent references it, including inside an archived plan. The refusal lists the dependent IDs and leaves the record and history unchanged. WontFix does not satisfy dependencies. Done prerequisites and unresolved stories with only closed dependents remain archivable. Adding a dependency to an archived unresolved story requires restoring it first; both dependency editors enforce this rule. Whole-plan archival does not change dependency readiness. An active or paused plan-root workflow owns the plan's story set. A story-root workflow owns its target and execution stories, not unrelated siblings. Cleanup of an owned story or its parent plan is refused until the run ends. The workflow writer lock remains held through the archive transaction, so a concurrent run cannot start between the ownership check and the write.
 
 `story_archive_history` (`story_id`) and `plan_archive_history` (`plan_id`) return `{type:"archive_history",value:[{revision,archived,actor}]}` in revision order. Events commit atomically with the record and retain caller provenance. Existing status transition history remains separate. Transition history uses readable command labels and 1-based criterion numbers, with the current criterion text when available. Actors show a live session name or an eight-character session ID; hover the actor to see the complete session ID. The current history API does not return timestamps. Consecutive archive-only revisions preserve accepted-work integration receipts; a work change or a moved canonical Git ref still invalidates them. Example: `tuic story '{"action":"archive_story","story_id":"<id>","expected_revision":1}' --project /absolute/project`.
 
@@ -3471,3 +3472,17 @@ bare unknown names remain command attempts (#2421-6e0a).
 ### Ego terminal usage (#2386-6f7c)
 
 Ego terminal usage uses the exact live pid lease and `ego usage --json` v3 or v4. The shared badge shows observed context tokens, the observed context capacity when present, complete monetary spend, and complete subscription API-price equivalents. Spend and equivalents remain separate. Version 4 also shows explicitly reported remaining requests, tokens, input tokens, output tokens, or USD. Session observations must match the exact provider/model; a current OpenRouter credential balance is labelled `openrouter key`, not session spend. The hover text includes each limit's observation time, source, and reported reset. Unknown fields stay hidden; TUIC does not calculate remaining balances from limit minus usage or borrow another provider account. The executable comes from the live terminal, not the AI Chat setting.
+
+ACP controllers can supply a launch-only environment map to one fresh connection.
+Overrides are not persisted or exposed in connection reads; reconnect drops them,
+and an env-bearing connect to a live peer requires an explicit disconnect first.
+
+### Native story search projection
+
+Native story commits feed an optional read-only mdkb daemon projection under
+`tuic-stories`. Persisted ingest revisions include notes without advancing the
+subject revision. Desktop and headless hosts compare ID/revision inventories on
+connection, retry unavailable daemons every 30 seconds, and retain deletion
+tombstones. Story mutations do not depend on daemon availability. Closed and
+archived stories stay searchable. No story file is written to the project;
+plans and the story mutation API are unchanged. See the native stories guide.
