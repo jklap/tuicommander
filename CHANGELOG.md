@@ -27,6 +27,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Preserve Claude subscription metadata when mobile quota refreshes the account cache shared with desktop (#2420-f7a6).
 - Keep agent and panel Ideas in the same registered repository collection across Windows canonical paths and symlink aliases, including existing Ideas (#2414-9805).
 
 - Use one backend address preference for phone secret entry and Remote Access pairing: active Tailscale HTTPS, then LAN, with HTTP-only network fallbacks (#2423-902c).

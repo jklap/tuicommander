@@ -1,3 +1,7 @@
+## Claude mobile quota plan cache (2420-f7a6) — Rust restart required
+
+- [ ] Coordinator: run `session_quota_refresh_preserves_plan_in_shared_cache`, `api_cache_isolated_by_profile`, and `rate_limit_backoff_isolated_by_profile` against the final commit. The targeted RED on rb reproduced a missing plan before the fix; no implementation-lane GREEN was run.
+- [ ] After an authorized `make dev` restart or `make build`, refresh Claude quota from mobile and confirm desktop retains the same subscription plan. The daily app was not restarted; Rust changes do not hot-reload.
 ## Ideas repository identity (2414-9805) — Rust rebuild/restart required
 
 - [ ] Coordinator: run `config::ideas::tests` on the final commit, plus the existing Ideas store/panel consumers. RED reproduced the canonical-versus-registered split on Linux rb; no post-fix GREEN run was made by the implementer. Run the same regression on Windows to verify native extended/portable path handling.
