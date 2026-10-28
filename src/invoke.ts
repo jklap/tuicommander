@@ -13,6 +13,7 @@ import { invoke as tauriInvoke } from "@tauri-apps/api/core";
 import { listen as tauriListen } from "@tauri-apps/api/event";
 import { isTauri, owningConnectionFor, rpc } from "./transport";
 import { emitSseLocalEvent, subscribeSse } from "./transport/sse";
+import { backendMismatchMessage } from "./utils/backendMismatch";
 
 type InvokeFn = <T>(cmd: string, args?: Record<string, unknown>) => Promise<T>;
 
@@ -80,6 +81,18 @@ const DEDUP_COMMANDS = new Set([
 	"get_claude_usage_api",
 ]);
 
+function invokeLocal<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
+	const result = args !== undefined ? tauriInvoke<T>(cmd, args) : tauriInvoke<T>(cmd);
+	if (!import.meta.env.DEV) return result;
+	return result.catch((failure: unknown) => {
+		const message = failure instanceof Error ? failure.message : failure;
+		if (message === `Command ${cmd} not found`) {
+			throw new Error(backendMismatchMessage(cmd), { cause: failure });
+		}
+		throw failure;
+	});
+}
+
 export function invoke<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
 	if (isTauri()) {
 		// A repository held by another machine is not reachable over this process's
@@ -92,13 +105,11 @@ export function invoke<T>(cmd: string, args?: Record<string, unknown>): Promise<
 			const key = args !== undefined ? `${cmd}:${JSON.stringify(args)}` : cmd;
 			const existing = _inflight.get(key) as Promise<T> | undefined;
 			if (existing) return existing;
-			const promise = (args !== undefined ? tauriInvoke<T>(cmd, args) : tauriInvoke<T>(cmd)).finally(() =>
-				_inflight.delete(key),
-			);
+			const promise = invokeLocal<T>(cmd, args).finally(() => _inflight.delete(key));
 			_inflight.set(key, promise as Promise<unknown>);
 			return promise;
 		}
-		return args !== undefined ? tauriInvoke<T>(cmd, args) : tauriInvoke<T>(cmd);
+		return invokeLocal<T>(cmd, args);
 	}
 	if (_httpInvoke) return _httpInvoke<T>(cmd, args);
 	return getHttpInvoke().then((fn) => fn<T>(cmd, args));
