@@ -3229,3 +3229,6 @@ Needs an iPhone (iOS 16.4+, 18.4+ preferred), the desktop TUICommander running a
   `ingest_closed_story_is_findable_in_real_mdkb_without_a_story_file` (requires
   installed mdkb; explicitly ignored in unattended runs).
 - [ ] Story title edit (#2427-a125): review the invalid-title border and Save tooltip at 201 characters; confirm 200 non-BMP characters remain intact. _(Headless capture attempted but Chrome returned no DOM or screenshot; unit RED and TypeScript evidence are retained separately.)_
+
+
+- [ ] After rebuilding the backend, put a short-TTL task secret, spawn with its scope, and confirm echoed output is masked in desktop, mobile and a diagnostic capture. A later spawn must reject the expired scope while the original session remains masked (#2319-02f6). Rust does not hot-reload; restart only when ready to end the current live app session.

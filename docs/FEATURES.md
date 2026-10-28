@@ -2951,6 +2951,11 @@ Use **Toggle answers-only view** (`Cmd+Alt+R` on macOS) to read selectable marke
 
 ## Private secret forms
 
+Controllers can also put write-only task-scoped values with a TTL and select the
+scope at agent spawn. Values enter only the child environment. TTL stops new
+injection; existing session masks remain until teardown. PTY output is sanitized
+before HTTP, WS, history, watchers and diagnostic captures (#2319-02f6).
+
 The private window offers a selectable full phone-entry URL, Copy URL, a browser
 link and QR code using the Remote Mobile address policy. Disabled remote access
 shows setup guidance. SSO HTTP(S) display URLs share the selectable link, copy

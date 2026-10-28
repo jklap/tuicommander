@@ -269,6 +269,7 @@ pub(super) struct PostPrReviewRequest {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct SpawnAgentRequest {
+    pub scope: Option<String>,
     pub rows: Option<u16>,
     pub cols: Option<u16>,
     pub cwd: Option<String>,

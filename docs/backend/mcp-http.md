@@ -3064,3 +3064,12 @@ host-issued peer identity, and does not retain it. Supplied env on an existing
 live peer is refused with disconnect-first guidance; an omitted env keeps
 normal adoption. Reconnect drops the previous overrides. Request diagnostics
 redact values, and connection snapshots contain no launch environment.
+
+### Task-scoped secrets
+
+`secret put` stores write-only name/value arrays under a task `scope` with a TTL
+in seconds. MCP runs through the existing app transport authentication. MCP
+`agent spawn` and HTTP `POST /sessions/agent` select the same scope and inject
+only child environment variables. Deadlines revoke future injection; per-session
+zeroizing masks remain until teardown. The PTY ingestion boundary sanitizes
+output before every publication path, including tcap and diagnostic rings.
