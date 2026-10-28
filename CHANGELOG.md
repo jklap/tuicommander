@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- Opt labelled-issue intake into a pinned native story workflow; require current independent review and configured checks on the pushed commit before opening its draft PR, with findings in the draft body (#2325-10c4).
+
 ### Fixed
 
 - Detect configured labelled-issue intake in event-driven setup guides instead of requiring a dedicated tool action; name the remaining triage, review-gate and PR-trigger gaps (#2328-15f2).

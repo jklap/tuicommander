@@ -93,12 +93,23 @@ impl AutomationRuntime {
                 let Some(state) = weak.upgrade() else {
                     return;
                 };
-                if let Err(error) = super::completion::reconcile(
-                    owner.store(),
-                    &super::completion::NativeCompletion(&state),
-                    chrono::Utc::now().timestamp_millis(),
-                ) {
-                    tracing::warn!(source="automations", %error, "Automation reconciliation failed");
+                let reconcile_state = state.clone();
+                let reconcile_store = owner.store().clone();
+                match tokio::task::spawn_blocking(move || {
+                    super::completion::reconcile(
+                        &reconcile_store,
+                        &super::completion::NativeCompletion(&reconcile_state),
+                        chrono::Utc::now().timestamp_millis(),
+                    )
+                })
+                .await
+                {
+                    Ok(Ok(())) => {}
+                    error => tracing::warn!(
+                        source = "automations",
+                        ?error,
+                        "Automation reconciliation failed"
+                    ),
                 }
                 if !scheduled_wake && !intake_wake {
                     continue;
@@ -328,7 +339,7 @@ mod tests {
                 repositories,
                 label: "tuic-run".into(),
                 definition_id: "not-dispatched".into(),
-            workflow: None,
+                workflow: None,
             },
             ..Default::default()
         };

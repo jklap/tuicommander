@@ -23,12 +23,26 @@ fn plain_ref(value: &str) -> bool {
 /// Create a draft PR through the GitHub HTTP layer. `api` is bound to one
 /// repository (`bound_repository`, resolved from the workspace remote); the PR
 /// is created only when that repository is the admitted one and is allowlisted.
+#[cfg(test)]
 pub(crate) async fn publish_draft_pr(
     intake: &EventIntake,
     api: &impl PrApi,
     bound_repository: &str,
     request: &DraftPr<'_>,
 ) -> Result<String, String> {
+    publish_reviewed_draft_pr(intake, api, bound_repository, request, None).await
+}
+
+pub(crate) async fn publish_reviewed_draft_pr(
+    intake: &EventIntake,
+    api: &impl PrApi,
+    bound_repository: &str,
+    request: &DraftPr<'_>,
+    review: Option<&crate::workflows::PublicationReview>,
+) -> Result<String, String> {
+    if intake.workflow.is_some() && review.is_none() {
+        return Err("Refusing to publish: native workflow review receipt is missing".into());
+    }
     if !intake.allows(request.repository) || !intake.allows(bound_repository) {
         return Err(format!(
             "Refusing to publish: {} is not in the event intake allowlist",
@@ -41,13 +55,31 @@ pub(crate) async fn publish_draft_pr(
     if !plain_ref(request.head) || !plain_ref(request.base) {
         return Err("Refusing to publish: invalid head or base branch".into());
     }
+    if let Some(review) = review {
+        let branch: String =
+            url::form_urlencoded::byte_serialize(request.head.as_bytes()).collect();
+        let remote = api
+            .rest("GET", &format!("commits/{branch}"), serde_json::Value::Null)
+            .await?;
+        if remote.get("sha").and_then(serde_json::Value::as_str) != Some(review.commit.as_str()) {
+            return Err(
+                "Refusing to publish: pushed branch SHA differs from reviewed and checked commit"
+                    .into(),
+            );
+        }
+    }
+    let mut body = format!(
+        "Closes #{}\n\nDraft opened by a TUICommander event run.",
+        request.issue_number
+    );
+    if let Some(review) = review {
+        body.push_str("\n\n");
+        body.push_str(&review.findings);
+    }
     let created = crate::github::create_pr_with(
         api,
         &format!("Resolve issue #{}", request.issue_number),
-        &format!(
-            "Closes #{}\n\nDraft opened by a TUICommander event run.",
-            request.issue_number
-        ),
+        &body,
         request.base,
         request.head,
         true,

@@ -7,6 +7,7 @@ const SANDBOX: &str = "sstraus/tuic-test-sandbox";
 #[derive(Default)]
 struct Stub {
     calls: Mutex<Vec<(String, String, Value)>>,
+    pushed_sha: Option<String>,
 }
 
 impl PrApi for Stub {
@@ -24,6 +25,9 @@ impl PrApi for Stub {
             .lock()
             .unwrap()
             .push((method.into(), endpoint.into(), body));
+        if method == "GET" {
+            return std::future::ready(Ok(json!({"sha": self.pushed_sha})));
+        }
         std::future::ready(Ok(json!({
             "number": 9, "html_url": format!("https://github.com/{SANDBOX}/pull/9"), "title": "t"
         })))
@@ -35,7 +39,7 @@ fn intake() -> EventIntake {
         repositories: vec![SANDBOX.into()],
         label: "tuic-run".into(),
         definition_id: "pilot".into(),
-    workflow: None,
+        workflow: None,
     }
 }
 
@@ -115,4 +119,83 @@ async fn an_option_looking_or_detached_head_is_refused() {
         );
     }
     assert_eq!(*api.calls.lock().unwrap(), Vec::new());
+}
+
+// Catches: a completed event publishing through the legacy path without a native review receipt.
+#[tokio::test]
+async fn configured_event_without_review_receipt_does_not_publish() {
+    let api = Stub::default();
+    let mut config = intake();
+    config.workflow = Some(crate::automations::model::EventWorkflow {
+        definition_id: "reviewed-story".into(),
+        definition_revision: 1,
+    });
+    assert!(
+        publish_draft_pr(&config, &api, SANDBOX, &request(SANDBOX, "fix-3"))
+            .await
+            .is_err()
+    );
+    assert!(api.calls.lock().unwrap().is_empty());
+}
+
+// Catches: checks/review for the previous push authorizing a newer branch head.
+#[tokio::test]
+async fn newer_push_blocks_reviewed_event_publication() {
+    let api = Stub {
+        pushed_sha: Some("b".repeat(40)),
+        ..Default::default()
+    };
+    let review = crate::workflows::PublicationReview {
+        workspace: "/unused".into(),
+        commit: "a".repeat(40),
+        findings: "Independent findings".into(),
+    };
+    let result = publish_reviewed_draft_pr(
+        &intake(),
+        &api,
+        SANDBOX,
+        &request(SANDBOX, "fix/3"),
+        Some(&review),
+    )
+    .await;
+    assert!(result.unwrap_err().contains("pushed branch SHA differs"));
+    let calls = api.calls.lock().unwrap();
+    assert_eq!(calls.len(), 1);
+    assert_eq!(
+        (calls[0].0.as_str(), calls[0].1.as_str()),
+        ("GET", "commits/fix%2F3")
+    );
+}
+
+// Catches: a permitted publication discarding the independent review findings.
+#[tokio::test]
+async fn matching_pushed_commit_publishes_independent_findings_in_the_draft() {
+    let api = Stub {
+        pushed_sha: Some("a".repeat(40)),
+        ..Default::default()
+    };
+    let review = crate::workflows::PublicationReview {
+        workspace: "/unused".into(),
+        commit: "a".repeat(40),
+        findings: "Independent review: minor finding and supporting evidence".into(),
+    };
+    publish_reviewed_draft_pr(
+        &intake(),
+        &api,
+        SANDBOX,
+        &request(SANDBOX, "fix-3"),
+        Some(&review),
+    )
+    .await
+    .unwrap();
+    let calls = api.calls.lock().unwrap();
+    assert_eq!(calls.len(), 2);
+    assert_eq!(calls[1].0, "POST");
+    assert_eq!(calls[1].2["draft"], true);
+    assert!(
+        calls[1].2["body"]
+            .as_str()
+            .unwrap()
+            .contains(&review.findings)
+    );
 }

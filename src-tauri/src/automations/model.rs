@@ -50,6 +50,13 @@ impl EventIntake {
         if !self.enabled() {
             return Ok(());
         }
+        if let Some(workflow) = &self.workflow
+            && (workflow.definition_id.trim().is_empty() || workflow.definition_revision < 1)
+        {
+            return Err(
+                "Event workflow needs a published definition id and positive revision".into(),
+            );
+        }
         for repository in &self.repositories {
             let valid = repository.split_once('/').is_some_and(|(owner, name)| {
                 [owner, name].iter().all(|part| {

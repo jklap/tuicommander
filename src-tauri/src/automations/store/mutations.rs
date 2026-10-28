@@ -57,6 +57,9 @@ impl RunStore {
         if !next.is_open() {
             run.finished_ms = Some(now_ms);
         }
+        if let Some(value) = details.workflow_binding {
+            run.workflow_binding = Some(value);
+        }
         if let Some(value) = details.task_id {
             run.task_id = Some(value);
         }
@@ -108,6 +111,29 @@ impl RunStore {
         write(&tx, &run)?;
         tx.commit().map_err(error)?;
         Ok(run)
+    }
+
+    /// Publication diagnostics do not change the immutable execution outcome.
+    pub(crate) fn record_publication(
+        &self,
+        id: &str,
+        outcome: &Result<String, String>,
+    ) -> Result<(), String> {
+        self.require_owner()?;
+        let mut conn = self.connect()?;
+        let tx = conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(error)?;
+        let mut run = read(&tx, id)?;
+        if run.status != RunStatus::Completed || run.trigger.event_key().is_none() {
+            return Err("publication requires a completed event run".into());
+        }
+        run.reason = Some(match outcome {
+            Ok(url) => format!("Draft PR opened: {url}"),
+            Err(reason) => format!("Draft PR not opened: {reason}"),
+        });
+        write(&tx, &run)?;
+        tx.commit().map_err(error)
     }
 
     /// Interrupt all open runs in one commit. Recovery never returns work to dispatch.

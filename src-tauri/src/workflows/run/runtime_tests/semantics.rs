@@ -483,3 +483,171 @@ pub(super) mod plan_dispatch;
 
 #[path = "critic_de.rs"]
 mod critic_de;
+
+// Catches: configured event dispatch spawning a plain implementer, losing the isolated
+// artifact, or permitting publication with missing/stale native review/check evidence.
+#[tokio::test]
+async fn event_workflow_creates_native_story_and_reuses_current_review_and_check_authority() {
+    let (config, project, _plan, _story, _template, _guard) = fixture();
+    let worktree = init_worktree(project.path(), config.path());
+    let project_path = canonical_owner(project.path().to_str().unwrap());
+    let definitions = WorkflowStore::open().unwrap();
+    let template = definitions
+        .seed_templates(&project_path)
+        .unwrap()
+        .into_iter()
+        .find(|d| d.kind == WorkflowKind::Story)
+        .unwrap();
+    let mut graph = template.graph;
+    for node in &mut graph.nodes {
+        if let NodeKind::Pause { resume_to } = &mut node.kind {
+            *resume_to = Some("implement".into());
+        }
+    }
+    let published = publish(&project_path, graph);
+    let state = state(config.path());
+    WorkflowRuntime::spawn(&state);
+    owner_ready(&state).await;
+    let definition = serde_json::from_value(serde_json::json!({
+        "id":"event", "name":"Issue", "prompt":"Resolve the issue", "run_config":"unused-legacy-profile",
+        "repository":project_path, "workspace":{"mode":"new_per_run","base_branch":"main"},
+        "cron":"0 * * * *", "timezone":"UTC", "enabled":true, "grace_secs":60,
+        "overlap":"skip", "max_duration_secs":3600, "precheck":null
+    })).unwrap();
+    let automation_owner = crate::automations::store::RunOwner::acquire_at(
+        &config.path().join("automation.sqlite3"),
+        0,
+    )
+    .unwrap();
+    let mut automation = automation_owner
+        .store()
+        .reserve(&definition, crate::automations::run::RunTrigger::Manual, 1)
+        .unwrap()
+        .unwrap();
+    automation.trigger = crate::automations::run::RunTrigger::Event {
+        repository: "owner/repo".into(),
+        issue_number: 3,
+        label: "run".into(),
+    };
+    automation.event_workflow = Some(crate::automations::model::EventWorkflow {
+        definition_id: published.id.clone(),
+        definition_revision: published.revision,
+    });
+    let binding = crate::automations::event_workflow::start(
+        &state,
+        &automation,
+        &worktree,
+        "Resolve issue #3 and preserve the interface",
+    )
+    .unwrap();
+    automation.workflow_binding = Some(binding.clone());
+    let store = RunStore::open().unwrap();
+    let current = store.snapshot(&binding.run_id).unwrap();
+    let native = StoryStore::open()
+        .unwrap()
+        .get_story(&binding.story_id)
+        .unwrap();
+    assert_eq!(
+        native.origin,
+        crate::stories::StoryOrigin::GitHubIssue { number: 3 }
+    );
+    assert_eq!(
+        native.problem.as_deref(),
+        Some("Resolve issue #3 and preserve the interface")
+    );
+    assert!(native.criteria[0].contains("https://github.com/owner/repo/issues/3"));
+    assert_eq!(
+        current.stories[0].worktree_path.as_deref(),
+        Some(worktree.as_str())
+    );
+    assert_eq!(current.definition_id, published.id);
+    assert!(crate::automations::event_workflow::review(&automation).is_err());
+    let implement = current.attempts.last().unwrap().clone();
+    store
+        .begin_graph_story(&current, &binding.story_id, "workflow-implementer")
+        .unwrap();
+    bind(&store, &current.id, &implement, "implementer");
+    report(&store, &current.id, &implement, "implementer", None);
+    let current = drive_turn(&store, &current.id).unwrap();
+    let reviewer = current.attempts.last().unwrap().clone();
+    bind(&store, &current.id, &reviewer, "reviewer");
+    let stories = StoryStore::open().unwrap();
+    let native = stories.get_story(&binding.story_id).unwrap();
+    let native = stories
+        .transition(&native.id, native.revision, StoryCommand::CheckCriterion(0))
+        .unwrap();
+    stories
+        .transition(&native.id, native.revision, StoryCommand::SubmitReview)
+        .unwrap();
+    let (commit, tree) =
+        super::super::check::clean_artifact(std::path::Path::new(&worktree)).unwrap();
+    report(
+        &store,
+        &current.id,
+        &reviewer,
+        "reviewer",
+        Some(ReviewAssessment {
+            decision: ReviewDecision::Approved,
+            artifact_digest: artifact_digest(&commit, &tree),
+            findings: vec![ReviewFinding {
+                criterion_index: 0,
+                severity: ReviewSeverity::Minor,
+                summary: "Interface preserved".into(),
+                evidence: "Compared public exports".into(),
+            }],
+        }),
+    );
+    let current = drive_turn(&store, &current.id).unwrap();
+    let graph = &current.graph_executions[0];
+    let activation = graph.activations.last().unwrap();
+    super::super::runtime::policy::drive_policy(&store, &current, graph, activation).unwrap();
+    let checked = store.snapshot(&current.id).unwrap();
+    super::super::runtime::policy::drive_policy(
+        &store,
+        &checked,
+        &checked.graph_executions[0],
+        activation,
+    )
+    .unwrap();
+    let completed = drive_turn(&store, &current.id).unwrap();
+    assert!(completed.graph_executions[0].completed);
+    assert_eq!(
+        completed.status,
+        RunStatus::Running,
+        "ordinary standalone graph lifecycle is unchanged"
+    );
+    let observation = crate::automations::event_workflow::observe(&state, &automation);
+    assert_eq!(observation.task, Some(crate::tasks::TaskStatus::Completed));
+    let completed = store.snapshot(&current.id).unwrap();
+    assert_eq!(completed.status, RunStatus::Completed);
+    let receipt = crate::automations::event_workflow::review(&automation).unwrap();
+    assert_eq!(receipt.commit, commit);
+    assert!(receipt.findings.contains("Interface preserved"));
+    assert!(receipt.findings.contains("Compared public exports"));
+    assert!(receipt.findings.contains("reviewer"));
+    // Missing checks and self-review fail closed at the publication boundary.
+    let mut missing = completed.clone();
+    missing.stories[0].check_receipts.clear();
+    assert!(super::super::publication_review(&missing, &binding.story_id).is_err());
+    let mut same_agent = completed.clone();
+    same_agent
+        .attempts
+        .iter_mut()
+        .find(|a| a.id == reviewer.id)
+        .unwrap()
+        .agent
+        .as_mut()
+        .unwrap()
+        .session_id = "implementer".into();
+    assert!(super::super::publication_review(&same_agent, &binding.story_id).is_err());
+    crate::git_cli::git_cmd(std::path::Path::new(&worktree))
+        .args(["commit", "--allow-empty", "-qm", "newer unreviewed commit"])
+        .run()
+        .unwrap();
+    assert!(
+        crate::automations::event_workflow::review(&automation)
+            .err()
+            .unwrap()
+            .contains("artifact moved")
+    );
+}

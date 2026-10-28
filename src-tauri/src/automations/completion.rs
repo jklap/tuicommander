@@ -20,6 +20,7 @@ pub(crate) struct Observation {
     pub exit: Option<i32>,
     pub progress: Option<crate::progress::ProgressKind>,
     pub output: Option<String>,
+    pub reason: Option<String>,
 }
 
 pub(crate) trait CompletionEffects {
@@ -58,7 +59,7 @@ pub(crate) fn reconcile(
             next,
             RunDetails {
                 stdout: (!next.is_open()).then_some(observed.output).flatten(),
-                reason: Some(
+                reason: Some(observed.reason.unwrap_or_else(|| {
                     match next {
                         RunStatus::Completed => {
                             "Completion confirmed by task, progress or known process exit"
@@ -71,8 +72,8 @@ pub(crate) fn reconcile(
                         }
                         _ => "Owned agent resumed",
                     }
-                    .into(),
-                ),
+                    .into()
+                })),
                 ..Default::default()
             },
             now.max(run.updated_ms),
@@ -117,6 +118,9 @@ fn classify(o: &Observation) -> Option<RunStatus> {
 pub(crate) struct NativeCompletion<'a>(pub &'a std::sync::Arc<AppState>);
 impl CompletionEffects for NativeCompletion<'_> {
     fn observe(&self, run: &AutomationRun) -> Observation {
+        if run.event_workflow.is_some() {
+            return super::event_workflow::observe(self.0, run);
+        }
         let Some(session) = run.session_id.as_deref() else {
             return Observation::default();
         };
@@ -176,6 +180,7 @@ impl CompletionEffects for NativeCompletion<'_> {
                 .get(session)
                 .map(|code| *code),
             progress,
+            reason: None,
             output: self
                 .0
                 .session_maps
@@ -189,6 +194,9 @@ impl CompletionEffects for NativeCompletion<'_> {
     }
 
     fn stop(&self, run: &AutomationRun) -> Result<(), String> {
+        if let Some(binding) = &run.workflow_binding {
+            return super::event_workflow::stop(self.0, binding);
+        }
         let Some(session) = run.session_id.as_deref() else {
             return Ok(());
         };
@@ -264,13 +272,31 @@ fn publish_event_draft_pr(state: &std::sync::Arc<AppState>, run: &AutomationRun)
         workspace.clone(),
         run.id.clone(),
     );
+    let run = run.clone();
     tokio::spawn(async move {
         let outcome = async {
-            let (intake, head) =
+            let review_run = run.clone();
+            let review = tokio::task::spawn_blocking(move || {
+                if review_run.event_workflow.is_some() {
+                    super::event_workflow::review(&review_run).map(Some)
+                } else {
+                    Ok(None)
+                }
+            })
+            .await
+            .map_err(|e| format!("Event publication review task: {e}"))??;
+            let workspace = review
+                .as_ref()
+                .map(|r| r.workspace.clone())
+                .unwrap_or(workspace);
+            let (mut intake, head) =
                 event_publication_prerequisites(DefinitionStore::new, workspace.clone()).await?;
+            if run.event_workflow.is_some() {
+                intake.workflow = run.event_workflow.clone();
+            }
             let api = crate::github_pr_api::RepoApi::resolve(&state, &workspace).await?;
             let bound = format!("{}/{}", api.owner, api.repo);
-            super::publish::publish_draft_pr(
+            super::publish::publish_reviewed_draft_pr(
                 &intake,
                 &api,
                 &bound,
@@ -280,10 +306,26 @@ fn publish_event_draft_pr(state: &std::sync::Arc<AppState>, run: &AutomationRun)
                     base: &base_branch,
                     issue_number,
                 },
+                review.as_ref(),
             )
             .await
         }
         .await;
+        let persisted = state.automation_runtime.notification_store();
+        let durable_outcome = outcome.clone();
+        let durable_id = run_id.clone();
+        if let Some(store) = persisted {
+            match tokio::task::spawn_blocking(move || {
+                store.record_publication(&durable_id, &durable_outcome)
+            })
+            .await
+            {
+                Ok(Ok(())) => {}
+                error => {
+                    tracing::warn!(source="automations", %run_id, ?error, "Publication outcome persistence failed")
+                }
+            }
+        }
         match outcome {
             Ok(url) => tracing::info!(source = "automations", %run_id, %url, "Draft PR opened"),
             Err(error) => {
