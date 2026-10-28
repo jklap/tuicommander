@@ -16078,3 +16078,65 @@ async fn task_secret_echo_does_not_leak_http_or_ws_2319() {
     );
     assert!(live.contains("before") && live.contains("after"));
 }
+
+fn secret_output_fixture_2319(value: &str) -> (Arc<AppState>, Arc<Mutex<SilenceState>>) {
+    let state = Arc::new(crate::state::tests_support::make_test_app_state());
+    let form = state.secrets.open(crate::secrets::Form::request(
+        vec![crate::secrets::Field { name: "TASK_TOKEN".into(), kind: crate::secrets::FieldKind::Password, display: None }],
+        "stream boundary regression".into(),
+    ).unwrap()).unwrap();
+    state.secrets.submit(&form.nonce, crate::secrets::Submission {
+        nonce: form.nonce.clone(), status: "stored".into(),
+        values: std::collections::BTreeMap::from([("TASK_TOKEN".into(), value.into())]), template: None,
+    }).unwrap();
+    state.session_maps.output_buffers.insert("secret-boundary-2319".into(), Mutex::new(crate::OutputRingBuffer::new(4096)));
+    (state, Arc::new(Mutex::new(SilenceState::new())))
+}
+
+// Catches: decoder context is published before a split Basic credential is complete.
+#[test]
+fn task_secret_basic_split_leaks_credential_2319() {
+    let (state, silence) = secret_output_fixture_2319("s3cr3t!");
+    let id = "secret-boundary-2319";
+    for split in 0..=16 {
+        let mut processor = ChunkProcessor::new(None, None);
+        let (tx, mut rx) = tokio::sync::mpsc::channel(8);
+        state.ws_clients.insert(id.into(), vec![tx]);
+        let encoded = "dXNlcjpzM2NyM3Qh";
+        processor.process_chunk(&format!("Authorization: Basic {}", &encoded[..split]), &silence, id, &state);
+        processor.process_chunk(&format!("{}!", &encoded[split..]), &silence, id, &state);
+        let mut output = String::new();
+        while let Ok(chunk) = rx.try_recv() { output.push_str(&chunk); }
+        assert!(!output.contains(encoded), "Basic credential leaked at split={split}: {output}");
+        assert!(output.ends_with('!'), "safe suffix missing at split={split}: {output}");
+    }
+}
+
+// Catches: redaction marks on an overlapping secret tail disappear between reads.
+#[test]
+fn task_secret_overlap_exposes_masked_tail_2319() {
+    let (state, silence) = secret_output_fixture_2319("abab");
+    let id = "secret-boundary-2319";
+    let (tx, mut rx) = tokio::sync::mpsc::channel(8);
+    state.ws_clients.insert(id.into(), vec![tx]);
+    let mut processor = ChunkProcessor::new(None, None);
+    for chunk in ["abab", "ab", "!"] { processor.process_chunk(chunk, &silence, id, &state); }
+    let mut output = String::new();
+    while let Ok(chunk) = rx.try_recv() { output.push_str(&chunk); }
+    assert_eq!(output, "******!", "overlapping secret tail leaked");
+}
+
+// Catches: EOF publishes a secret held inside an unfinished OSC without sanitizing.
+#[test]
+fn task_secret_unfinished_osc_eof_leaks_2319() {
+    let (state, _silence) = secret_output_fixture_2319("canary-secret-2319");
+    let id = "secret-boundary-2319";
+    let (tx, mut rx) = tokio::sync::mpsc::channel(8);
+    state.ws_clients.insert(id.into(), vec![tx]);
+    let mut utf8 = Utf8ReadBuffer::new();
+    let mut escape = EscapeAwareBuffer::new();
+    assert_eq!(escape.push("\x1b]0;canary-secret-2319"), "");
+    let remaining = flush_eof(&mut utf8, &mut escape, id, &state);
+    let live = rx.try_recv().expect("EOF WS output");
+    assert!(!remaining.contains("canary-secret-2319") && !live.contains("canary-secret-2319"), "EOF secret leaked to watchers or WS");
+}
