@@ -68,6 +68,8 @@ Both archive and restore refuse claimed stories and plans that contain a claimed
 
 `POST /stories/action?path=<absolute-project>` accepts `{ "action": StoryAction, "sessionId"?: string }` and returns a tagged `StoryReply` (`{type, value}`). `StoryAction` uses a snake-case `action` discriminator: `create_plan`, `list_plans`, `list_plan_sources`, `add_plan_source`, `get_plan`, `plan_state`, `plan_view`, `filtered_plan_view`, `create_story`, `update_story`, `list_stories`, `get_story`, `transition_history`, `add_dependency`, `remove_dependency`, `claim`, or `transition`. Create-story input uses the shared camel-case `NewStory` fields. `create_plan` takes `title` and `source`; `add_plan_source` takes a local document `source` and derives its title from front matter or the first heading. `list_plan_sources` reads top-level Markdown files in `plans/` and `.claude/plans/`, so a new file appears on the next call. It returns `{type:"plan_sources",value:[{title,source}]}`. `get_plan`, `plan_state`, `plan_view`, and `list_stories` take `plan_id`; `get_story` and `transition_history` take `story_id`; `claim` takes `story_id` and `expected_revision`; `transition` also takes a `command`; both dependency actions take `story_id`, `dependency_id`, and `expected_revision`. `transition_history` returns committed transitions with their resulting revisions, commands, and actor provenance.
 
+`add_plan_source` reuses an active plan with the same source. If only an archived plan matches, it returns an error that identifies the plan and gives explicit restore instructions; it does not create another record or change archive state.
+
 Story transition provenance comes from host-validated credentials: desktop IPC and credential-authenticated HTTP record `human`; sessionless local HTTP records `local_api`. Managed calls record their session identity, including when the claiming session approves its own story. Actor identity never restricts actions; state, revision, project and claim-conflict rules remain enforced.
 
 `plan_view` returns `{type:"plan_view",value:{stories,state,wontFixCount,allCancelled,visibleStoryIds,columns}}`. Each story in `stories` includes a read-only `abandoned` boolean, derived from whether that story or any dependency reachable from it is WontFix. The summary and state are derived from the same read; no abandonment flag is persisted.
@@ -2794,7 +2796,7 @@ opinion about it:
 | `protocol_violation` | 502 — the agent denied a method it advertised; the connection is now failed |
 
 ```
-POST   /acp/connections                                          {root}                    -> AcpConnectionSnapshot
+POST   /acp/connections                                          {root, env?}                    -> AcpConnectionSnapshot
 GET    /acp/connections/{connection_id}                                                    -> AcpConnectionSnapshot
 DELETE /acp/connections/{connection_id}                                                    -> AcpConnectionSettlement
 POST   /acp/connections/{connection_id}/kill                                               -> AcpConnectionSettlement
@@ -2827,6 +2829,16 @@ text. Other JSON routes retain the 2 MiB default body limit.
 that launch a process, and they are the three that take the
 loopback-or-authenticated guard. The executable is never in the body: it comes
 from the `ego_executable` setting.
+
+Connect accepts an optional `env` object of string names and values. Overrides
+apply only to the new child, never the host or another launch. Host-issued
+`TUIC_SESSION` takes precedence. A supplied map, including an empty map, is
+rejected with disconnect-first guidance if the root already has a live peer;
+omitting `env` adopts that peer as before. Reconnect starts without the previous
+overrides. Values are not stored in connection state, returned by read endpoints,
+or included in request diagnostics. The host does not censor agent-generated
+content if an agent itself prints a value.
+
 
 `prompt` returns an ID immediately. When the session already has a turn, the
 host queues the prompt and sends it only after the current ACP response leaves

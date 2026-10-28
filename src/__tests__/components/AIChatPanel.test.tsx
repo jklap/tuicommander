@@ -383,6 +383,24 @@ it("starts a new chat after closing a refused push-linked conversation in a fres
 	}
 });
 
+// Catches: a hot-reloaded frontend offers Retry for a command absent from the running backend.
+it("dev_missing_command_explains_backend_frontend_mismatch_without_retry", async () => {
+	vi.mocked(invoke).mockImplementation(async (command) => {
+		if (command === "load_config") return { ai_chat_sessions: {} };
+		if (command === "acp_workspace_root") return CHAT_ROOT;
+		if (command === "select_ai_chat_conversation") {
+			// Recorded incident: story 2409-aa48, Boss's 2026-10-28 AI Chat error.
+			throw "Command select_ai_chat_conversation not found";
+		}
+		return undefined;
+	});
+	const { container } = await renderPanel();
+	await vi.waitFor(() => expect(container.textContent).toContain("Backend/frontend version mismatch"));
+	expect(container.textContent).toContain("Restart make dev");
+	expect(container.textContent).toContain("select_ai_chat_conversation");
+	expect([...container.querySelectorAll("button")].some((button) => button.textContent === "Retry")).toBe(false);
+});
+
 describe("AIChatPanel: repository profile warnings", () => {
 	// Catches an authoritative ego clamp silently discarded by the chat host.
 	it("shows recorded ego clamp warnings once for the attached conversation", async () => {

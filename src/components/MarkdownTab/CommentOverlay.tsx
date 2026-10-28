@@ -7,7 +7,7 @@
  *   Mount once inside MarkdownTab. Pass `contentRef` (the rendered markdown
  *   container) and callbacks for save/delete that operate on the raw source.
  */
-import { marked, type Token } from "marked";
+import { marked, type Token, type TokensList } from "marked";
 import { type Component, createEffect, createSignal, onCleanup, onMount, Show } from "solid-js";
 import { Portal } from "solid-js/web";
 import {
@@ -143,6 +143,14 @@ export const CommentOverlay: Component<CommentOverlayProps> = (props) => {
 	// captured alongside the text so the correct source instance is anchored.
 	let pendingOccurrence = 0;
 	let hoveredBlock: HTMLElement | null = null;
+	// Keep only the current document's definitions; selection events lex just their block.
+	let referenceDefinitions: { source: string; links: TokensList["links"] } | undefined;
+	const linksForSource = (source: string) => {
+		if (referenceDefinitions?.source !== source) {
+			referenceDefinitions = { source, links: marked.lexer(source).links };
+		}
+		return referenceDefinitions.links;
+	};
 
 	const clearBlockTarget = () => {
 		hoveredBlock?.classList.remove("tweak-block-target");
@@ -204,7 +212,7 @@ export const CommentOverlay: Component<CommentOverlayProps> = (props) => {
 		const rect = rects.length > 0 ? rects[rects.length - 1] : range.getBoundingClientRect();
 		const chat = props.chatReference;
 		const text = sel.toString().trim();
-		const match = chat && selectionSourceMatch(chat.source, props.contentRef, range, text);
+		const match = chat && selectionSourceMatch(chat.source, props.contentRef, range, text, linksForSource(chat.source));
 		if (chat && match) {
 			const first = chat.source.slice(0, match.start).split("\n").length;
 			const last = chat.source.slice(0, match.end).split("\n").length;
@@ -619,7 +627,7 @@ export const CommentOverlay: Component<CommentOverlayProps> = (props) => {
 const BLOCK_TAGS = new Set(["P", "H1", "H2", "H3", "H4", "H5", "H6", "LI", "BLOCKQUOTE", "PRE", "TD", "TH"]);
 
 /** Keep source coordinates, but exclude link syntax that has no rendered text. */
-function visibleLinkSource(source: string, documentSource: string): string {
+function visibleLinkSource(source: string, links: TokensList["links"]): string {
 	const chars = source.split("");
 	const hide = (start: number, end: number) => {
 		for (let i = start; i < end; i++) {
@@ -644,12 +652,18 @@ function visibleLinkSource(source: string, documentSource: string): string {
 		}
 	};
 	const lexer = new marked.Lexer();
-	lexer.tokens.links = marked.lexer(documentSource).links;
+	lexer.tokens.links = links;
 	visit(lexer.inlineTokens(source), 0);
 	return chars.join("");
 }
 
-function selectionSourceMatch(source: string, root: HTMLElement, range: Range, text: string) {
+function selectionSourceMatch(
+	source: string,
+	root: HTMLElement,
+	range: Range,
+	text: string,
+	links: TokensList["links"],
+) {
 	const element =
 		range.startContainer.nodeType === Node.ELEMENT_NODE
 			? (range.startContainer as Element)
@@ -658,7 +672,7 @@ function selectionSourceMatch(source: string, root: HTMLElement, range: Range, t
 	const start = block && root.contains(block) ? Number(block.dataset.commentSourceStart) : 0;
 	const end = block && root.contains(block) ? Number(block.dataset.commentSourceEnd) : source.length;
 	const match = findSourceMatch(
-		visibleLinkSource(source.slice(start, end), source),
+		visibleLinkSource(source.slice(start, end), links),
 		text,
 		occurrenceOrdinal(block ?? root, range, text),
 	);
