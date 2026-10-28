@@ -1,6 +1,10 @@
 ## Terminal Compose growth (2447-9d28)
 
 - [ ] Confirm the compact editor feels right in CLI overlay and docked Chat: empty one line, wrapping and Ctrl+Enter grow to the former 96px height, longer drafts scroll inside, and clearing or successful sending shrinks it. Automated worktree-browser geometry evidence is recorded in the story worklog.
+## Remote daemon version guidance (2445-fc5d) — Rust rebuild/restart required
+
+- [ ] Coordinator: capture the remote card with a known older daemon in Error and Connected states. Renderer-only screenshot attempts with both installed Chrome 149 builds returned empty DOM and no PNG; no visual pass is claimed. Focused component/store tests passed, but do not prove layout.
+- [ ] After an authorized manual `make dev` restart or `make build`, check that an older daemon’s known version remains on its card after a Host refusal, with guidance to install the current `tuic-remote` and restart its service. Initial plain refusals without a successful `/health` observation must not invent a version. The daily app and Mac-mint daemon were not restarted or changed. Rust does not hot-reload.
 
 ## Headless file credentials (2343-5358) — daemon rebuild/restart required
 
