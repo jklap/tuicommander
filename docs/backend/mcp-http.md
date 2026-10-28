@@ -833,8 +833,9 @@ When intent markers are enabled for the connecting agent, initialize instruction
 
 ### Two instruction surfaces, and which one owns a rule
 
-Initialize instruction prose stays within the existing 1,600-byte classic and
-1,664-byte collapsed empty-state budgets. Compact wording preserves the answer
+Initialize instruction prose stays within 1,728-byte classic and
+1,792-byte collapsed empty-state budgets. The cross-client delegation rule adds
+one short line; other sections do not grow. Compact wording preserves the answer
 marker, urgent mail and progress reporting rules. The answer marker can start a
 row or the text of a Markdown list item; status, tool and hook/task notices stay
 excluded.
@@ -1516,6 +1517,11 @@ When the MCP client identifies as Claude Code (detected via `clientInfo.name` at
 This works around Claude Code's inability to change its working directory mid-session. The hint tells CC to spawn a subagent that uses absolute paths for all file operations (Read, Edit, Glob, Grep) and `cd <path> && ...` for shell commands.
 
 Non-Claude Code MCP clients do not receive this field.
+
+The cached initialize instructions tell every client to delegate or parallelize
+through TUIC `agent action=spawn`/`launch`, not client-native subagents. This keeps
+peers visible, mailable and managed. The Claude Code `cc_agent_hint` path above is
+the only native Agent/Task exception, for a single isolated worktree task.
 
 ### MCP Tool: `repo` — Worktree List
 

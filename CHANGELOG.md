@@ -27,6 +27,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Tell every MCP client to use TUIC managed peers for delegation or parallel work, with the existing Claude Code isolated-task exception (#2441-bbcf).
+
 - Share idle sleep-prevention process checks on a five-second cadence outside the native assertion lock, while retaining holds for new backend work and unknown or stale process state (#2419-4d16).
 - Retrieve all labelled open issues for automation intake, including issues outside the sidebar's latest 30, while preserving sidebar filters and capacity retries (#2415-dccf).
 - Keep repository structure available when a branch reflog is empty or absent; classify that branch as unknown without repeated refresh errors (#2437-b45b).

@@ -1,3 +1,8 @@
+## Managed delegation instructions (2441-bbcf) — Rust restart required
+
+- [ ] Coordinator critic: run `instructions_prevent_invisible_native_subagents_for_every_client` and `mcp_instruction_surface_bytes_stay_within_budget` against the final commit. Pre-fix RED reproduced all client/mode omissions on Linux rb; no implementation-lane GREEN is claimed.
+- [ ] After an authorized `make dev` restart or `make build`, reconnect an MCP client and inspect initialize instructions for the TUIC spawn/launch rule and the CC-only exception. The daily app was not restarted; Rust does not hot-reload.
+
 ## Sleep-prevention inventory cadence (2419-4d16) — Rust restart required
 
 - [ ] After Boss manually restarts a rebuilt `make dev` or installs `make build`, enable Prevent sleep when busy with disposable idle agent tabs. Confirm native assertions still cover active turns, background jobs and keep-open agents while hidden. Confirm idle process inventory checks no longer run once per second and legacy refreshes do not add scans. Rust does not hot-reload; this peer did not restart the daily app. GREEN and the independent concurrency critic belong to integration.
