@@ -563,8 +563,10 @@ pub(crate) async fn acp_one_shot_prompt(
 
 #[cfg(feature = "desktop")]
 #[tauri::command]
-pub(crate) async fn acp_one_shot_prepare(state: State<'_, Arc<AppState>>) -> String {
-    crate::acp::oneshot::prepare(state.inner())
+pub(crate) async fn acp_one_shot_prepare(
+    state: State<'_, Arc<AppState>>,
+) -> Result<String, AcpClientError> {
+    Ok(crate::acp::oneshot::prepare(state.inner()))
 }
 
 #[cfg(feature = "desktop")]
@@ -683,6 +685,7 @@ mod tests {
     /// Catches: native Fill panics when reservation expiry spawns on the IPC
     /// thread without an entered Tokio runtime. Exercise generated dispatch,
     /// not the helper inside a Tokio test or an HTTP handler.
+    #[cfg(feature = "settings-ipc-test")]
     #[test]
     fn one_shot_prepare_dispatches_without_a_caller_tokio_runtime() {
         assert!(tokio::runtime::Handle::try_current().is_err());
