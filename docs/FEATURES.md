@@ -2846,7 +2846,7 @@ partial work, and their child processes may continue.
 
 ---
 
-Remote host cards name DNS, refused connections, timeout, TLS, and authentication failures. A 403 Untrusted Host explains that the daemon rejected the host name. When a short name cannot resolve, a matching running Tailscale peer supplies its advertised full DNS name. Failed connections show the automatic retry delay; active attempts clear the previous failure.
+Remote host cards name DNS, refused connections, timeout, TLS, and authentication failures. A 403 Untrusted Host explains that the daemon rejected the host name and stops automatic connection retries until an explicit Connect attempt. The cause remains visible without a retry delay. Repeated identical failure states do not add warnings. When a short name cannot resolve, a matching running Tailscale peer supplies its advertised full DNS name. Retryable failures show the automatic retry delay; active attempts clear the previous failure.
 
 ## 25. Generators
 

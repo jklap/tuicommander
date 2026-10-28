@@ -35,6 +35,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Stop automatic remote connection retries after HTTP 403 Untrusted Host, retain the cause and manual reconnect, and log unchanged failures only once (#2438-4c2f).
 - Apply the existing subagent-silence setting to mobile/PWA sounds and session Web Push, preserving parentage across asynchronous exit teardown (#2342-4a1c).
 
 - Keep hidden terminal panes out of unsized warnings, avoid duplicate API-error handlers after reconnect, and log successful MCP peer rebinds at info instead of warn (#2439-027f).

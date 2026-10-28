@@ -1,3 +1,9 @@
+## Remote Untrusted Host retry (2438-4c2f) — Rust restart required
+
+- [x] Live mac-mint probes reproduce HTTP 403 for the full MagicDNS name and HTTP 200 for its IP and short hostname. The pre-fix rb regression received three health requests instead of one. Evidence: `src-tauri/src/fixtures/remote/untrusted-host.md` and `~/Gits/.tmp/results/tuic-2438-evidence/red.log`.
+- [ ] Coordinator: run `untrusted_host_refusal`, `other_http_failures_keep_automatic_requests`, and `repeated_remote_failure_logs_only_when_the_cause_changes` against the final commit. No implementation-lane GREEN run was performed.
+- [ ] After an authorized `make dev` restart or `make build`, confirm the remote host card retains the rejected-name cause without a retry countdown and explicit Connect makes another attempt. The daily app and mac-mint daemon were not restarted or changed. Rust does not hot-reload.
+
 ## Mobile subagent notification policy (2342-4a1c) — Rust rebuild/restart required
 
 - [ ] Coordinator critic: run `subagent_push_does_not_lose_parentage_during_exit_teardown`, existing question/completion push-window tests, and `src/mobile/__tests__/useMobileNotifications.test.ts` against the final commit. Pre-fix RED reproduced the child push-budget reservation after teardown and both mobile sound bypasses; implementation-lane GREEN is not claimed.
