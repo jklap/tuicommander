@@ -51,13 +51,17 @@ export const TreeNode: Component<TreeNodeProps> = (props) => {
 		fetching = true;
 		setLoading(true);
 		fb.listDirectory(props.fsRoot, props.entry.path)
-			.then((entries) => props.onChildrenLoaded(props.entry.path, entries))
-			.catch((err) => {
-				appLogger.error("app", "Failed to list directory", { path: props.entry.path, error: err });
-			})
-			.finally(() => {
+			.then((entries) => {
+				// Publishing children can synchronously invalidate this cache again.
+				// Release the completed fetch first so that invalidation can reload it.
 				fetching = false;
 				setLoading(false);
+				props.onChildrenLoaded(props.entry.path, entries);
+			})
+			.catch((err) => {
+				fetching = false;
+				setLoading(false);
+				appLogger.error("app", "Failed to list directory", { path: props.entry.path, error: err });
 			});
 	});
 
