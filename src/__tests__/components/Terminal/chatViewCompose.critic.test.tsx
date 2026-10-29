@@ -37,6 +37,9 @@ vi.mock("../../../components/Terminal/glyphCache", async (importOriginal) => ({
 	...(await importOriginal<typeof import("../../../components/Terminal/glyphCache")>()),
 	getSharedMetrics: () => ({ cellWidth: 8, cellHeight: 16 }),
 }));
+// Canvas publishes its ref only after its asynchronous grid subscription is ready.
+const canvasLifecycle = vi.hoisted(() => ({ deferRef: false }));
+
 vi.mock("../../../components/Terminal/CanvasTerminal", () => ({
 	default: (props: { onRef?: (ref: { focus: () => void; searchClear: () => void }) => void }) => {
 		let input!: HTMLInputElement;
@@ -46,7 +49,9 @@ vi.mock("../../../components/Terminal/CanvasTerminal", () => ({
 					aria-label="Canvas terminal input"
 					ref={(element) => {
 						input = element;
-						props.onRef?.({ focus: () => input.focus({ preventScroll: true }), searchClear: vi.fn() });
+						if (!canvasLifecycle.deferRef) {
+							props.onRef?.({ focus: () => input.focus({ preventScroll: true }), searchClear: vi.fn() });
+						}
 					}}
 				/>
 			</div>
@@ -70,6 +75,7 @@ import { terminalsStore } from "../../../stores/terminals";
 
 beforeEach(() => {
 	vi.clearAllMocks();
+	canvasLifecycle.deferRef = false;
 	vi.spyOn(appLogger, "debug").mockImplementation(() => {});
 	for (const id of terminalsStore.getIds()) terminalsStore.remove(id);
 	vi.spyOn(HTMLElement.prototype, "offsetWidth", "get").mockReturnValue(800);
@@ -341,6 +347,149 @@ describe("Chat fallback focus ownership", () => {
 			cleanup();
 			paneLayoutStore.reset();
 			paneLayoutStore.flushSave();
+		}
+	});
+});
+
+describe("independent CLI focus guard conditions", () => {
+	// Catches: active identity removed while a background pane remains visible.
+	it("does_not_return_focus_to_a_visible_inactive_terminal", async () => {
+		const id = addTerminal();
+		const view = render(() => (
+			<>
+				<Terminal id={id} cwd="/repo" alwaysVisible />
+				<button type="button">Keep keyboard focus</button>
+			</>
+		));
+		fireEvent.click(view.getByRole("tab", { name: "Chat" }));
+		await readyEditor(view.container);
+		const other = terminalsStore.add({
+			sessionId: null,
+			cwd: "/other",
+			name: "other",
+			fontSize: 13,
+			awaitingInput: null,
+		});
+		terminalsStore.setActive(other);
+		const button = view.getByRole("button", { name: "Keep keyboard focus" });
+		button.focus();
+		terminalsStore.setViewMode(id, "cli");
+		expect(view.container.querySelector(".cm-editor")).toBeNull();
+		expect(view.getByLabelText("Canvas terminal input").isConnected).toBe(true);
+		expect(document.activeElement).toBe(button);
+	});
+
+	// Catches: visibility removed while the active tab's local canvas is detached.
+	it("does_not_return_focus_to_a_hidden_but_active_terminal", async () => {
+		const id = addTerminal();
+		const view = render(() => (
+			<>
+				<Terminal id={id} cwd="/repo" />
+				<button type="button">Keep keyboard focus</button>
+			</>
+		));
+		fireEvent.click(view.getByRole("tab", { name: "Chat" }));
+		await readyEditor(view.container);
+		// A floating window owns this active tab; the original window is hidden.
+		terminalsStore.detach(id, "floating-focus-guard");
+		const button = view.getByRole("button", { name: "Keep keyboard focus" });
+		button.focus();
+		terminalsStore.setViewMode(id, "cli");
+		expect(terminalsStore.state.activeId).toBe(id);
+		expect(view.container.querySelector(".cm-editor")).toBeNull();
+		expect(view.getByLabelText("Canvas terminal input").isConnected).toBe(true);
+		expect(document.activeElement).toBe(button);
+	});
+
+	// Catches: the return path runs on initial CLI render, without leaving Chat.
+	it("does_not_return_focus_on_initial_cli_render", () => {
+		const id = addTerminal();
+		const button = document.createElement("button");
+		button.textContent = "Keep initial focus";
+		document.body.appendChild(button);
+		button.focus();
+		try {
+			const view = render(() => <Terminal id={id} cwd="/repo" alwaysVisible />);
+			// The normal visibility RAF has not run: this checks only the initial
+			// view-mode effect, with a mounted canvas and a non-editable focus owner.
+			expect(view.getByLabelText("Canvas terminal input").isConnected).toBe(true);
+			expect(view.container.querySelector(".cm-editor")).toBeNull();
+			expect(document.activeElement).toBe(button);
+		} finally {
+			button.remove();
+		}
+	});
+});
+
+describe("Compose focus lifecycle", () => {
+	// Catches: Chat does not request focus when it reuses an already-open CLI editor.
+	it("focuses_the_existing_cli_editor_when_entering_chat", async () => {
+		const id = addTerminal();
+		const view = render(() => (
+			<>
+				<Terminal id={id} cwd="/repo" alwaysVisible />
+				<button type="button">Other control</button>
+			</>
+		));
+		fireEvent.click(view.getByText(/^Compose /));
+		const cm = await readyEditor(view.container);
+		view.getByRole("button", { name: "Other control" }).focus();
+		expect(cm.hasFocus).toBe(false);
+		fireEvent.click(view.getByRole("tab", { name: "Chat" }));
+		await waitFor(() => expect(document.activeElement).toBe(cm.contentDOM));
+		expect(editor(view.container)).toBe(cm);
+	});
+
+	// Catches: Escape closes a pinned CLI composer, leaves an unpinned one open,
+	// or omits the canvas focus handoff in either branch.
+	it.each([false, true])("cli_escape_preserves_pin_%s_and_returns_keyboard_focus", async (pinned) => {
+		const id = addTerminal();
+		const view = render(() => <Terminal id={id} cwd="/repo" alwaysVisible />);
+		fireEvent.click(view.getByText(/^Compose /));
+		const cm = await readyEditor(view.container);
+		if (pinned) fireEvent.click(view.getByTitle("Pin to the terminal bottom"));
+		fireEvent.keyDown(cm.contentDOM, { key: "Escape" });
+		expect(view.container.querySelector(".cm-editor") !== null).toBe(pinned);
+		expect(document.activeElement).toBe(view.getByLabelText("Canvas terminal input"));
+	});
+
+	// Catches: an early Chat return dereferences a canvas whose grid subscription
+	// has not published its ref yet (CanvasTerminal awaits transport.subscribe).
+	it("returns_from_chat_before_the_canvas_ref_is_ready", async () => {
+		canvasLifecycle.deferRef = true;
+		const id = addTerminal();
+		const view = render(() => (
+			<>
+				<Terminal id={id} cwd="/repo" alwaysVisible />
+				<button type="button">Other control</button>
+			</>
+		));
+		fireEvent.click(view.getByRole("tab", { name: "Chat" }));
+		await readyEditor(view.container);
+		const button = view.getByRole("button", { name: "Other control" });
+		button.focus();
+		terminalsStore.setViewMode(id, "cli");
+		expect(view.container.querySelector(".cm-editor")).toBeNull();
+		expect(document.activeElement).toBe(button);
+	});
+
+	// Catches: early CLI Escape dereferences the still-unavailable canvas ref.
+	it("closes_cli_compose_before_the_canvas_ref_is_ready", async () => {
+		canvasLifecycle.deferRef = true;
+		const id = addTerminal();
+		const view = render(() => <Terminal id={id} cwd="/repo" alwaysVisible />);
+		fireEvent.click(view.getByText(/^Compose /));
+		const cm = await readyEditor(view.container);
+		// CodeMirror catches key-handler exceptions and reports them to console.
+		// A closed panel alone would therefore miss an undefined-ref crash.
+		const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+		try {
+			fireEvent.keyDown(cm.contentDOM, { key: "Escape" });
+			expect(view.container.querySelector(".cm-editor")).toBeNull();
+			expect(view.getByText(/^Compose /)).toBeTruthy();
+			expect(errors).not.toHaveBeenCalled();
+		} finally {
+			errors.mockRestore();
 		}
 	});
 });
