@@ -84,8 +84,11 @@ make agent-test-stop
 The dry run does not build, create runtime files, read application configuration,
 or start a desktop process. The launch runs in the foreground. It builds the
 frontend, then uses one Cargo build through the mbx shim for
-`tuicommander-agent-test`, `tuic-bridge` and `tuic`. The existing orchestrator
-build-slot wrapper serializes these builds when installed. `mbx doctor` must
+`tuicommander-agent-test`, `tuic-bridge` and `tuic`. A build admission wrapper
+(e.g. the orchestrator's build-slot script) serializes these builds when
+`TUIC_BUILD_SLOT` names an executable one; `scripts/replay-oracle.sh` honours it
+too. When `TUIC_BUILD_FREEZE` names an existing freeze file, the launch refuses to
+build unless that file allows it. `mbx doctor` must
 succeed. Do not set `CARGO_TARGET_DIR`. No Vite server, Tauri watcher, release
 bundle, signing operation or installed executable is involved. Embedded frontend
 assets use `tauri/custom-protocol` even though this is a debug build.
@@ -263,7 +266,7 @@ part of the unattended shell/Rust/JS suites.
 | --- | --- |
 | Daily binary, dev-bin and installed app bundle | No writes. Only the worktree's distinctly named binary and adjacent sidecars are copied. A held supervisor lock prevents replacing the running test executable. |
 | Config, credential vault, databases and file locks | Existing named-instance namespace; debug credentials remain file-backed. The test never claims the global-input lock, even in its own namespace. |
-| HTTP and MCP | Explicit loopback-only `127.0.0.1:19876`; never port 9876 or automatic next-port fallback. Unix MCP socket uses the selected instance hash and the launch's short `TMPDIR` under `~/Gits/.tuic/tuic-at/`. Child CLI/bridge processes inherit the same namespace. Runtime temp stays outside the intentional ego scratch grant `~/Gits/.tmp`, so its negative filesystem probe remains meaningful. Do not grant the runtime temp parent to ego or disable confinement to admit a conversation. Stop older instances with their original launcher before updating: their FIFO/socket remains at the old path. |
+| HTTP and MCP | Explicit loopback-only `127.0.0.1:19876`; never port 9876 or automatic next-port fallback. Unix MCP socket uses the selected instance hash and the launch's short `TMPDIR`, `<host temp>/tuic-at/<first 8 hex digits of the hash>/`: the host temp dir is `TUIC_TEST_HOST_TMPDIR` (recorded by `scripts/with-test-tmp.sh`), else `TMPDIR`; `TUIC_AGENT_TEST_ROOT` replaces `<host temp>/tuic-at` when the socket path would exceed the macOS 104-byte limit. Child CLI/bridge processes inherit the same namespace. |
 | Global window shortcut and Fn/Globe monitor | Input ownership refused and shortcut registration rejected at runtime, including later Settings changes. The verification window is non-focusable; drive its own HTTP/socket API. |
 | Microphone and dictation | Not compiled by default. With explicit authorization, `AGENT_TEST_SPEECH_OUTPUT=1` and an `agent-test-<name>` instance enable runtime speech output only: effective listening is forced off, microphone permission/capture is refused, and global input ownership stays disabled. Speech output is audible; do not use this option without authorization. |
 | Telegram bot | Supervisor never starts, tool availability is false, and setup changes are rejected. A copied or previously saved bot configuration cannot start polling. |
@@ -374,6 +377,29 @@ Test scratch comes from your temp directory, never from `$HOME`:
 apply that order. The checkout hash is FNV-1a 64 of the checkout's physical path,
 the same in every one, so parallel worktrees never share a default root.
 
+Two opt-ins of `scripts/with-test-tmp.sh` change what a wrapped command sees
+beyond its temp dirs:
+
+| Variable | Effect | Set by |
+|---|---|---|
+| `TUIC_TEST_FAKE_HOME=1` | `HOME=<root>/home` for the command. `CARGO_HOME`/`RUSTUP_HOME` are pinned to the real home first (from the passwd entry when `HOME` is unset), so cargo keeps its registry and toolchains. The nextest setup script applies the same flag to the test processes only, so `TUIC_TEST_FAKE_HOME=1 cargo nextest run` works without the wrapper too. On Windows the setup script sets `HOME` alone (the `dirs` crate reads Known Folders there) | `make check`'s and `make cov`'s Rust test steps, `scripts/mutants.sh`, CI's Linux/macOS Rust test steps |
+| `TUIC_TEST_ISOLATE_GIT_CONFIG=1` | git reads `<root>/gitconfig` (the same content as `tuic-test-support`'s `TEST_GITCONFIG`) and no system config, instead of yours. Not the default: `pnpm audit`, `cargo audit` and the submodule checks need your credential helper, `url.*.insteadOf` and proxy settings | `make test-shell` |
+
+On macOS with `sccache` on `PATH` the wrapper also exports `CC=cc CXX=c++` (unless
+you set them), so meson does not wrap its compiler with sccache, whose socket
+would not fit `sun_path` under the long per-run `TMPDIR`. Nowhere else: `CC` is
+part of the native build fingerprint.
+
+On macOS the wrapper also exports `AR` as the real toolchain `ar` (what `xcrun --find ar`
+prints), unless you set it. `/usr/bin/ar` is a shim that runs `xcrun`; where `xcrun` cannot
+write its lookup cache (the agent sandbox) a cache miss prints `couldn't create cache file`
+*before* the usage text, and meson accepts Apple's `ar` only when stderr starts with
+`usage` — so the bundled WebRTC build (`tuic-dictation`) fails with `Unknown linker(s): ar`
+whenever the environment is one `xcrun` has not cached. Which environments are cached
+changes over time, so this does not depend on the cache. (A separate, intermittent sandbox
+failure: the proxy sometimes truncates meson's abseil download, which surfaces as
+`Incorrect hash for source`; re-running the build succeeds.)
+
 `TUIC_TEST_TMP_BASE=<checkout>/.tmp/tuic-tests` still puts scratch in the
 checkout, but only as an explicit opt-in: it is unsafe wherever writes to the
 checkout's `.git/hooks` or `.git/config` are denied (observed in the agent
@@ -389,8 +415,22 @@ bytes and the host temp dir at most 72:
 | `$TMPDIR` | bytes | longest test socket | result |
 |---|---|---|---|
 | macOS default (`/var/folders/xx/…/T`) | 49 | 80 | fits, 23 bytes spare |
-| agent sandbox | 72 | 103 | fits, 0 bytes spare |
+| agent sandbox | 72 | 103 | fits, 0 bytes spare — for self-named sockets only (fixed-name ones go `UNCHECKED`, below) |
 | long CI-like | 90 | 121 | fails with the budget message |
+| agent sandbox, short symlink (`/tmp/srtmon.XXXXXXXX`) | 20 | 51 | fits, 52 bytes spare |
+
+The host temp dir can be spelled two ways for the same directory: the sandbox's
+real path (72 bytes) and a short symlink to it (20 bytes). Both hold every socket
+this repo names itself, but only the short one holds mdkb's own staging socket
+(`HOME/.mdkb/daemon-hook.sock.<pid>.tmp`, a name the tests cannot shorten; it needs
+a host temp dir of at most 54 bytes). In the long spelling that test (and any other
+entry in `tuic_test_support::FIXED_NAME_SOCKETS`) would print `UNCHECKED` and pass
+without running. `tuic-test-support`'s `socket_environment` test is the runtime
+blocker for that: it fails, naming the sockets, the host temp dir and its length,
+unless the run uses a shorter `TMPDIR`, sets `TUIC_TEST_SOCKET_ROOT`, or accepts
+the gap with `TUIC_ALLOW_UNCHECKED_SOCKET_TESTS=1`. It also pins the outcome for
+both layouts, so a change to the budget constants cannot move the line silently.
+Add every new fixed-name socket test's path to `FIXED_NAME_SOCKETS`.
 
 Over budget, the panic names the host temp dir and its length, the would-be root
 length, the 81/72-byte budgets and `TUIC_TEST_SOCKET_ROOT=<short private dir>`;
@@ -443,6 +483,19 @@ Every Rust test binary that links `tuic-test-support` runs its git processes aga
 
 When a named instance's Unix socket path does not fit `sun_path`, the error names the path length, the 103-byte limit, the longest `TMPDIR` that would fit and `TUIC_SOCKET`; the bind is not retried.
 
+A test that needs a process with a particular name in the foreground (`claude`,
+`bash`, `tuic-remote`, a `claude/versions/2.1.5` layout) installs
+`tuic_test_support::install_identity_probe(dir, name)`: a small std-only program
+(`src-tauri/crates/tuic-test-support/src/identity_probe_main.rs`) that the
+crate's `build.rs` compiles with the build's own `rustc`. Never copy `/bin/cat`,
+`/bin/sh` or `/bin/sleep` instead: the agent sandbox SIGKILLs a relocated Apple
+platform binary ("Killed: 9"), and a symlink, a script or `exec -a` reports the
+wrong executable to `proc_pidpath`/`/proc/<pid>/exe`. The probe needs no
+`codesign`. With no arguments it echoes stdin until EOF (alive while its stdin is
+open, like `cat`); `--print <words…>` prints them; installed as `ps` (or run with
+`--ps`) it answers `-p <pid> -o comm=` natively, for a test that runs
+remote-side shell text such as `verified_kill` locally where `/bin/ps` cannot run.
+Covered by `crates/tuic-test-support/tests/identity_probe.rs`.
 ### Live peer-mail wake canary
 
 After a Rust rebuild, run this against the isolated test instance, not the
@@ -488,9 +541,10 @@ in a cleanup trap. It does not start Tauri or use a running app. The browser
 harness closes its own named tab and does not close shared Chrome.
 
 Prerequisites: installed frontend dependencies, `agent-browser`, matching Chrome
-for Testing, and the approved `ab-stealth.sh` wrapper under
-`~/Gits/personal/brainstorming/tools/browser-stealth/`. Set
-`TUIC_CHAT_BROWSER_WRAPPER` to override the wrapper path. Evidence defaults to a
+for Testing, and the approved `ab-stealth.sh` wrapper: `TUIC_BROWSER_WRAPPER`
+names it, else the first `ab-stealth.sh` on `PATH` (`scripts/browser-wrapper.mjs`;
+the other live browser harnesses resolve it the same way). Set
+`TUIC_CHAT_BROWSER_WRAPPER` to override the wrapper path for this gate only. Evidence defaults to a
 new `.tmp/chat-readability-*` directory in the checkout; set
 `TUIC_CHAT_EVIDENCE_DIR` to retain it elsewhere. Managed agents run this target
 through the shared build slot.

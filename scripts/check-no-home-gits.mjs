@@ -27,6 +27,9 @@ const SKIP = [
 	/^src-tauri\/(patches|icons|binaries|gen)\//,
 	/\.(md|markdown|txt|html)$/i,
 	/\.(tcap|raw|png|jpe?g|icns|ico|wav|mp3|ogg|bin|lock|pdf|ttf|woff2?)$/i,
+	// Recorded fixture data (captured terminal bytes, evidence provenance): a
+	// prompt or a recording path is data the test replays, not filesystem access.
+	/(^|\/)fixtures\/[^/]+\.json$/,
 ];
 
 // Product/runtime references that deliberately keep `~/Gits` (assessment
@@ -35,27 +38,7 @@ const ALLOWED = new Map([
 	["src-tauri/src/config.rs", "recognized_temp_roots: classifies historical ghost rows already in users' repositories.json"],
 	["src-tauri/tauri.conf.json", "asset-protocol scope ($HOME/** skips dot-dirs); a product decision"],
 	["scripts/check-no-home-gits.mjs", "this guard's own self-test fixtures"],
-	// Main-only files (not test scratch) that predate this guard on the replayed tree:
-	["scripts/agent_capture/run.py", "under_gits(): capture-promotion paths must stay in the maintainer's checkout layout, not scratch"],
-	["scripts/chat-view-follow-proof.mjs", "locates the maintainer's browser-stealth wrapper, not scratch"],
-	["scripts/replay-oracle.sh", "locates the maintainer's build-slot runner on macOS, not scratch"],
-	["src-tauri/crates/tuic-terminal/src/fixtures/claude-dot-blink-1654.json", "recorded capture fixture: a prompt string, not filesystem access"],
 	["src-tauri/crates/tuic-core/src/temp_paths.rs", "recognized_temp_roots (moved out of config.rs): classifies historical ghost rows, read-only"],
-	["scripts/agent-test.py", "make agent-test: short instance socket dir under ~/Gits/.tmp/tuic-at (SUN_LEN), the build-slot runner and BUILD_FREEZE"],
-	["scripts/agent-test-visible.py", "agent-test native observer: evidence-dir policy, BUILD_FREEZE and the short mbx TMPDIR (SUN_LEN)"],
-	["scripts/github-work-desktop-e2e.mjs", "validates an agent-test socket lives under ~/Gits/.tmp/tuic-at (agent-test.py's layout)"],
-	["scripts/github-work-desktop-e2e.test.mjs", "fixtures for that socket-location check"],
-	["scripts/plugin-review-desktop-e2e.mjs", "validates an agent-test socket lives under ~/Gits/.tmp/tuic-at (agent-test.py's layout)"],
-	["scripts/check-chat-code-copy-layout.py", "locates the maintainer's browser-stealth wrapper, not scratch"],
-	["scripts/check-chat-readability.mjs", "locates the maintainer's browser-stealth wrapper, not scratch"],
-	["scripts/design-mode-demo.mjs", "locates the maintainer's browser-stealth wrapper, not scratch"],
-	["scripts/observe-github-volume-1995.py", "one-off evidence harness: browser-stealth wrapper and a recorded build-log path"],
-	["scripts/test-headless-github.py", "manual native GitHub harness: evidence dir under ~/Gits/.tmp (DEFERRED (2026-10-28): move to TMPDIR)"],
-	["scripts/backend-build-identity.test.mjs", "its fixture cargo build sets TMPDIR to the short ~/Gits/.tmp scratch (DEFERRED (2026-10-28): derive from the test root)"],
-	["scripts/settings-visual/geometry.test.mjs", "comment naming where recorded measurements came from, not filesystem access"],
-	["scripts/stall-workload/fixtures/occluded-1638.json", "recorded evidence fixture: a provenance string, not filesystem access"],
-	["src-tauri/src/mcp_http/fixtures/managed-reconnect-2008.capture.py", "capture script: asserts its scratch HOME is under ~/Gits (recording provenance)"],
-	["src-tauri/src/mcp_http/fixtures/tool-names-2108.capture.py", "capture script: asserts its work dir is under ~/Gits (recording provenance)"],
 ]);
 
 const HOME_PATTERNS = [
@@ -67,6 +50,7 @@ const HOME_PATTERNS = [
 	["Python HOME + Gits", /environ(?:\.get)?[[(]\s*["']HOME["'][\s\S]{0,200}?["'][^"'\n]*Gits/],
 	["JS homedir() + Gits", /homedir\(\)[\s\S]{0,200}?["'`][^"'`\n]*Gits/],
 	["JS env.HOME + Gits", /env\.HOME[\s\S]{0,200}?["'`][^"'`\n]*Gits/],
+	["JS ${env.HOME}/Gits template", /env\.HOME\}\/+Gits\b/],
 	["path.join(HOME, Gits)", /HOME\s*,\s*["']Gits/],
 	["gitsRoot allow-list", /\bgitsRoot\b/],
 ];
@@ -122,14 +106,18 @@ if (selfTest) {
 			"g.py": 'root = Path.home() / "Gits" / ".tmp"\n',
 			"h.mjs": 'const gitsRoot = path.join(process.env.HOME, "Gits");\n',
 			"i.ts": 'const r = path.join(os.homedir(), "Gits", ".tmp");\n',
+			"k.mjs": "const w = `${process.env.HOME}/Gits/tools/w.sh`;\n",
+			"fixtures/j.capture.py": 'assert Path.home() / "Gits" in work.parents\n',
 		};
 		const clean = {
 			"ok.rs": 'assert_eq!(clean("~/Gits/personal/tuicommander"), "");\n// the old `~/Gits` layout\n',
 			"ok.sh": 'base="${TMPDIR:-/tmp}/tuic-tests"\n',
 			"ok.py": 'root = Path(tempfile.gettempdir()) / "tuic-1419"\n',
 			"NOTES.md": "Old layout: `$HOME/Gits/.tmp/tuic-tests` and `~/Gits/.tmp`.\n",
+			"fixtures/recorded.json": '{"raw": "user@host:~/Gits/personal/repo"}\n',
 		};
 		for (const [name, text] of Object.entries({ ...offending, ...clean, "allowed.json": '"$HOME/Gits/**"\n' })) {
+			fs.mkdirSync(path.dirname(path.join(fixtureRoot, name)), { recursive: true });
 			fs.writeFileSync(path.join(fixtureRoot, name), text);
 		}
 		git("add", "-A");

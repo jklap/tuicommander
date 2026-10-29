@@ -33,7 +33,8 @@ SHA-256 (`managed-reconnect-2008.json`):
 
 `managed-reconnect-2008.capture.py` retains the recorder with a checkout-relative
 root and a required new scratch HOME argument. Run it only after the native
-build above, with a fresh absolute directory under `~/Gits/.tmp`. It starts
+build above, with a fresh absolute directory under the host temp dir
+(`$TUIC_TEST_HOST_TMPDIR`, else `$TMPDIR`). It starts
 and stops only its own headless processes. Setup retries of suspend are allowed
 only for the actual `command running` response, for at most 30 seconds.
 

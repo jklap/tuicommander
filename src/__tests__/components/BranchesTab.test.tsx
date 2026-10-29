@@ -1,5 +1,5 @@
 import { fireEvent, render, waitFor } from "@solidjs/testing-library";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { BranchDetail } from "../../components/GitPanel/types";
 
 const h = vi.hoisted(() => ({
@@ -118,6 +118,12 @@ describe("BranchesTab", () => {
 		h.appLoggerWarn.mockReset();
 		h.appLoggerInfo.mockReset();
 		mockInvokeDefaults();
+	});
+
+	afterEach(() => {
+		// Restore vi.spyOn spies (e.g. repositoriesStore.bumpGitRevision) so one test's
+		// calls can never satisfy another test's assertion.
+		vi.restoreAllMocks();
 	});
 
 	describe("rendering", () => {
@@ -439,16 +445,21 @@ describe("BranchesTab", () => {
 	describe("rename branch", () => {
 		it("renames on Enter and bumps the git revision", async () => {
 			const { findByText, getByText, getByDisplayValue } = render(() => <BranchesTab repoPath={REPO} />);
-			await findByText("main"); // main is current, so Rename is offered directly
-			openContextMenuFor(getByText, "main");
+			// Main protects its main branch (Rename is disabled there), so rename a feature branch.
+			await findByText("feature/foo");
+			openContextMenuFor(getByText, "feature/foo");
 			fireEvent.click(getByText("Rename"));
 
-			const input = getByDisplayValue("main");
-			fireEvent.input(input, { target: { value: "trunk" } });
+			const input = getByDisplayValue("feature/foo");
+			fireEvent.input(input, { target: { value: "feature/bar" } });
 			fireEvent.keyDown(input, { key: "Enter" });
 
 			await waitFor(() => {
-				expect(h.invoke).toHaveBeenCalledWith("rename_branch", { path: REPO, oldName: "main", newName: "trunk" });
+				expect(h.invoke).toHaveBeenCalledWith("rename_branch", {
+					path: REPO,
+					oldName: "feature/foo",
+					newName: "feature/bar",
+				});
 			});
 		});
 
@@ -456,28 +467,28 @@ describe("BranchesTab", () => {
 			const { findByText, getByText, getByDisplayValue, queryByDisplayValue } = render(() => (
 				<BranchesTab repoPath={REPO} />
 			));
-			await findByText("main");
-			openContextMenuFor(getByText, "main");
+			await findByText("feature/foo");
+			openContextMenuFor(getByText, "feature/foo");
 			fireEvent.click(getByText("Rename"));
-			const input = getByDisplayValue("main");
+			const input = getByDisplayValue("feature/foo");
 			fireEvent.keyDown(input, { key: "Escape" });
 
-			expect(queryByDisplayValue("main")).toBeNull();
+			expect(queryByDisplayValue("feature/foo")).toBeNull();
 			expect(h.invoke).not.toHaveBeenCalledWith("rename_branch", expect.anything());
 		});
 
 		it("logs on rename failure", async () => {
 			mockInvokeDefaults({ rename_branch: () => Promise.reject(new Error("invalid name")) });
 			const { findByText, getByText, getByDisplayValue } = render(() => <BranchesTab repoPath={REPO} />);
-			await findByText("main");
-			openContextMenuFor(getByText, "main");
+			await findByText("feature/foo");
+			openContextMenuFor(getByText, "feature/foo");
 			fireEvent.click(getByText("Rename"));
-			const input = getByDisplayValue("main");
-			fireEvent.input(input, { target: { value: "trunk" } });
+			const input = getByDisplayValue("feature/foo");
+			fireEvent.input(input, { target: { value: "feature/bar" } });
 			fireEvent.keyDown(input, { key: "Enter" });
 
 			await waitFor(() => {
-				expect(h.appLoggerError).toHaveBeenCalledWith("git", "Failed to rename branch main", expect.any(Error));
+				expect(h.appLoggerError).toHaveBeenCalledWith("git", "Failed to rename branch feature/foo", expect.any(Error));
 			});
 		});
 	});
@@ -969,17 +980,35 @@ describe("BranchesTab", () => {
 	});
 
 	describe("keyboard navigation", () => {
-		it("ArrowDown/ArrowUp move the selected index and wrap", async () => {
+		it("ArrowDown/ArrowUp move the selected row and wrap", async () => {
 			const { findByText, container } = render(() => <BranchesTab repoPath={REPO} />);
 			await findByText("main");
 			const root = container.querySelector('[tabindex="-1"]') as HTMLElement;
+			const selectedRows = () =>
+				Array.from(container.querySelectorAll<HTMLElement>('[class*="selected"]')).map((el) => el.textContent ?? "");
+			const total = container.querySelectorAll('[class*="branchRow"]').length;
+			expect(total).toBeGreaterThan(1);
+			expect(selectedRows()).toEqual([]);
 
 			fireEvent.keyDown(root, { key: "ArrowDown" });
+			expect(selectedRows()).toHaveLength(1);
+			expect(selectedRows()[0]).toContain("main");
+
 			fireEvent.keyDown(root, { key: "ArrowDown" });
+			expect(selectedRows()).toHaveLength(1);
+			expect(selectedRows()[0]).toContain("feature/foo");
+
 			fireEvent.keyDown(root, { key: "ArrowUp" });
-			// No assertion on internal index directly (private signal) — this exercises
-			// the handler without throwing and without touching DOM outside the panel.
-			expect(root).toBeTruthy();
+			expect(selectedRows()[0]).toContain("main");
+
+			// ArrowUp from the first row wraps to the last row.
+			fireEvent.keyDown(root, { key: "ArrowUp" });
+			expect(selectedRows()).toHaveLength(1);
+			expect(selectedRows()[0]).toContain("origin/feature/bar");
+
+			// ArrowDown from the last row wraps back to the first.
+			fireEvent.keyDown(root, { key: "ArrowDown" });
+			expect(selectedRows()[0]).toContain("main");
 		});
 
 		it("'/' focuses the search input", async () => {

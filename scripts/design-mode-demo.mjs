@@ -2,6 +2,7 @@
 import {readFile,writeFile,readdir,copyFile,mkdir} from 'node:fs/promises';
 import {spawnSync} from 'node:child_process';
 import {join} from 'node:path';
+import {browserWrapper} from './browser-wrapper.mjs';
 const [socket,repo,output]=process.argv.slice(2);
 const profile=process.env.TUIC_DESIGN_DEMO_PROFILE;
 const bridge=process.env.TUIC_DESIGN_BRIDGE;
@@ -30,7 +31,7 @@ try {
  if(installed.status!==0)throw Error(installed.stderr);
  await mkdir(product,{recursive:true});for(const file of await readdir(join(profile,'tuic-design-extension')))await copyFile(join(profile,'tuic-design-extension',file),join(product,file));
  await reloadWorker();
- const wrapper=join(process.env.HOME,'Gits/personal/brainstorming/tools/browser-stealth/ab-stealth.sh');
+ const wrapper=browserWrapper();
  const opened=spawnSync(wrapper,[`chrome-extension://${id}/panel.html`],{env:{...process.env,AB_SESSION:'tuic-1672-demo',AB_SHARED_PROFILE:profile},encoding:'utf8',timeout:45000});
  if(opened.status!==0)throw Error(opened.stderr);
  const extension=await connect((await list()).find(t=>t.url===`chrome-extension://${id}/panel.html`));

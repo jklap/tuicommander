@@ -7,7 +7,7 @@ import { appLogger } from "../../stores/appLogger";
 import { globalWorkspaceStore, MANUAL_SCOPE } from "../../stores/globalWorkspace";
 import { paneLayoutStore } from "../../stores/paneLayout";
 import { repositoriesStore } from "../../stores/repositories";
-import { savedPaneLayouts } from "../../stores/savedPaneLayouts";
+import { paneLayoutKey, savedPaneLayouts } from "../../stores/savedPaneLayouts";
 import { terminalsStore } from "../../stores/terminals";
 import { navigateToTerminal } from "../../utils/navigateToTerminal";
 import { globalWorkspaceTabIds } from "../../utils/paneTabOrder";
@@ -151,7 +151,11 @@ describe("Activity Dashboard session navigation", () => {
 
 		expect(repositoriesStore.getActiveTerminals()).toEqual([agent]);
 		expect(terminalsStore.state.activeId).toBe(agent);
-		expect(paneLayoutStore.serialize()).toEqual(previousLayout);
+		// A layout belongs to its repo+branch: the split is saved for the branch being
+		// left, and the agent's own branch does not inherit (or get docked into) it.
+		expect(savedPaneLayouts.get(paneLayoutKey(repoPath, "main"))).toEqual(previousLayout);
+		const liveTabs = Object.values(paneLayoutStore.serialize().groups).flatMap((g) => g.tabs.map((tab) => tab.id));
+		expect(liveTabs).not.toContain(previous);
 	});
 
 	// Catches: manual parking is looked up only in the currently consolidated repository scope.

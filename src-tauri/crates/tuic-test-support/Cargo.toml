@@ -4,11 +4,16 @@ version.workspace = true
 edition = "2024"
 
 [dependencies]
+tuic-ipc = { path = "../tuic-ipc" }
 portable-pty = "0.9"
 ctor = "0.8"
 
 [dev-dependencies]
 tempfile = "3"
+# Production identity detection, to prove the identity probe reports the
+# installed path (tests/identity_probe.rs). No `test-support` feature: that
+# would link this crate into itself.
+tuic-core = { path = "../tuic-core" }
 
 [lints]
 workspace = true

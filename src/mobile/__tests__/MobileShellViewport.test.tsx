@@ -4,7 +4,11 @@ import { cleanup, render, waitFor } from "@solidjs/testing-library";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import MobileApp from "../MobileApp";
 
-vi.mock("../../transport", () => ({ rpc: vi.fn(async () => ({ repos: {} })) }));
+// The shell subscribes to backend events (ptyOpenUrl's open-url listener).
+vi.mock("../../transport", () => ({
+	rpc: vi.fn(async () => ({ repos: {} })),
+	subscribeEvents: vi.fn(async () => () => {}),
+}));
 vi.mock("../../invoke", () => ({ invoke: vi.fn() }));
 vi.mock("../../stores/appLogger", () => ({ appLogger: { debug: vi.fn(), warn: vi.fn(), error: vi.fn() } }));
 vi.mock("../../stores/settings", () => ({
