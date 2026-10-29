@@ -7612,12 +7612,20 @@ mod tests {
             assert_eq!(catalog.len(), definitions.as_array().unwrap().len());
             for (entry, definition) in catalog.iter().zip(definitions.as_array().unwrap()) {
                 assert_eq!(entry["name"], definition["name"]);
+                // agent (Prefer-TUICommander framing) and repo (worktree_setup_status)
+                // grew past main's recording; their copy is the full reference text.
+                let name = definition["name"].as_str().unwrap();
+                let reference = mcp_transport_catalogue::native_tool_help(name);
                 assert_eq!(
                     &entry["description"],
-                    recorded
-                        .get(definition["name"].as_str().unwrap())
-                        .filter(|_| definition["name"] != "workflow")
-                        .unwrap_or(&definition["description"])
+                    if name == "agent" || name == "repo" {
+                        &reference.as_ref().unwrap()["description"]
+                    } else {
+                        recorded
+                            .get(definition["name"].as_str().unwrap())
+                            .filter(|_| definition["name"] != "workflow")
+                            .unwrap_or(&definition["description"])
+                    }
                 );
                 // Catches: HTTP status retaining description prefixes while Settings
                 // switches to dedicated, concise native registry summaries.
