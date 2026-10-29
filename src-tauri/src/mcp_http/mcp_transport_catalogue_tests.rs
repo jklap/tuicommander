@@ -122,13 +122,31 @@ fn native_tool_catalog_summaries_are_short_and_not_description_prefixes() {
         let description = tool["description"].as_str().unwrap();
         let summary = entry["summary"].as_str().unwrap();
         assert_eq!(entry["name"], tool["name"]);
-        assert_eq!(
-            &entry["description"],
-            recorded
-                .get(name)
-                .filter(|_| name != "workflow")
-                .unwrap_or(&tool["description"])
-        );
+        if name == "agent" || name == "repo" {
+            // Both copies grew past main's recording: agent carries wip's
+            // Prefer-TUICommander framing (both flags on by default) and repo gained
+            // worktree_setup_status. Each is the full reference text, and every
+            // recorded line must survive in it (agent's prefer-dependent header aside).
+            let reference = crate::mcp_http::mcp_transport_catalogue::native_tool_help(name)
+                .expect("reference copy");
+            assert_eq!(entry["description"], reference["description"]);
+            let copy = entry["description"].as_str().unwrap();
+            let recorded_lines = recorded[name].as_str().expect("recorded copy").split('\n');
+            for line in recorded_lines.skip(usize::from(name == "agent")) {
+                assert!(
+                    copy.contains(line),
+                    "{name} Settings copy lost recorded line {line:?}"
+                );
+            }
+        } else {
+            assert_eq!(
+                &entry["description"],
+                recorded
+                    .get(name)
+                    .filter(|_| name != "workflow")
+                    .unwrap_or(&tool["description"])
+            );
+        }
         assert!(!summary.trim().is_empty(), "{name} needs a summary");
         assert!(summary.chars().count() <= 70, "{name} summary is too long");
         assert!(
@@ -634,7 +652,7 @@ fn agent_tool_definition_omits_spawn_recommendation_when_spawning_not_preferred(
         "must not steer toward spawn when spawning is not preferred"
     );
     assert!(
-        desc.contains("prefer that over `spawn` here"),
+        desc.contains("prefer that over `spawn`/`launch` here"),
         "must explicitly redirect to the host's own native spawning"
     );
     // Messaging guidance is untouched by the spawning flag alone.
@@ -693,7 +711,9 @@ fn agent_tool_definition_drops_the_whole_walkthrough_when_neither_preferred() {
     // detect/stats/metrics moved to HTTP (`removed_native_action_replacement`),
     // so the header no longer advertises them.
     assert!(desc.starts_with("AI agent peer administration."));
-    assert!(desc.contains("prefer those over `spawn`/`register`/`list_peers`/`send`/`inbox` here"));
+    assert!(desc.contains(
+        "prefer those over `spawn`/`launch`/`register`/`list_peers`/`send`/`inbox` here"
+    ));
     // Every action bullet — and the schema itself — is still fully intact.
     for action in &["spawn", "wait", "register", "list_peers", "send", "inbox"] {
         assert!(
@@ -830,9 +850,263 @@ fn merged_tool_definitions_agent_description_reflects_the_calling_sessions_prefe
     // tools/list carries main's compact description; the preference is applied
     // there as an explicit redirect to the host's own tooling.
     assert!(
-        desc.contains("prefer those over `spawn`/`register`/`list_peers`/`send`/`inbox` here"),
+        desc.contains(
+            "prefer those over `spawn`/`launch`/`register`/`list_peers`/`send`/`inbox` here"
+        ),
         "tools/list must redirect to the host's native spawning and messaging: {desc}"
     );
+}
+
+/// `claude` keeps the permissive defaults, `ego` turns both preferences off,
+/// and an MCP session is registered under `claude` (what `tuic-bridge`
+/// records for itself when it proxies ego).
+fn prefer_flags_fixture(dir: &TempDir) -> (Arc<AppState>, &'static str) {
+    let mut agents_cfg = crate::config::AgentsConfig::default();
+    agents_cfg.agents.insert(
+        "ego".to_string(),
+        crate::config::AgentSettings {
+            prefer_tuic_spawning: Some(false),
+            prefer_tuic_messaging: Some(false),
+            ..Default::default()
+        },
+    );
+    let _ = dir;
+    crate::config::save_agents_config(crate::config::AgentsConfig::default(), agents_cfg).unwrap();
+    let state = test_state();
+    let sid = "mcp-prefer-flags-per-path";
+    state.mcp.sessions.insert(
+        sid.to_string(),
+        crate::state::McpSessionMeta {
+            last_activity: std::time::Instant::now(),
+            is_claude_code: false,
+            requires_meta_tools: false,
+            has_sse_stream: false,
+            sse_generation: 0,
+            repo_path: None,
+            agent_type: Some("claude".to_string()),
+            prompt_instructions: None,
+        },
+    );
+    (state, sid)
+}
+
+const RESTRICTED_REDIRECT: &str =
+    "prefer those over `spawn`/`launch`/`register`/`list_peers`/`send`/`inbox` here";
+
+fn agent_of(tools: &serde_json::Value) -> String {
+    tools
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|t| t["name"] == "agent")
+        .expect("agent listed")["description"]
+        .as_str()
+        .unwrap()
+        .to_string()
+}
+
+// Catches (audit O3-2): a stateless client named in `_meta` (ego through the
+// bridge's `claude` session) getting the session's flags in tools/list
+// instead of its own, while discover and instructions used its own.
+#[test]
+#[serial_test::serial]
+fn tools_list_uses_the_stateless_client_name_over_the_session_for_prefer_flags() {
+    let dir = TempDir::new().unwrap();
+    let _guard = crate::config::set_config_dir_override(dir.path().to_path_buf());
+    let (state, sid) = prefer_flags_fixture(&dir);
+
+    let via_session = agent_of(&merged_tool_definitions(&state, Some(sid), None));
+    assert!(!via_session.contains(RESTRICTED_REDIRECT), "{via_session}");
+    // ego requires meta tools, so its real list is collapsed; the full branch
+    // is reached with `collapse_tools` off and the name overriding a session
+    // that does not force meta tools.
+    let named = agent_of(&crate::mcp_http::mcp_transport_catalogue::merged_tool_definitions_for_caller(
+        &state,
+        Some(sid),
+        Some("ego"),
+        false,
+    ));
+    assert!(named.contains(RESTRICTED_REDIRECT), "{named}");
+}
+
+// Catches (G4): a modern call with no `_meta` client name, keyed only by
+// `managed-call:{peer}`, resolving to the permissive flags because that key is
+// not in `mcp.sessions`. The peer's own terminal says which agent it is.
+#[test]
+#[serial_test::serial]
+fn managed_call_without_a_client_name_uses_the_peers_agent_for_prefer_flags() {
+    let dir = TempDir::new().unwrap();
+    let _guard = crate::config::set_config_dir_override(dir.path().to_path_buf());
+    let (state, _sid) = prefer_flags_fixture(&dir);
+    let peer = "6f1c2a4e-0d7b-4c39-9a51-2e8f3b7d6c10";
+    crate::state::tests_support::insert_dummy_session(&state, peer);
+    let managed = format!("managed-call:{peer}");
+    let schema = |state: &Arc<AppState>| {
+        handle_get_tool_schema_for_session(
+            state,
+            &serde_json::json!({ "tool_name": "agent" }),
+            Some(&managed),
+            None,
+        )["description"]
+            .as_str()
+            .unwrap()
+            .to_string()
+    };
+
+    state.session_maps.session_states.insert(
+        peer.to_string(),
+        crate::state::SessionState {
+            agent_type: Some("ego".to_string()),
+            ..Default::default()
+        },
+    );
+    let restricted = schema(&state);
+    assert!(restricted.contains(RESTRICTED_REDIRECT), "{restricted}");
+
+    state
+        .session_maps
+        .session_states
+        .get_mut(peer)
+        .unwrap()
+        .agent_type = Some("claude".to_string());
+    let permissive = schema(&state);
+    assert!(!permissive.contains(RESTRICTED_REDIRECT), "{permissive}");
+}
+
+// Catches (audit O3-2): `get_tool_schema` answering every caller with the
+// fully-permissive `agent` description.
+#[test]
+#[serial_test::serial]
+fn get_tool_schema_renders_agent_with_the_callers_prefer_flags() {
+    let dir = TempDir::new().unwrap();
+    let _guard = crate::config::set_config_dir_override(dir.path().to_path_buf());
+    let (state, sid) = prefer_flags_fixture(&dir);
+    let args = serde_json::json!({ "tool_name": "agent" });
+
+    let permissive = handle_get_tool_schema_for_session(&state, &args, Some(sid), None);
+    assert!(!permissive["description"].as_str().unwrap().contains(RESTRICTED_REDIRECT));
+    let restricted = handle_get_tool_schema_for_session(&state, &args, Some(sid), Some("ego"));
+    assert!(
+        restricted["description"].as_str().unwrap().contains(RESTRICTED_REDIRECT),
+        "{restricted}"
+    );
+}
+
+// Catches (audit O3-2): `search_tools`' inline `top_schema` for `agent`
+// carrying the permissive description for a restricted caller.
+#[test]
+#[serial_test::serial]
+fn search_tools_top_schema_renders_agent_with_the_callers_prefer_flags() {
+    let dir = TempDir::new().unwrap();
+    let _guard = crate::config::set_config_dir_override(dir.path().to_path_buf());
+    let (state, sid) = prefer_flags_fixture(&dir);
+    rebuild_tool_search_index(&state);
+    let top = |name: Option<&str>| {
+        let response = handle_search_tools_for_session(
+            &state,
+            &serde_json::json!({ "query": "agent managed peers mail spawn", "limit": 1 }),
+            Some(sid),
+            name,
+        );
+        assert_eq!(response["results"][0]["name"], "agent", "premise: {response}");
+        response["top_schema"]["description"]
+            .as_str()
+            .expect("top_schema inlined")
+            .to_string()
+    };
+    assert!(!top(None).contains(RESTRICTED_REDIRECT));
+    assert!(top(Some("ego")).contains(RESTRICTED_REDIRECT));
+}
+
+// Catches (audit O3-2): `action=help` (direct and through the `call_tool`
+// meta tool grok and ego use) returning the permissive reference text, which
+// re-teaches the spawn/messaging walkthrough the caller's instructions
+// withheld.
+#[tokio::test]
+#[serial_test::serial]
+async fn agent_help_renders_with_the_callers_prefer_flags_directly_and_via_call_tool() {
+    let dir = TempDir::new().unwrap();
+    let _guard = crate::config::set_config_dir_override(dir.path().to_path_buf());
+    let (state, sid) = prefer_flags_fixture(&dir);
+    let permissive = crate::mcp_http::mcp_transport_catalogue::native_tool_help_for("agent", true, true).unwrap();
+    let restricted = crate::mcp_http::mcp_transport_catalogue::native_tool_help_for("agent", false, false).unwrap();
+    assert_ne!(permissive, restricted, "premise: the flags change the reference");
+
+    let help = serde_json::json!({ "action": "help" });
+    let direct = |name: Option<&'static str>| {
+        let state = state.clone();
+        let help = help.clone();
+        async move {
+            crate::mcp_http::mcp_transport::handle_mcp_tool_call_for_client(
+                &state,
+                loopback_addr(),
+                "agent",
+                &help,
+                Some(sid),
+                None,
+                name,
+            )
+            .await
+        }
+    };
+    assert_eq!(direct(None).await, permissive);
+    assert_eq!(direct(Some("ego")).await, restricted);
+
+    let via_meta = handle_call_tool_for_client(
+        &state,
+        loopback_addr(),
+        &serde_json::json!({ "tool_name": "agent", "arguments": { "action": "help" } }),
+        None,
+        None,
+        Some("ego"),
+    )
+    .await;
+    assert_eq!(via_meta, restricted);
+}
+
+// Catches (audit C1): with spawning off the compact listing still steering
+// toward `launch`, and with messaging off still telling every worker to
+// "report with send" — the mailbox the same text redirects away from.
+#[test]
+fn compact_agent_description_redirects_launch_and_drops_send_duty_per_flag_combination() {
+    const SEND_DUTY: &str = "Every worker must report task output or blockers with send.";
+    let agent_desc = |spawning: bool, messaging: bool| {
+        native_tool_definitions(spawning, messaging)
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|t| t["name"] == "agent")
+            .unwrap()["description"]
+            .as_str()
+            .unwrap()
+            .to_string()
+    };
+    let permissive = agent_desc(true, true);
+    assert!(permissive.contains(SEND_DUTY), "premise: {permissive}");
+    assert!(!permissive.contains("This host has its own native"));
+    for (spawning, messaging) in [(true, true), (true, false), (false, true), (false, false)] {
+        let desc = agent_desc(spawning, messaging);
+        let combo = format!("({spawning}, {messaging})");
+        assert_eq!(desc.contains(SEND_DUTY), messaging, "{combo}: {desc}");
+        assert_eq!(
+            desc.contains("prefer that over `spawn`/`launch` here")
+                || desc.contains("prefer those over `spawn`/`launch`/"),
+            !spawning,
+            "{combo}: spawning off must redirect both creation actions: {desc}"
+        );
+        assert!(
+            !desc.contains("over `spawn` here") && !desc.contains("over `spawn`/`register`"),
+            "{combo}: no redirect may name spawn without launch: {desc}"
+        );
+        assert_eq!(
+            desc.contains("`register`/`list_peers`/`send`/`inbox` here"),
+            !messaging,
+            "{combo}: {desc}"
+        );
+        // Every action stays documented: prefer is never disable.
+        assert!(desc.contains("\nlaunch:"), "{combo}");
+        assert!(desc.starts_with("Managed peers and mail. There is no separate swarm action."));
+    }
 }
 
 #[test]
@@ -1723,9 +1997,7 @@ fn instructions_messaging_disabled_keeps_spawn_but_omits_messaging_guidance() {
 
     // Spawn guidance stays.
     assert!(out.contains("- **Prefer TUICommander for peers/teams:**"));
-    assert!(
-        out.contains("- **Same repo:** TUIC `agent action=spawn` peers to work in this repo.")
-    );
+    assert!(out.contains("- **Same repo:** TUIC `agent action=spawn` peers to work in this repo."));
     assert!(out.contains("- **Isolated branches:**"));
 
     // Messaging guidance is gone.
@@ -1905,19 +2177,42 @@ fn instructions_disabled_agent_tool_wins_over_an_explicit_prefer_true_override()
     state.config.write().mcp_capabilities =
         crate::mcp_capabilities::McpCapabilities::from_legacy(&vec!["agent".to_string()]);
     let out = build_mcp_instructions(&state, Some("claude-code"));
+    state.config.write().mcp_capabilities =
+        crate::mcp_capabilities::McpCapabilities::from_legacy(&Vec::new());
+    let enabled = build_mcp_instructions(&state, Some("claude-code"));
 
     assert!(
         !out.contains("## Multi-Agent Work"),
         "an explicit prefer_tuic_*=true override must not override agent_enabled=false"
     );
-    assert!(
-        !out.contains("- `agent` ("),
-        "agent bullet must still be omitted from Tools"
-    );
     assert!(!out.contains("- **Coordinate:**"));
-    // session/repo guidance is unaffected by the agent-only override.
-    assert!(out.contains("**Submit:** `session action=submit"));
-    assert!(out.contains("**Worktrees:** use `repo action=worktree_create`"));
+    assert!(
+        enabled.contains("## Multi-Agent Work"),
+        "control must render the section"
+    );
+    // Only the agent guidance goes: the same config with `agent` enabled, minus the
+    // Multi-Agent Work section, the agent-named Tool identity paragraph and
+    // `agent` in the tool listing, is exactly the disabled output (blank lines aside).
+    let mut expected = Vec::new();
+    let mut in_multi_agent = false;
+    for line in enabled.lines() {
+        if line.starts_with("## ") {
+            in_multi_agent = line == "## Multi-Agent Work";
+        }
+        if in_multi_agent || line.starts_with("**Tool identity:**") || line.trim().is_empty() {
+            continue;
+        }
+        expected.push(line.replace("`session`, `agent`, ", "`session`, "));
+    }
+    let actual: Vec<&str> = out.lines().filter(|line| !line.trim().is_empty()).collect();
+    assert_eq!(
+        actual, expected,
+        "disabling agent changed non-agent guidance"
+    );
+    assert!(
+        actual.iter().any(|line| line.contains("`session`, `repo`")),
+        "the tool listing must still name session and repo"
+    );
 }
 
 /// There are two instruction surfaces and they are not equals. Every client
@@ -2236,6 +2531,17 @@ fn mcp_instruction_surface_bytes_stay_within_budget() {
     // that carries no obligation is not the same trade.
     // #2441-bbcf adds one cross-client delegation duty (137 bytes), not a catalogue.
     // Reserve only the next 64-byte boundary; other instruction sections stay unchanged.
+    //
+    // Both empty-state budgets moved again on 2026-10-08 (classic 1600 ->
+    // 3264, collapsed 1664 -> 3328), deliberately, by the user's decision to
+    // keep wip's richer marker/protocol prose when wip was replayed onto main
+    // (plans/main-review/rebase-fixups.md, "USER DECISION ... MCP
+    // instruction budget": "Increase the budget and keep wip's prose").
+    // Measured on the final replayed tree with the 5-byte baseline version
+    // (so `ver_overhead` is 0 and not counted twice): classic empty 3206 B,
+    // collapsed empty 3269 B; each cap is that plus ~2%, rounded up to the
+    // next 64 bytes. The prose was NOT trimmed to fit; trimming it is the
+    // way to bring these back down, not another raise.
     //
     // `env!("CARGO_PKG_VERSION")` (`ver`, above) appears twice in the
     // shared identity/marker prose both variants render, and its length
@@ -3011,8 +3317,12 @@ fn instructions_make_no_claim_about_the_user_or_the_platform() {
                 &ctx,
                 &default_tool_gates(),
             );
+            // wip's "Prefer TUICommander" bullet says "throwaway" (a single-shot
+            // subagent), which is not a claim about the user; strip only that word
+            // so "MacBook", "awaybot" etc. are still caught.
+            let checked = out.replace("throwaway", "");
             for banned in ["away", "Mac"] {
-                assert!(!out.contains(banned), "{banned:?} in: {out}");
+                assert!(!checked.contains(banned), "{banned:?} in: {out}");
             }
         }
     }
@@ -3514,11 +3824,25 @@ async fn native_help_preserves_every_displaced_rule_2069() {
             None,
         )
         .await;
-        if reply["description"] != *original {
+        // Help is the full reference definition. Since the recording, `repo` gained
+        // worktree_setup_status and `agent`'s header gained the Prefer-TUICommander
+        // framing, so exact equality with the recording no longer holds; instead
+        // every recorded line must survive (agent's prefer-dependent header aside).
+        let full = crate::mcp_http::mcp_transport_catalogue::native_tool_help(name)
+            .map(|help| help["description"].clone());
+        if full.as_ref() != Some(&reply["description"]) {
             failures.push(format!(
-                "{name}: help lost recorded guidance ({})",
+                "{name}: help is not the full reference definition ({})",
                 reply.get("error").unwrap_or(&serde_json::Value::Null)
             ));
+            continue;
+        }
+        let help = reply["description"].as_str().unwrap();
+        let skip_header = usize::from(name == "agent");
+        for line in original.as_str().unwrap().split('\n').skip(skip_header) {
+            if !help.contains(line) {
+                failures.push(format!("{name}: help lost recorded guidance line {line:?}"));
+            }
         }
     }
     assert!(failures.is_empty(), "{}", failures.join("\n"));
