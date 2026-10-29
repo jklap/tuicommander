@@ -2,7 +2,8 @@
 
 use std::path::{Component, Path, PathBuf};
 
-/// OS-configured temporary directories and the scratch roots used by TUIC tooling.
+/// OS-configured temporary directories: the environment's `TMPDIR`/`TMP`/`TEMP`
+/// and, on Unix, the standard system roots. Tooling scratch derives from these.
 pub fn recognized_temp_roots() -> Vec<PathBuf> {
     let mut roots = vec![std::env::temp_dir()];
     for key in ["TMPDIR", "TMP", "TEMP"] {
@@ -20,9 +21,6 @@ pub fn recognized_temp_roots() -> Vec<PathBuf> {
             ]
             .map(PathBuf::from),
         );
-    }
-    if let Some(home) = dirs::home_dir() {
-        roots.push(home.join("Gits").join(".tmp"));
     }
     roots
 }

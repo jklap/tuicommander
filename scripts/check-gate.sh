@@ -86,6 +86,14 @@ if git submodule status plugins 2>/dev/null | grep -q '^-'; then
 	echo "      reported below, the gate is effectively green."
 fi
 
+if ! command -v meson >/dev/null 2>&1 || ! command -v ninja >/dev/null 2>&1; then
+	echo
+	echo "NOTE: meson or ninja is not on PATH. make check builds tuicommander with"
+	echo "      the dictation feature, whose bundled WebRTC echo canceller needs"
+	echo "      both, so clippy will fail with 'Failed to execute meson'. Install"
+	echo "      them (macOS: brew install meson ninja) before trusting this run."
+fi
+
 # A full template path: BSD and GNU mktemp both take it (--tmpdir is GNU-only).
 LOG="$(mktemp "${TMPDIR:-/tmp}/tuic-check-gate.XXXXXX")"
 
@@ -157,7 +165,10 @@ fi
 
 if grep -q "rust tests ✓" "$LOG" && ! grep -q "vitest ✓" "$LOG"; then
 	echo
-	echo "NOTE: the failure looks like it's in the vitest step. Before treating"
+	echo "NOTE: the failure looks like it's in the vitest step. It also enforces"
+	echo "      the coverage floors in vitest.config.ts: an 'ERROR: Coverage for"
+	echo "      ... does not meet global threshold' line above is a real failure."
+	echo "      Otherwise, before treating"
 	echo "      this as a regression, run 'pnpm exec vitest run' directly and"
 	echo "      check for 'Tests  N passed (N)' with 0 real failures — a known,"
 	echo "      pre-existing flaky async leak in ChangelogModal.test.tsx marks"

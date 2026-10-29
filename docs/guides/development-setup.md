@@ -7,6 +7,7 @@ The macOS desktop app supports macOS 12 Monterey or later and requires system We
 - **Node.js 24+** (the repository version is pinned in [`.nvmrc`](https://github.com/sstraus/tuicommander/blob/main/.nvmrc))
 - **Rust** (stable toolchain via rustup)
 - **Tauri CLI** (`cargo install tauri-cli`)
+- **Meson and Ninja** for the bundled WebRTC echo canceller in dictation (`brew install meson ninja` on macOS). Tauri dev/release builds and `make check` build the `dictation` feature.
 - **git** for git features. `gh` (GitHub CLI) is only a release tool; the app does not run it.
 
 > **Windows users:** See the [Windows-specific prerequisites](#windows-prerequisites) section below before proceeding.
@@ -522,6 +523,11 @@ pnpm test              # Run all tests
 pnpm test:coverage     # Coverage report
 ```
 
+`make check` (and so `scripts/check-gate.sh`) runs Vitest once with coverage, so
+the `coverage.thresholds` floors in `vitest.config.ts` (lines 85, statements 83,
+functions 83, branches 75) fail the gate. Raise a floor when measured coverage
+rises; never lower one to make the gate pass.
+
 **Test tiers:**
 - Tier 1: Pure functions (utils, type transformations)
 - Tier 2: Store logic (state management)
@@ -530,7 +536,7 @@ pnpm test:coverage     # Coverage report
 
 **Framework:** Vitest + SolidJS Testing Library + happy-dom
 
-**Coverage:** ~80%+
+**Coverage:** floors enforced by `make check` (see above)
 
 ### Chat browser landing gate (macOS)
 
