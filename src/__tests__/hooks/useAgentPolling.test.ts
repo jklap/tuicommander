@@ -12,12 +12,15 @@ async function tick(ms: number) {
 
 describe("useAgentPolling", () => {
 	let store: typeof import("../../stores/terminals").terminalsStore;
+	let polling: typeof import("../../hooks/useAgentPolling");
 
 	beforeEach(async () => {
 		vi.resetModules();
 		vi.useFakeTimers();
 		mockInvoke.mockReset();
 		store = (await import("../../stores/terminals")).terminalsStore;
+		// Keep module loading outside test deadlines while preserving per-test isolation.
+		polling = await import("../../hooks/useAgentPolling");
 	});
 
 	afterEach(() => {
@@ -27,7 +30,7 @@ describe("useAgentPolling", () => {
 	// Catches: the authoritative idle snapshot erases a final API error's red dot.
 	it.each(["claude", "codex", "ego"])("retains %s final failure until the backend observes recovery", async (agent) => {
 		const id = store.add(makeTerminal({ sessionId: "failed-2335" }));
-		const { applySessionStateEvent } = await import("../../hooks/useAgentPolling");
+		const { applySessionStateEvent } = polling;
 		const snapshot = (shell: string, error?: string) =>
 			applySessionStateEvent({
 				session_id: "failed-2335",
@@ -66,7 +69,7 @@ describe("useAgentPolling", () => {
 				},
 			},
 		]);
-		const { syncAgentLifecycleStates, applySessionStateEvent } = await import("../../hooks/useAgentPolling");
+		const { syncAgentLifecycleStates, applySessionStateEvent } = polling;
 		const { pluginRegistry } = await import("../../plugins/pluginRegistry");
 		const transitions: Array<{ type: string; identity: string | null }> = [];
 		const notify = vi.spyOn(pluginRegistry, "notifyStateChange").mockImplementation((event) => {
@@ -101,7 +104,7 @@ describe("useAgentPolling", () => {
 	it("keeps native Codex binding on its tab and retracts it with the snapshot", async () => {
 		const a = store.add(makeTerminal({ sessionId: "codex-a", agentType: "codex" }));
 		const b = store.add(makeTerminal({ sessionId: "codex-b", agentType: "codex" }));
-		const { applySessionStateEvent } = await import("../../hooks/useAgentPolling");
+		const { applySessionStateEvent } = polling;
 		applySessionStateEvent({
 			session_id: "codex-b",
 			state: { agent_type: "codex", codex_binding: { session_id: "thread-b" } },
@@ -130,7 +133,7 @@ describe("useAgentPolling", () => {
 					resolve = done;
 				}),
 		);
-		const { syncAgentLifecycleStates, applySessionStateEvent } = await import("../../hooks/useAgentPolling");
+		const { syncAgentLifecycleStates, applySessionStateEvent } = polling;
 		const pending = syncAgentLifecycleStates();
 		applySessionStateEvent({ session_id: "identity-race", state: { agent_type: "codex" } });
 		resolve([{ session_id: "identity-race", state: { agent_type: "claude" } }]);
@@ -143,7 +146,7 @@ describe("useAgentPolling", () => {
 		mockInvoke.mockResolvedValueOnce([
 			{ session_id: "sess-1", state: { shell_state: "idle", agent_state: "working", background_work: true } },
 		]);
-		const { syncAgentLifecycleStates } = await import("../../hooks/useAgentPolling");
+		const { syncAgentLifecycleStates } = polling;
 
 		await syncAgentLifecycleStates();
 		expect(store.get(id)?.agentState).toBe("working");
@@ -171,7 +174,7 @@ describe("useAgentPolling", () => {
 				},
 			},
 		]);
-		const { syncAgentLifecycleStates } = await import("../../hooks/useAgentPolling");
+		const { syncAgentLifecycleStates } = polling;
 
 		await syncAgentLifecycleStates();
 
@@ -191,7 +194,7 @@ describe("useAgentPolling", () => {
 				state: { shell_state: "idle", agent_state: "idle", last_activity_ms: now - 70 * 60_000 },
 			},
 		]);
-		const { syncAgentLifecycleStates } = await import("../../hooks/useAgentPolling");
+		const { syncAgentLifecycleStates } = polling;
 
 		await syncAgentLifecycleStates();
 		expect(store.get(id)?.lastActivityAt).toBe(now - 70 * 60_000);
@@ -203,7 +206,7 @@ describe("useAgentPolling", () => {
 		mockInvoke.mockResolvedValueOnce([
 			{ session_id: "sess-1", state: { shell_state: "busy", agent_state: "working", queued_commands: 3 } },
 		]);
-		const { syncAgentLifecycleStates } = await import("../../hooks/useAgentPolling");
+		const { syncAgentLifecycleStates } = polling;
 
 		await syncAgentLifecycleStates();
 		expect(store.get(id)?.queuedCommands).toBe(3);
@@ -227,7 +230,7 @@ describe("useAgentPolling", () => {
 			mockInvoke.mockResolvedValue([
 				{ session_id: "sess-1", state: { shell_state: "busy", agent_state: "working", queued_commands: 1 } },
 			]);
-			const { useAgentPolling } = await import("../../hooks/useAgentPolling");
+			const { useAgentPolling } = polling;
 			await testInScopeAsync(async () => {
 				const id = store.add(makeTerminal({ name: "Codex", sessionId: "sess-1" }));
 				useAgentPolling();
@@ -258,7 +261,7 @@ describe("useAgentPolling", () => {
 				state: { agent_state: "awaiting_input", awaiting_input: true, question_confident: true },
 			},
 		]);
-		const { syncAgentLifecycleStates } = await import("../../hooks/useAgentPolling");
+		const { syncAgentLifecycleStates } = polling;
 
 		await syncAgentLifecycleStates();
 		expect(store.get(id)?.awaitingInput).toBe("question");
@@ -276,7 +279,7 @@ describe("useAgentPolling", () => {
 		const id = store.add(makeTerminal({ name: "T1", sessionId: "lost-session" }));
 		store.update(id, { agentState: "working", backgroundWork: true });
 		mockInvoke.mockResolvedValueOnce([]);
-		const { syncAgentLifecycleStates } = await import("../../hooks/useAgentPolling");
+		const { syncAgentLifecycleStates } = polling;
 
 		await syncAgentLifecycleStates();
 		expect(store.get(id)?.shellState).toBe("exited");
@@ -294,7 +297,7 @@ describe("useAgentPolling", () => {
 					resolveSnapshot = resolve;
 				}),
 		);
-		const { syncAgentLifecycleStates } = await import("../../hooks/useAgentPolling");
+		const { syncAgentLifecycleStates } = polling;
 
 		const pending = syncAgentLifecycleStates();
 		store.update(id, { shellState: "busy" });
@@ -314,7 +317,7 @@ describe("useAgentPolling", () => {
 					resolveSnapshot = resolve;
 				}),
 		);
-		const { syncAgentLifecycleStates } = await import("../../hooks/useAgentPolling");
+		const { syncAgentLifecycleStates } = polling;
 
 		const pending = syncAgentLifecycleStates();
 		store.update(id, { sessionId: "replacement-session" });
@@ -334,7 +337,7 @@ describe("useAgentPolling", () => {
 					resolveSnapshot = resolve;
 				}),
 		);
-		const { syncAgentLifecycleStates } = await import("../../hooks/useAgentPolling");
+		const { syncAgentLifecycleStates } = polling;
 
 		const pending = syncAgentLifecycleStates();
 		store.update(id, { shellState: "busy" });
@@ -357,7 +360,7 @@ describe("useAgentPolling", () => {
 					resolveHung = resolve;
 				}),
 		);
-		const { syncAgentLifecycleStates } = await import("../../hooks/useAgentPolling");
+		const { syncAgentLifecycleStates } = polling;
 
 		const timedOut = syncAgentLifecycleStates();
 		await vi.advanceTimersByTimeAsync(5_001);
@@ -383,7 +386,7 @@ describe("useAgentPolling", () => {
 			.mockResolvedValueOnce([
 				{ session_id: "sess-1", state: { shell_state: "idle", agent_state: "completed", background_work: false } },
 			]);
-		const { syncAgentLifecycleStates } = await import("../../hooks/useAgentPolling");
+		const { syncAgentLifecycleStates } = polling;
 
 		const oldRequest = syncAgentLifecycleStates();
 		const coalescedRequest = syncAgentLifecycleStates();
@@ -406,7 +409,7 @@ describe("useAgentPolling", () => {
 			const id = store.add(makeTerminal({ name: "T1", sessionId: "sess-1" }));
 			store.setActive(id);
 
-			const { useAgentPolling } = await import("../../hooks/useAgentPolling");
+			const { useAgentPolling } = polling;
 			useAgentPolling();
 
 			// Poll fires on first interval tick (30s fallback), not immediately
@@ -422,7 +425,7 @@ describe("useAgentPolling", () => {
 
 	it("does not poll when no active terminal", async () => {
 		await testInScopeAsync(async () => {
-			const { useAgentPolling } = await import("../../hooks/useAgentPolling");
+			const { useAgentPolling } = polling;
 			useAgentPolling();
 
 			await vi.advanceTimersByTimeAsync(30_000);
@@ -436,7 +439,7 @@ describe("useAgentPolling", () => {
 			const id = store.add(makeTerminal({ name: "T1" }));
 			store.setActive(id);
 
-			const { useAgentPolling } = await import("../../hooks/useAgentPolling");
+			const { useAgentPolling } = polling;
 			useAgentPolling();
 
 			await vi.advanceTimersByTimeAsync(30_000);
@@ -452,7 +455,7 @@ describe("useAgentPolling", () => {
 			const id = store.add(makeTerminal({ name: "T1", sessionId: "sess-1" }));
 			store.setActive(id);
 
-			const { useAgentPolling } = await import("../../hooks/useAgentPolling");
+			const { useAgentPolling } = polling;
 			useAgentPolling();
 
 			await vi.advanceTimersByTimeAsync(30_000);
@@ -469,7 +472,7 @@ describe("useAgentPolling", () => {
 			const id = store.add(makeTerminal({ name: "T1", sessionId: "sess-1" }));
 			store.setActive(id);
 
-			const { useAgentPolling } = await import("../../hooks/useAgentPolling");
+			const { useAgentPolling } = polling;
 			useAgentPolling();
 
 			// Should not throw
@@ -500,7 +503,7 @@ describe("useAgentPolling", () => {
 			await testInScopeAsync(async () => {
 				const id = store.add(makeTerminal({ name: "T1", sessionId: "sess-1" }));
 
-				const { useAgentPolling } = await import("../../hooks/useAgentPolling");
+				const { useAgentPolling } = polling;
 				useAgentPolling();
 
 				await tick(30_000); // first poll: null
@@ -533,7 +536,7 @@ describe("useAgentPolling", () => {
 			await testInScopeAsync(async () => {
 				const id = store.add(makeTerminal({ name: "T1", sessionId: "sess-1" }));
 
-				const { useAgentPolling } = await import("../../hooks/useAgentPolling");
+				const { useAgentPolling } = polling;
 				useAgentPolling();
 
 				await tick(30_000); // poll 1 + discovery
@@ -565,7 +568,7 @@ describe("useAgentPolling", () => {
 			await testInScopeAsync(async () => {
 				const id = store.add(makeTerminal({ name: "T1", sessionId: "sess-1" }));
 
-				const { useAgentPolling } = await import("../../hooks/useAgentPolling");
+				const { useAgentPolling } = polling;
 				useAgentPolling();
 
 				await tick(30_000); // poll 1 + discovery
@@ -594,7 +597,7 @@ describe("useAgentPolling", () => {
 				const id = store.add(makeTerminal({ name: "T1", sessionId: "sess-1" }));
 				store.update(id, { tuicSession: "tuic-uuid-123" });
 
-				const { useAgentPolling } = await import("../../hooks/useAgentPolling");
+				const { useAgentPolling } = polling;
 				useAgentPolling();
 
 				await tick(30_000);
@@ -618,7 +621,7 @@ describe("useAgentPolling", () => {
 				const id = store.add(makeTerminal({ name: "T1", sessionId: "sess-1" }));
 				store.update(id, { tuicSession: "tuic-uuid-123" });
 
-				const { useAgentPolling } = await import("../../hooks/useAgentPolling");
+				const { useAgentPolling } = polling;
 				useAgentPolling();
 
 				await tick(30_000);
@@ -636,7 +639,7 @@ describe("useAgentPolling", () => {
 			await testInScopeAsync(async () => {
 				const id = store.add(makeTerminal({ name: "T1", sessionId: "sess-1" }));
 
-				const { useAgentPolling } = await import("../../hooks/useAgentPolling");
+				const { useAgentPolling } = polling;
 				useAgentPolling();
 
 				await tick(30_000);
@@ -656,7 +659,7 @@ describe("useAgentPolling", () => {
 			mockInvoke.mockResolvedValue("claude");
 
 			await testInScopeAsync(async () => {
-				const { detectAgentForTerminal } = await import("../../hooks/useAgentPolling");
+				const { detectAgentForTerminal } = polling;
 				const { pluginRegistry } = await import("../../plugins/pluginRegistry");
 
 				const id = store.add(makeTerminal({ name: "T1", sessionId: "sess-synth" }));
@@ -711,7 +714,7 @@ describe("useAgentPolling", () => {
 			});
 
 			await testInScopeAsync(async () => {
-				const { detectAgentForTerminal } = await import("../../hooks/useAgentPolling");
+				const { detectAgentForTerminal } = polling;
 				const { pluginRegistry } = await import("../../plugins/pluginRegistry");
 
 				const id = store.add(makeTerminal({ name: "T1", sessionId: "sess-trans" }));
@@ -786,7 +789,7 @@ describe("useAgentPolling", () => {
 			await testInScopeAsync(async () => {
 				const id = store.add(makeTerminal({ name: "T1", sessionId: "sess-1" }));
 
-				const { useAgentPolling, detectAgentForTerminal } = await import("../../hooks/useAgentPolling");
+				const { useAgentPolling, detectAgentForTerminal } = polling;
 				useAgentPolling();
 
 				await tick(30_000); // poll 1: claude + discovery
@@ -822,7 +825,7 @@ describe("useAgentPolling", () => {
 				const id1 = store.add(makeTerminal({ name: "T1", sessionId: "sess-1" }));
 				const id2 = store.add({ sessionId: "sess-2", fontSize: 14, name: "T2", cwd: null, awaitingInput: null });
 
-				const { useAgentPolling } = await import("../../hooks/useAgentPolling");
+				const { useAgentPolling } = polling;
 				useAgentPolling();
 
 				await tick(30_000); // both polled sequentially + both discover
@@ -857,7 +860,7 @@ describe("useAgentPolling", () => {
 
 			await testInScopeAsync(async () => {
 				const id = store.add(makeTerminal({ name: "Grok" }));
-				const { useAgentPolling } = await import("../../hooks/useAgentPolling");
+				const { useAgentPolling } = polling;
 				useAgentPolling();
 				await tick(0);
 				expect(store.get(id)?.agentIntent).toBeNull();
@@ -892,7 +895,7 @@ describe("useAgentPolling", () => {
 
 			await testInScopeAsync(async () => {
 				const first = store.add(makeTerminal({ name: "First", sessionId: "sess-1" }));
-				const { useAgentPolling } = await import("../../hooks/useAgentPolling");
+				const { useAgentPolling } = polling;
 				useAgentPolling();
 				await tick(0);
 
@@ -921,7 +924,7 @@ describe("useAgentPolling", () => {
 			await testInScopeAsync(async () => {
 				store.add(makeTerminal({ name: "T1", sessionId: "sess-1" }));
 
-				const { useAgentPolling } = await import("../../hooks/useAgentPolling");
+				const { useAgentPolling } = polling;
 				useAgentPolling();
 				await tick(0); // flush the initial lifecycle sync
 				mockInvoke.mockClear();
@@ -950,7 +953,7 @@ describe("useAgentPolling", () => {
 			await testInScopeAsync(async () => {
 				store.add(makeTerminal({ name: "T1", sessionId: "sess-1" }));
 
-				const { useAgentPolling } = await import("../../hooks/useAgentPolling");
+				const { useAgentPolling } = polling;
 				useAgentPolling();
 				await tick(0);
 				expect(mockInvoke).toHaveBeenCalledWith("list_active_sessions");
@@ -986,7 +989,7 @@ describe("useAgentPolling", () => {
 			await testInScopeAsync(async () => {
 				const id = store.add(makeTerminal({ name: "T1", sessionId: "sess-1" }));
 
-				const { useAgentPolling } = await import("../../hooks/useAgentPolling");
+				const { useAgentPolling } = polling;
 				useAgentPolling();
 				await tick(0); // subscribeEvents resolves its dynamic import
 
@@ -1026,7 +1029,7 @@ describe("useAgentPolling", () => {
 				const id = store.add(makeTerminal({ name: "Custom Grok", sessionId: "sess-1" }));
 				store.update(id, { nameIsCustom: true });
 
-				const { useAgentPolling } = await import("../../hooks/useAgentPolling");
+				const { useAgentPolling } = polling;
 				useAgentPolling();
 				await tick(0);
 				const push = listeners.get("session-state-changed");
@@ -1074,7 +1077,7 @@ describe("useAgentPolling", () => {
 
 			await testInScopeAsync(async () => {
 				const id = store.add(makeTerminal({ name: "Grok", sessionId: "sess-1" }));
-				const { useAgentPolling } = await import("../../hooks/useAgentPolling");
+				const { useAgentPolling } = polling;
 				useAgentPolling();
 				await tick(0);
 
@@ -1107,7 +1110,7 @@ describe("useAgentPolling", () => {
 			await testInScopeAsync(async () => {
 				const id = store.add(makeTerminal({ name: "T1", sessionId: "sess-1" }));
 
-				const { useAgentPolling } = await import("../../hooks/useAgentPolling");
+				const { useAgentPolling } = polling;
 				useAgentPolling();
 				await tick(0);
 				const push = listeners.get("session-state-changed");
@@ -1137,7 +1140,7 @@ describe("useAgentPolling", () => {
 			await testInScopeAsync(async () => {
 				const id = store.add(makeTerminal({ name: "T1", sessionId: "sess-1" }));
 
-				const { useAgentPolling } = await import("../../hooks/useAgentPolling");
+				const { useAgentPolling } = polling;
 				useAgentPolling();
 				await tick(0);
 				store.update(id, { agentState: "working" });
@@ -1163,7 +1166,7 @@ describe("useAgentPolling", () => {
 			await testInScopeAsync(async () => {
 				const id = store.add(makeTerminal({ name: "VPS", sessionId: "vps-sess" }));
 
-				const { useAgentPolling } = await import("../../hooks/useAgentPolling");
+				const { useAgentPolling } = polling;
 				const { pluginRegistry } = await import("../../plugins/pluginRegistry");
 				const notify = vi.spyOn(pluginRegistry, "dispatchStructuredEvent");
 				useAgentPolling();
@@ -1203,7 +1206,7 @@ describe("useAgentPolling", () => {
 					state: { shell_state: "busy", agent_state: "working" },
 				},
 			]);
-			const { syncAgentLifecycleStates } = await import("../../hooks/useAgentPolling");
+			const { syncAgentLifecycleStates } = polling;
 
 			await syncAgentLifecycleStates();
 			expect(store.get(id)?.agentState).toBe("working");

@@ -91,7 +91,8 @@ async fn relay_class_requires_confirmation() {
 #[tokio::test]
 #[serial_test::serial]
 async fn execution_class_requires_confirmation() {
-    refuses(&[("/ego_executable", json!("/verification/ego"))]).await;
+    let executable = crate::test_support::test_temp_root().join("verification-ego");
+    refuses(&[("/ego_executable", json!(executable))]).await;
     let (dir, _guard, state, service) = fixture();
     let error = service
         .patch(

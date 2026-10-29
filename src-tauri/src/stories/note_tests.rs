@@ -64,7 +64,9 @@ fn with_story(test: impl FnOnce(&str, &StoryStore, &Story)) {
     let config = tempfile::tempdir_in(tuic_test_support::test_temp_root()).unwrap();
     let _guard = crate::config::set_config_dir_override(config.path().to_path_buf());
     let repo = tempfile::tempdir_in(tuic_test_support::test_temp_root()).unwrap();
-    let project = repo.path().to_str().unwrap();
+    let owner =
+        crate::progress::resolve_owning_project(Some(repo.path().to_str().unwrap())).unwrap();
+    let project = owner.to_str().unwrap();
     let store = StoryStore::open().unwrap();
     let plan = store
         .create_plan(NewPlan {
