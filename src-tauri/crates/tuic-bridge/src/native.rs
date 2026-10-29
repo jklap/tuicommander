@@ -292,7 +292,8 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test]
     async fn native_host_forwards_heartbeat_to_the_configured_instance() {
-        let dir = tempfile::tempdir().unwrap();
+        // The short socket root: a path under the test temp root can exceed sun_path.
+        let dir = tuic_test_support::socket_dir();
         let endpoint = dir.path().join("beat.sock");
         let listener = tokio::net::UnixListener::bind(&endpoint).unwrap();
         let message = json!({"version":"2.0.0","action":"heartbeat","repoPath":"/repo"});
