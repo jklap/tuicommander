@@ -68,6 +68,7 @@ interface RepositoryRefreshCoordinatorDeps {
 			repoPath: string,
 			workspaceId: string,
 		) => Promise<import("../../stores/workspaceIdentity").WorkspaceLifecycleStatus>;
+		sweepArchiveRetention: (repoPath: string) => Promise<{ deleted: string[]; kept: string[] }>;
 		finalizeMergedWorktree: (
 			repoPath: string,
 			workspaceId: string,
@@ -485,6 +486,18 @@ export function createRepositoryRefreshCoordinator(deps: RepositoryRefreshCoordi
 		// Side effects that only need structure data — run before Phase 2
 		await handleAutoArchiveMerged(repoPath, updatedRepo.workspaces);
 		await handleOrphanCleanup(repoPath);
+		if (repoSettingsStore.getEffective(repoPath)?.archiveRetentionDays) {
+			try {
+				const report = await deps.repo.sweepArchiveRetention(repoPath);
+				if (report.deleted.length || report.kept.length) {
+					deps.setStatusInfo(
+						`Archive cleanup: deleted ${report.deleted.length}${report.deleted.length ? `: ${report.deleted.join(", ")}` : ""}; kept ${report.kept.length}${report.kept.length ? `: ${report.kept.join(" | ")}` : ""}`,
+					);
+				}
+			} catch (error) {
+				appLogger.warn("git", "Archive retention sweep failed", error);
+			}
+		}
 
 		// === PHASE 2: Stats (slow) ===
 		// Per-worktree diff stats + last-commit timestamps.

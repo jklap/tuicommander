@@ -9,10 +9,6 @@
 
 - [ ] After Boss manually restarts a rebuilt `make dev` or installs `make build`, confirm deleted project roots no longer produce repeated native-story mdkb warnings. Restored directories must resume syncing. Rust does not hot-reload; the daily app was not restarted.
 
-## Mobile Sessions state filters (2458-ba9d)
-
-- [x] Worktree Vite and agent-browser at 390×844: toggle Working/Idle/Awaiting, combine states, select zero Awaiting without changing counter bounds, and intersect Working with API search. Five screenshots and browser assertions: `~/Gits/.tmp/results/tuic-2458-evidence/`. No daily app or backend was used.
-
 ## Windows monitoring directory metadata (2310-6e76, round l) — Rust rebuild/restart required
 
 - [ ] Coordinator: confirm complete native Windows-x64 CI success after the directory-metadata repair. The raw-event replay proves the recorded event no longer rejects an unchanged status load; rb is not native Windows GREEN. Keep the original unchanged-sibling and tracked `target/tracked.txt` assertions and 20-second deadlines.
@@ -20,7 +16,7 @@
 
 ## Windows CI repairs (2310-6e76, round g) — Rust rebuild/restart required
 
-- [ ] Coordinator: run the exact owner filter in `reports/2310-windows-ci-round-g.md` on native Windows. It covers all 24 failing owners, unchanged assertions/deadlines, profile decoding, workflow HTTP errors and gitconfig process-exit cleanup. rb RED and Linux Clippy are not native Windows GREEN.
+- [ ] Coordinator: run the exact owner filter in [reports/2310-windows-ci-round-g.md](https://github.com/sstraus/tuicommander/blob/895ed2b4eaa9c4dbd91df4acd354f845731e07ad/reports/2310-windows-ci-round-g.md) on native Windows. It covers all 24 failing owners, unchanged assertions/deadlines, profile decoding, workflow HTTP errors and gitconfig process-exit cleanup. rb RED and Linux Clippy are not native Windows GREEN.
 - [ ] After an authorized `make dev` restart or `make build`, verify that a Windows agent resumes from a profile path with spaces/backslashes and that its repository worktree-storage override still applies. Rust does not hot-reload; the daily app was not restarted.
 ## External speech command cleanup (2455-f617) — Rust rebuild/restart required
 
@@ -47,7 +43,6 @@
 
 ## Remote Untrusted Host retry (2438-4c2f) — Rust restart required
 
-- [x] Live mac-mint probes reproduce HTTP 403 for the full MagicDNS name and HTTP 200 for its IP and short hostname. The pre-fix rb regression received three health requests instead of one. Evidence: `src-tauri/src/fixtures/remote/untrusted-host.md` and `~/Gits/.tmp/results/tuic-2438-evidence/red.log`.
 - [ ] Coordinator: run `untrusted_host_refusal`, `other_http_failures_keep_automatic_requests`, and `repeated_remote_failure_logs_only_when_the_cause_changes` against the final commit. No implementation-lane GREEN run was performed.
 - [ ] After an authorized `make dev` restart or `make build`, confirm the remote host card retains the rejected-name cause without a retry countdown and explicit Connect makes another attempt. The daily app and mac-mint daemon were not restarted or changed. Rust does not hot-reload.
 
@@ -104,7 +99,6 @@
 - [ ] After an authorized rebuild and restart, connect with disposable environment overrides, confirm only that child receives them, and confirm env-bearing live-peer reuse asks for disconnect first. Reconnect must drop overrides. Rust does not hot-reload; the daily app was not restarted.
 ## MDKB hook telemetry state (2442-61f6)
 
-- [x] Critic verified final plugins `ca6707705df94603e7cc9c7db1ea7c58f8164bcd`: `src/__tests__/plugins/mdkbDashboard.test.ts` passes all five cases and `pnpm exec tsc --noEmit` passes. Enabled-empty Hooks regression failed before the fix. Log: `~/Gits/.tmp/results/critic-2442-r2-green.log`.
 - [ ] Capture the telemetry-off dashboard with shared plugin CSS. The isolated Chrome for Testing attempt timed out after 20 seconds without a screenshot; the generated renderer page is at `~/Gits/.tmp/results/tuic-2442-evidence/telemetry-off.html`. No visual pass is claimed.
 - [ ] Verify a live MDKB 3.13 stats report with telemetry disabled. Upstream `HooksSummary` and `collect_hooks` confirm the boolean contract; the installed CLI is 3.12.2 and does not emit the field.
 ## Archived New plan source (2425-5cfa) — Rust rebuild/restart required
@@ -131,7 +125,6 @@
 - [ ] After an authorized `make dev` restart or `make build` (or rebuilding and restarting `tuic-remote`), confirm an allowlisted labelled open issue outside the latest 30 unfiltered issues can start a run. Rust does not hot-reload; the daily app was not restarted.
 ## Empty branch reflog recovery (2437-b45b) — Rust restart required
 
-- [x] The pre-fix `empty_branch_reflog_does_not_abort_repository_merge_listing` regression fails on Linux rb with `branch creation is absent from reflog`. Log: `~/Gits/.tmp/results/tuic-2437-red.log`.
 - [ ] Coordinator critic: run the empty/missing reflog regressions and existing populated-history classification tests on the final commit. No implementation-lane GREEN run was performed.
 - [ ] After an authorized `make dev` restart or `make build`, confirm the affected repository structure loads without repeated empty-reflog warnings. Rust does not hot-reload; the daily app was not restarted.
 
@@ -155,12 +148,10 @@
 
 ## Archived external worktrees (2412-11f3) — Rust restart required
 
-- [x] Pre-fix rb regression reproduced live inventory exposing an archived external checkout through CLI and Gix when the configured pool differs. Evidence: `~/Gits/.tmp/tuic-2412-red.log`.
 - [ ] Coordinator: run `archived_external_checkout_stays_out_of_live_inventory`, `discovery_2156_unowned_archive_name_keeps_checkout` and pooled-removal regressions against the final commit. GREEN belongs to the critic/integration lane.
 - [ ] After an authorized `make dev` restart or `make build`, confirm an archived external checkout stays absent from the sidebar and MCP worktree list after a storage-setting change. The daily app was not restarted; Rust does not hot-reload.
 ## Orchestrator mail wake budget (2418-fd33) — Rust restart required
 
-- [x] The pre-fix real silence-timer regression fails on native macOS and Linux rb: the unchanged second Ready tick creates another wake reservation despite a retained user draft. Logs: `~/Gits/.tmp/results/tuic-2418-red-native-timer.log` and `tuic-2418-red-rb-force.log`.
 - [ ] Coordinator: run `stable_ready_ticks_do_not_rearm_not_started_mail_wake`, `a_composer_that_refused_the_first_wake_still_gets_one_at_the_next_idle`, `rearming_never_disturbs_a_wake_in_flight`, and `queued_codex_command_submits_when_ready_confirms_after_shell_idle` against the final commit. No implementation-lane GREEN run was performed.
 - [ ] Load the Rust change with an authorized `make dev` restart or `make build` when ready to end live sessions. The daily app was not restarted; Rust does not hot-reload.
 ## Mobile terminal stream restart (2422-a267)
@@ -173,7 +164,6 @@
 
 ## Compact Compose shortcut hints (2411-c7c9)
 
-- [x] Worktree Vite browser-mode captures at 1400px and 390px show the actual Compose component. DOM measurements confirm the wide legend remains visible, the compact legend is hidden, and the footer is one action line (45px/36px desktop; 53px/44px compact). Both newline bindings remain unchanged in source. Evidence: `~/Gits/.tmp/results/tuic-2411-evidence/visual/`.
 - [ ] Coordinator: inspect the captured wide and compact PNGs and run the focused ComposePanel and composeGeometry checks against the final commit. No post-fix GREEN test run was performed in the implementation lane.
 
 ## Headless manual TLS (2344-59cf) — daemon rebuild/restart required
@@ -181,14 +171,11 @@
 - [ ] After rebuilding `tuic-remote`, restart the affected daemon when safe. With manual PEM configuration, connect via HTTPS and WSS and confirm SSE delivery; confirm local relay/SSH HTTP access stays available. With TLS off, HTTP stays available. The daily app was not restarted; Rust does not hot-reload. Automated GREEN verification belongs to the coordinator critic.
 ## Quit after child-status errors (2406-e4e1) — Rust restart required
 
-- [x] Before the fix, real OS `ECHILD` errors made both PTY close and kill hang on native macOS and Linux rb. The two focused regressions failed at their teardown-return bound; neither simulates the child status. Evidence: `~/Gits/.tmp/results/tuic-quit-evidence/`.
-- [x] The pre-fix isolated native `agent-test-quit` displayed Quit confirmation, closed its disposable PTY, and exited with status 0 after clicking Quit. The instance is stopped. This ordinary-case check does not reproduce Boss's historical failure.
 - [ ] Coordinator: run `child_reaping_tests` and `close_pty_core_kills_agent_grandchild` against the final change. No post-fix GREEN run was performed in the implementation lane.
 - [ ] After an authorized `make dev` restart or `make build`, check the next desktop quit attempt. If it still hangs, retain the exact action (window close, Cmd+Q, menu, or confirmation), time and logs. The original failure has not been attributed to `ECHILD`; the running daily app was not quit or restarted by this peer. Rust does not hot-reload.
 
 ## Mobile usage menu (2400-d006)
 
-- [x] Nine focused mobile usage and shared formatter tests pass. Equal/changed session snapshots keep the existing quota rows mounted; one plan heading groups both windows, with no invented tier.
 - [ ] Capture and inspect the updated mobile menu after unlocking the Mac. The isolated browser snapshot shows one Claude Max plan, its 5-hour window and its 7-day window, but screenshot capture failed with macOS locked and agent-browser error 35. Evidence: `~/Gits/.tmp/2400-visual/transcript.json`. The reported live session identity could not be inspected because the HTTP endpoint returned 401; no cross-agent quota leakage is claimed or ruled out from that live session.
 
 ## Plugin discovery (2390-e129) — Rust restart required
@@ -197,21 +184,13 @@
 
 ## Session Chat working indicator (2397-06b6)
 
-- [x] The shared desktop/mobile contract, real desktop Compose Send, and mobile Send paths pass 38 focused Vitest tests; TypeScript passes. Isolated browser DOM measurements show **Working…** at 1400px and 390px, inside both viewports.
 - [ ] Capture and inspect the working row visually on desktop and mobile. The isolated Chrome fixture rendered and measured the row, but `Page.captureScreenshot` timed out on both surfaces. No screenshot or native live-agent check is claimed. Retained evidence: `~/Gits/.tmp/results/chat-busy-2397/`.
-## Compose Enter shortcuts (2395-ed27)
-
-- [x] Enter sends; Ctrl+Enter and Shift+Enter insert a newline; Shift+Ctrl+Enter queues. IME composition confirmation keeps the draft without sending. Verified by the focused ComposePanel component tests, including browser-style composition events and a DOM edit; physical IME hardware was not exercised. Desktop Chat draft cleanup consumers also pass. Mobile production uses its separate CommandInput and native keybar, unchanged by this feature.
 ## Mobile composer focus (2398-1de9)
 
 - [ ] After the mobile client reloads, tap the textarea and then the mic on iPad. Confirm the field border returns to neutral, the recording mic is red without an accent border, and keyboard Tab still shows the mic focus ring. Screenshot capture was attempted but macOS was locked; the wrapper reported that screenshots and rAF-driven UI cannot complete. Browser layout checks do not verify real iPad touch or speech recognition.
 ## Shared Chat typography and zoom (2396-66e2)
 
 - [ ] Coordinator visual check after unlocking the screen: compare session Chat and AI Chat at default terminal zoom, after zoom in/out and after reset. Both should use AI Chat's original 14px default reading scale, line height, weight and colors. AI Chat follows the active terminal when tabs change. Check body prose, bold text, inline code and tool text; mobile must retain its own Chat font preference. The implementer did not capture screenshots because the required browser wrapper failed while the screen was locked.
-
-## Remote terminal CSP (2382-97aa) — desktop rebuild/restart required
-
-- [x] Native `agent-test-2382` connected to a disposable Linux rb daemon over the production SSH tunnel, opened both terminal WebSockets, submitted input through Compose, and painted `CSP2382_SSH_VERIFIED`, `Linux`, and `lnx-arm64` in the canvas. Window-only screenshot and sanitized socket/paint observations: `~/Gits/.tmp/results/tuic-2382-live/`; details and issue reply draft: `reports/2382-remote-csp.md`. Both PTYs, tunnel, native instance and owned remote daemon were stopped. This compiled CSP change requires a rebuilt/restarted desktop; Boss's daily app was not restarted. Direct TLS and real-phone checks are not claimed.
 
 ## Mobile dictation error surfaces (2399-e2ae)
 
@@ -232,16 +211,6 @@
 ## Stable MCP instructions (2362-95a9) — Rust restart required
 
 - [ ] After an authorized backend rebuild/restart, reconnect the same MCP client before and after opening/closing a terminal and registering/removing a peer. Instruction bytes must stay identical when caller/configuration/capabilities stay unchanged; `session action=list` and `agent action=list_peers` must still report current inventory. The rb pre-fix regression reproduced peer-count volatility; batch GREEN remains pending. This peer did not restart the daily app; Rust changes do not hot-reload.
-## Plans and Stories selection (2354-a8a3)
-
-- [x] Three A/B round trips verified in visible browser mode on worktree Vite `:19855`, backed only by isolated `agent-test-2354` on `:19854`. Seven screenshots, six completed selections, 770 animation-frame samples, and a MutationObserver log show the same dialog node with no removal or hiding. Evidence: `~/Gits/.tmp/2354-browser/`; see `reports/2354-plan-switch-flash.md`. The earlier native-window capture was black and is not evidence; this browser check was authorized by the coordinator. Browser, Vite and isolated backend stopped.
-
-## Collapsed Compose queue pill (2339-056c)
-
-- [x] Variant B renders the shared FIFO count and removes it at zero; mixed command/message titles, focus discovery, stale hover reads and detail failures pass the five component tests. The isolated native desktop shows `Compose ⌘I3` at 22px control height from a test session-state event, not an actual queued delivery.
-- [x] Coordinator-authorized browser fixture at `1200×844` and `390×844`: captured only the real Compose controls at counts 0 and 3, driven through `applySessionStateEvent` and the terminal store. Pixel comparison against the approved B mock has mean channel error below 0.5/255 for all four captures. Evidence and comparison metrics: `~/Gits/.tmp/tuic-2339-browser/`.
-- [x] At 390px, activating Compose opens the editor and **3 queued**, not the queue list. Activating **3 queued** then exposes all three command/notice/initial-prompt entries. The compact command/message title itself is hover/focus-only; touch users reach the detailed list through these existing controls. Verified with browser button clicks, not physical touchscreen input. No gesture was added.
-- [x] The real Terminal boundary regression fails on baseline `8039973d39085a255e0641db17f9cf12a4958ba6` because collapsed Compose has no rendered `1`; the current Terminal and ComposeToggle files pass all 6 tests. The disposable baseline export, verification Vite server and named browser sessions were removed or stopped.
 ## Headless issue intake (2323-c294) — Rust restart required
 
 - [ ] After an authorized rebuild/restart, configure a registered github.com repository in `automations.json` event intake and confirm its labelled issues arrive without opening a UI. Change the allowlist and confirm the new repository is polled within the existing 30-second tick; an unregistered entry must produce an Event intake configuration error in the daemon logs. Client issue filters and stop calls must not disable intake. Include a missing allowlist entry alongside a valid one: the valid repository must continue polling and each missing entry must be logged. On an overlapping repository, assigned/created/mentioned/disabled client views must retain their filter while intake still receives all issues. This peer did not restart the daily app; Rust changes do not hot-reload.
@@ -251,8 +220,6 @@
 - [ ] After an authorized rebuild/restart, confirm the debug warning stays quiet on an unrelated frontend-only edit, appears after editing a Cargo-listed backend or bridge input, remains after reverting that edit (mtime semantics), and is dismissible. Confirm a backend rebuild without restart also warns. The macOS copy runner must check its original Cargo executable and `.d`, not the protected copy. This peer does not restart the daily app.
 
 ## Final API failure indicator (2335-9c03) — Rust restart required
-
-- [x] Isolated `agent-test-2335` on port 19975: installed ego 0.1.4 hit a real loopback-induced truncated response, stayed idle with a red tab dot and red sidebar Error icon, then returned green after a complete later turn. Native screenshots and DOM/backend responses are under `orchestrator/reports/tuicommander/img/2026-10-25-2335/`. Verified build: `08978a8ee`. A later retry-reset fix still needs integration validation; this live check does not prove retry exhaustion.
 
 - [ ] After Boss chooses to rebuild/restart the daily backend, verify an unrecovered Claude, Codex or ego provider failure remains red in the tab and sidebar after completion output. Repeat in a narrow split (Claude 36/40 columns including JSON errors, Codex 36/40 columns including legacy retry-exhaustion errors) so final-error text wraps. Native provider countdowns must not mark Error. With TUIC auto-retry enabled, an ignored continue stays red; three failed attempts exhaust the budget. A later successful turn returns to Done. The peer must not restart the daily app; Rust changes do not hot-reload.
 ## Rustup PTY environment (2318-4b44) — Rust restart required
@@ -267,8 +234,7 @@
 
 ## Worktree removal identity (2334-ca53) — Rust restart required
 
-- [x] Isolated `agent-test-2334` on port 19834: sidebar listed a symbolic `POC-00001-slack-flap` branch, fresh preflight counted one untracked scratch file, and confirmed removal deleted only that checkout and alias. `main` remained intact. Window-only screenshots and Git before/after evidence: `~/Gits/.tmp/tuic-2334-evidence/`. The isolated instance was stopped. The remote-containment transaction variant is covered by targeted rb tests, not this desktop replay.
-- [ ] After Boss chooses to rebuild/restart the daily backend, refresh the repository and retry removal. Rust changes do not hot-reload. The colleague's exact state is not confirmed; first inspect whether his branch ref is symbolic with the command in `reports/2334-worktree-identity.md`. This peer did not restart or access the daily app.
+- [ ] After Boss chooses to rebuild/restart the daily backend, refresh the repository and retry removal. Rust changes do not hot-reload. The colleague's exact state is not confirmed; first inspect whether his branch ref is symbolic with the command in [reports/2334-worktree-identity.md](https://github.com/sstraus/tuicommander/blob/895ed2b4eaa9c4dbd91df4acd354f845731e07ad/reports/2334-worktree-identity.md). This peer did not restart or access the daily app.
 
 ## Ego conversational submit (2314-cf94) — Rust restart required
 
@@ -282,15 +248,8 @@
 
 ## Windows workspace and resume paths (2310-6e76) — Rust restart required
 
-- [ ] On the next authorized Windows CI push, verify worktree creation from canonical paths and the exact inventory/registration assertions. After Boss chooses to rebuild/restart the daily backend, verify a resumed Claude command drops the expired TUIC attachment grant but retains user directory grants. Rust edits do not hot-reload; the peer did not restart the daily app. The recorded Windows directory-event replay is RED on macOS and Linux; the cache repair still needs batch GREEN and native Windows validation. Cleanup pruning and the 40-worktree latency contract still require native diagnosis; see `reports/2310-windows-ci.md`.
+- [ ] On the next authorized Windows CI push, verify worktree creation from canonical paths and the exact inventory/registration assertions. After Boss chooses to rebuild/restart the daily backend, verify a resumed Claude command drops the expired TUIC attachment grant but retains user directory grants. Rust edits do not hot-reload; the peer did not restart the daily app. The recorded Windows directory-event replay is RED on macOS and Linux; the cache repair still needs batch GREEN and native Windows validation. Cleanup pruning and the 40-worktree latency contract still require native diagnosis; see [reports/2310-windows-ci.md](https://github.com/sstraus/tuicommander/blob/895ed2b4eaa9c4dbd91df4acd354f845731e07ad/reports/2310-windows-ci.md).
 
-## Windows Clippy platform gates (2306-0b3b)
-
-- [x] rb Windows GNU cross-target Clippy with default desktop features and all targets passes with warnings denied; rb Linux Clippy with dictation and all targets also passes. Unix-only items follow their consumers; standby grace remains available to Windows unit tests. Full Windows dictation CI remains unverified because the rb MinGW headers cannot compile whisper.cpp thread power throttling types. These compile-only Rust changes do not hot-reload into the daily backend; Boss can rebuild/restart when ready, but no runtime behavior change is expected.
-
-## Mobile unreachable landing (2294-078f)
-
-- [x] Isolated `agent-test-2294` on port 19894, browser viewport 390×844: stopped only its server; dispatched resume events and observed the in-app connection-test region; reloaded offline and observed the cached splash; captured only `[data-connection-landing]`. After restart, a `pageshow` resume event automatically restored Sessions without a retry click or manual reload. Evidence: `~/Gits/.tmp/tuic-2294-live/` (`in-app-landing.png`, `offline-landing.png`, `transcript.md`). The locked screen kept the tab hidden, so this verifies resume-driven recovery, not visible-tab retry timing or a physical installed-PWA resume. The isolated app and named browser session were stopped.
 ## Required MCP tool search names (2300-6355) — Rust restart required
 
 - [ ] After Boss chooses to rebuild/restart the daily backend, call `search_tools` with `+repo` and `+repo status` at limit 1. Confirm only `repo` is returned with its schema, `+missing_name status` returns nothing, and `select:repo` selects the exact tool. The peer did not restart the daily app; Rust changes do not hot-reload.
@@ -313,14 +272,12 @@
 
 ## Stories filters and native Kanban (2167-eedb) — Rust restart required
 
-- [x] Isolated native instance: twelve DOM/geometry samples cover all/open/closed, feature/fix/refactor/chore/task/untyped, combined open+untyped, and Kanban all/open+feature. Card selection shows the matching criteria; closing and reopening retains open+feature and Kanban. Recorded real API fixture and results: `~/Gits/.tmp/results/tuic-2167-evidence/`. The instance was stopped.
 - [ ] In the rebuilt isolated instance, detach with Open + Feature + Kanban, change to Closed + Untyped + List, and bring back; confirm all controls survive both WebView boundaries.
 - [ ] Capture and inspect each filter and List/Kanban after the screen is unlocked. All twelve owned-window screenshot attempts failed with `could not create image from window` while `loginwindow` was frontmost; no screenshot or visual pass is claimed.
 - [ ] After Boss chooses to rebuild/restart the daily backend, inspect these controls in the daily app. Rust filtering and optional story types require that restart; this peer did not restart or replace the daily app.
 
 ## Plans and Stories size and detachment (2166-11aa)
 
-- [x] Isolated `agent-test-2166` native window: seven tab and item samples stay at 1120×738 after the fix (before: heights 166–738); long content scrolls inside. Window-only before/after screenshots and measurements are in `~/Gits/.tmp/results/tuic-2166-evidence/`. The header detach click creates `panel-stories`; the shared reattach event/close path restores the main dialog at the same size. The isolated instance was stopped; the daily app was not touched.
 - [ ] Capture and inspect the detached window after the screen is unlocked. Its native window was created at 1120×800, but `screencapture -l` failed while `loginwindow` was frontmost. The shared bring-back button is covered by the component test; the live reattach check invoked its shared event/close path rather than clicking inside the locked detached window.
 ## Native story amendments (2169-bf61) — Rust restart required
 
@@ -349,47 +306,33 @@
 
 ## Confident question lifetime after agent exit (1985-45bd) — Rust restart required
 
-- [x] Rebuilt isolated agent-test-1986: real Claude AskUserQuestion exit cleared backend awaiting/question/choice state before input; mobile 390×844 recovered Terminal composer, ran a shell marker, showed Session ended with disabled input, and Back returned an empty session list. Evidence: orchestrator `reports/tuicommander/img/2026-10-23-1985/fixed-*`. This is browser emulation, not a physical phone.
 - [ ] After Boss manually rebuilds/restarts the daily backend, exit an agent while its question is open. Before typing shell input, confirm the terminal no longer shows an awaiting badge or answer controls. This Rust change does not hot-reload; the peer does not restart the daily app.
-
-## Progress cursor paging (2151-62ef)
-
-- [x] Targeted module/component checks verify a 1000-record journal opens with 100 rows and one read, then an older-page double click appends exactly 100 distinct rows. Scope changes and older-page failure/retry have regression coverage.
-- [x] Captured the mobile Progress list at 390×844 before and after paging, including a scroll into the older page. Parent reviewed the PNGs. Evidence: orchestrator `reports/tuicommander/img/2026-10-23-2151/`. Parent inspection of the original screenshot identified a repeated project name in the header, not duplicate journal records; the embedded header now keeps only the project selector. Regression coverage checks single- and multi-project mobile headers, empty/missing project discovery fallback, and the retained desktop subtitle. Updated header capture: `~/Gits/.tmp/results/2151/header-visual/after-header.png` (390×844; matching DOM snapshot has no separate project subtitle).
 
 ## Terminal receipt/recovery feedback (2040-16b2) — Rust restart required
 
-- [x] Isolated `agent-test-2040` native measurements exercised real ego echo and matching paced bulk output before/after the fix. The private-repair-plus-delta cycle disappeared; native echo p95 still exceeds one frame. Evidence: `~/Gits/.tmp/2040-web/native-final-fixed/` and the browser-input measurement report. This does not certify the remaining story criteria.
 - [ ] After Boss manually rebuilds/restarts the daily backend, confirm a quiet terminal stays quiet after frame receipts, a recovered terminal retains its text, and typing remains usable during output. Rust does not hot-reload; this peer did not restart the daily app.
 ## PTY size on tab mount and reconnect (2128-153a) — rebuild required
 
-- [x] Isolated `agent-test-2128` instance with Claude Code 2.1.306: before the fix, a WebView reload and the first activation of a background tab left the PTY at 15x38 while the canvas drew 14x37. After the fix, the first activation sends one resize, a reload sends none, and `stty size` equals the drawn grid. Evidence: `~/Gits/.tmp/results/tuic-2128/`.
 - [ ] After Boss rebuilds and restarts the daily app, reload the WebView with a Claude tab open, then run `stty size` in a shell tab or read `PTY resize` in the debug log. The size must equal the visible grid. This peer did not restart the daily app.
 ## Telegram non-owner notifications (2119-d5de) — Rust restart required
 
 - [ ] After Boss manually rebuilds and restarts the backend, keep an inbound owner registered, send from another agent without registering, and verify its sender prefix. Reply in Telegram and verify that sender receives native mail while a new message still reaches the owner. No daily app restart was performed. Coordinator approved native cfg(test) loopback verification instead of a desktop fake-endpoint override; the native integration test checks outgoing wire text and reply delivery to the sender inbox.
 ## Optional Design Mode all-sites capture (1724-fe7e) — rebuilt bridge and extension reload required
 
-- [x] Isolated real Chrome consent, actual MCP screenshot and matching browser PNG, live sidebar history, and post-capture **Allow eval on this host** click/eval. _(verified: S0 results Round 11; 1628 × 1596 PNGs have identical SHA256 and zero differing pixels; actual Chrome added the host origin and MCP eval succeeded.)_
 - [ ] Normal deployment still needs a rebuilt `tuic-bridge` whose installed extension assets match source. The multi-package agent-test build returned old bridge assets twice; the verified package-only installer worked. Pick-crop, revoke/activeTab recovery, and a fresh-profile capture-only host/eval sequence remain unverified. No daily app was restarted.
 ## PTY spawn geometry (2130-2ca2) — Rust restart required
 
 - [ ] After Boss manually rebuilds and restarts the backend, open a terminal and a direct agent at a non-default size. Verify their initial output wraps at the spawn width and a first resize to 24x220 reaches the child. This Rust change does not hot-reload; this peer did not restart the daily app.
 ## Nil-safe WebView URL reads (2120-9f3f) — Rust restart required
 
-- [x] Isolated `agent-test-2120` backend survived multiple recovery periods and detached-panel snapshot/main unload through uptime 171s; the native nil-NSURL contract test passed. Evidence: `~/Gits/.tmp/results/tuic-2120-live.log` and `tuic-2120-native-tests.log`. No live nil-URL fault injection was performed.
 - [ ] After Boss manually rebuilds and restarts the daily backend, verify document recovery and detached-panel background unload/restore. This Rust fix does not hot-reload; the peer does not restart the daily app.
 ## CLI status signature preservation (2129-1dfd) — backend restart required
 
-- [ ] After Boss manually rebuilds and restarts the backend, open General Settings and run `tuic --version` again. The status query must not invalidate the installed CLI signature. The old running backend still opens the executable for writing until that restart; no daily app or installed binary was changed by this peer. Native isolated probes reproduced intermittent SIGKILL without changed bytes; historical writer attribution remains open in `reports/2129-cli-signature.md`.
+- [ ] After Boss manually rebuilds and restarts the backend, open General Settings and run `tuic --version` again. The status query must not invalidate the installed CLI signature. The old running backend still opens the executable for writing until that restart; no daily app or installed binary was changed by this peer. Native isolated probes reproduced intermittent SIGKILL without changed bytes; historical writer attribution remains open in [reports/2129-cli-signature.md](https://github.com/sstraus/tuicommander/blob/895ed2b4eaa9c4dbd91df4acd354f845731e07ad/reports/2129-cli-signature.md).
 
 ## Detached command peer isolation (2100-c249) — CLI update and backend restart required
 
 - [ ] After installing the rebuilt `tuic` CLI, verify a detached reviewer cannot set the foreground composer to awaiting through its progress report, and its BG DONE still arrives. Install both the rebuilt CLI and backend, then manually restart the backend: the ancestry boundary cannot load through frontend hot reload. No daily app restart was performed by this peer.
-## Sidebar session identifiers (2112-8a79)
-
-- [x] Isolated `b6-session-menu` instance: a running Claude PTY menu exposes session ID, actual child PID, and session-list alias; browser reload preserves PID and alias. Evidence: `~/Gits/.tmp/results/b6-2112-visual-owned/` (DOM and screenshot, no session fixtures). Unknown-PID and absent-alias visibility is covered by the targeted sidebar component tests.
-
 ## Queued BG DONE diagnostics (2100-c249) — Rust restart required
 
 - [ ] After Boss manually rebuilds and restarts the backend, leave a BG DONE wake queued behind a retained draft for more than 60 seconds. Check `/logs?source=bg-wake` on that instance for one warning with `partial_composer=true` and the bounded process tree. Clear the draft and check that the existing delivery path submits the wake. No daily app restart was performed by this peer.
@@ -397,9 +340,6 @@
 ## App Nap opt-out (1638-c94c) — Rust restart required
 
 - [ ] After Boss manually restarts a rebuilt backend, check the log line `App Nap disabled for the process lifetime` (source `app-nap`). Cover the TUIC window with a full-screen app while no agent is busy, wait two minutes, and check that `/logs` contains no `Sleep-wake detected` or `Frontend unresponsive` line for that period and that remote clients stay live. This Rust change does not hot-reload into the daily app.
-## Wrapped ego approval controls (2102-98ab) — Rust restart required
-
-- [x] An isolated `at-2102` worktree build exported a wrapped printf approval with all five native keys. The mobile header question card sent `y` and the command exited 0 with `PARITY_P_OK`. Evidence: `~/Gits/.tmp/results/fix-2102-live/`. The daily backend still requires Boss's manual `make dev` restart or `make build` installation to load this Rust fix; no daily app restart was performed.
 ## Grok npm launcher Chat binding (2104-0523) — Rust restart required
 
 - [ ] After Boss manually rebuilds and restarts the daily backend, verify a Grok terminal launched through npm opens its own Chat transcript. The isolated instance evidence does not load this Rust change into Boss's running app; no daily restart is performed by the peer.
@@ -424,10 +364,6 @@
 ## Managed Claude default-No trust dialog (2097-5739) — Rust restart required
 
 - [ ] After Boss manually restarts a rebuilt `make dev` or installs `make build`, spawn a managed Claude child in a disposable untrusted folder. Check that the startup dialog selects Yes with Down then Enter once; an unmanaged terminal and trust opt-out must remain unanswered. The recorded 1987 capture is covered by automated replay; this Rust change does not hot-reload into the daily app. No daily app restart was performed.
-## Covered agent-test presentation (2095-0106) — isolated native check verified
-
-- [x] The recovered native observer passed a 300-second covered-window run: document/native visibility stayed true, rAF advanced with a 319 ms maximum gap, no focus or activation, and stable compact geometry. Evidence: `reports/tuicommander/2095-covered-observation/`. The dedicated agent-test binary must be rebuilt to load this Rust policy; the daily app is unchanged and needs no restart for this fix. This peer did not restart or replace Boss's running app.
-
 ## First narrow Codex /plan question (2094-da19) — Rust restart required
 
 - [ ] After Boss manually restarts a rebuilt backend, open the first Codex /plan question in a narrow terminal. Check Input in the mobile list and named answer controls in CLI and Chat. Answer once and check native completion. This Rust parser change does not hot-reload into the daily app; isolated worktree verification is recorded in the story.
@@ -436,10 +372,6 @@
 - [ ] After a manual rebuild/restart, check repeated input while output races frame delivery. Newer applied output must retain its bounded retry; this experimental branch trials four credits per 100 ms, with unchanged 8 ms spacing, receipt gates and synchronized redraws. Do not load this trial in the daily app: the completed A/B/A/B series improves idle p95 but is NOT LANDABLE under the strict all-statistic rule because B1 calibration rAF max is 40 ms versus A 26/36 ms; see `reports/tuicommander/2026-10-23-four-send-quota-trial.md`. Native idle/help proxy results and limits are in the browser-input measurement report; this is not a one-frame guarantee.
 
 - [ ] After Boss manually restarts a rebuilt `make dev` or installs `make build`, type while a disposable terminal prints paced output. Check desktop and browser/PWA responsiveness, sustained output, and DEC-2026 complete redraws. This Rust change does not hot-reload into the running daily app. Isolated native trace timing is an untrusted-input-to-`fillText` proxy, not trusted keyboard or compositor proof; the original native REALITY criterion remains separate.
-
-## Agent-test non-focusing visibility (2090-cf8a) — isolated native check verified
-
-- [x] `scripts/agent-test-visible.py --instance at-2090 --port 19883` observes a visible document, positive terminal canvas and real `fillText` paint without native/document focus. The window is 640x420 logical pixels, 17 pixels from the primary work-area right edge and 16 from its bottom edge. Unrelated frontmost PID 761 stays unchanged before launch, at readiness and after paint (owned PID 42795). Removing only `native.orderFront(None)` produces hidden document/native window, no canvas and no text paint; restoring it passes. Both runs delete their sessions, stop through `make agent-test-stop`, and report no remaining worktree executable. Evidence: `~/Gits/.tmp/results/fix-2090-round2/{red2,green}/` (JSON, logs and GREEN canvas-only PNGs). This opt-in native observer requires desktop authorization; source/config contracts do not prove visibility. The change loads only in a newly built agent-test binary and requires no daily-app restart.
 
 ## Question state after agent exit (2091-ba03) — Rust restart required
 
@@ -462,7 +394,6 @@
 - [ ] [HUMAN] Play all notification tones at low and high volume on the default and a named output; confirm no end click and missing named output falls back. Play an Edge MP3 reply, pause/resume it, interrupt it and play the next reply. This peer did not restart or use Boss's desktop or claim real microphone/speaker validation.
 ## Claude imperative question title (2074-b0dc) — Rust restart required
 
-- [x] Worktree verification: real Claude `Pick a colour` without a question mark exports the title and five ordered controls to REST, mobile and desktop PTY Chat. One Green click reaches Claude, clears awaiting and leaves another session unchanged. Mobile evidence: `fix-2074-live-10`; desktop-width Vite component evidence after merging 2079: `fix-2074-desktop-3`, both under `~/Gits/.tmp/results/`. The desktop check mounts the production component and lifecycle consumer, not the full desktop shell.
 - [ ] Boss must manually restart `make dev` or install `make build` to load the Rust change in the installed app. This peer did not restart or replace that backend.
 ## Dirs dependency consolidation (2035-096f) — rebuild required
 
@@ -509,7 +440,6 @@
 
 ## Mobile ego slash filtering (2030-84bb) — Rust restart required
 
-- [x] An isolated native headless worktree build and worktree Vite, through agent-browser at 1180×820, show only `/goal` for `/go` both idle and while a real ego turn runs. Exact `/goal` and unmatched `/gz` retract the menu. Claude's `/he` also replaces its broad menu with its own fuzzy matches. Evidence and DOM measurements: `src-tauri/src/fixtures/agent_prompts/ego-slash-filter-2030.md`.
 - [ ] After Boss manually restarts `make dev` or installs `make build`, the installed app can load the fix; the running desktop was not restarted or used to verify changed Rust.
 - [ ] Codex 0.162.1 draws `/status` and `/statusline` for `/sta`, but publishes no mobile dropup. Its menu sits above the composer/status line and uses `›`, unlike this parser's supported bottom block. This layout gap also exists in `main`; the shared Claude/Codex criterion remains unchecked. See the inline `DEFERRED (2026-10-19)` note at `parse_slash_menu`.
 ## ego Chat export diagnostics (2032-8dc3) — Rust restart required
@@ -622,7 +552,6 @@
 - [ ] [VISUAL] After the Mac unlocks, capture the mobile free-text question, picker selection and refused-answer toast at phone width. Supplied incident screenshots were read; no new screenshots were taken while the screen was locked. No CSS or layout change is part of this fix.
 ## Mobile voice handset (1979-89e1)
 
-- [x] [VISUAL] Capture the idle handset in the phone More menu and tablet header in Commander and Paper. _(verified: screenshot-only captures at390×844 and834×844 in `.tmp/mobile-question-visual/after-1979/png/`; visible menu action230×44 and header action44×44; no live microphone or backend access.)_
 - [ ] [VISUAL] Capture the armed handset and unchanged composer dictation microphone on a real voice session. The isolated presentation fixture only captures the idle handset; existing armed/unarmed component tests remain for batch integration.
 
 ## Readable mobile pushes (1978-9cfe) — Rust restart required
@@ -649,9 +578,6 @@
 - [ ] After the Mac unlocks, capture `src/__tests__/browser/sessionChatAppearance.html` on isolated worktree Vite: desktop at 1000×900 and `?mobile` at 360×800, 390×844 and 430×900; repeat with `theme=light` (Commander dark and Paper light). Compare baseline `ea8c46bed6` and the 1974 commit side by side. Copy only the layout fixture into the baseline checkout; keep its baseline production CSS. The fixture uses real session transcript/switch/input components and synthetic text, not an agent transport.
 - [ ] Inspect the real mobile session detail Chat after integration: user prompt tint, folded tools, answer card, hint and existing composer in both themes. Verify send, scroll, CLI/Chat switching and answering remain usable on a phone; no touch or screenshot evidence is claimed by the static checks.
 
-## Relay room expiration (1932-8398) — standalone relay rebuild required
-
-- [x] Expired peers cannot forward into a recreated room, remove replacement peers, or refresh their activity; idle socket readers terminate. _(verified: Linux rb targeted relay tests, including different-owner and same-owner room reuse and stale channel identity.)_ Rebuild and restart any separately deployed `tuic-relay` binary to load this fix. This is not a desktop backend edit; no live TUIC restart is needed or performed.
 ## Managed injection recovery (1957-38c1) — Rust restart required
 
 - [ ] Run a full fake-agent delayed-echo E2E in an isolated headless test instance with a real PTY. Delay the fake agent's composer echo after Enter to force uncertain injection, queue a later BG DONE wake, then render a fresh stable empty ego composer. Verify the later wake reaches the fake agent once without replaying the earlier uncertain payload, raw input returns a bounded uncertainty error while the reader is stalled, and close terminates the stalled session. Use the recorded ego composer fixtures for screen semantics; the existing recording-writer regression is not this process-level E2E. Do not use Boss's instance or sessions. This check remains unverified.
@@ -691,7 +617,6 @@
 ## GitLab provider plugin (1695-9f3a) — needs 1697-4cdc and a desktop restart
 
 - [ ] After story 1697-4cdc lands (`host.httpFetch({account})` and manifest provider declarations) and Boss restarts the desktop app, install the `gitlab` plugin and add two GitLab accounts, one on a non-default port. In Tasks, confirm each account lists its own issues, merge requests and to-do items; paste an item URL of each instance and confirm only its own account resolves it. On a merge request, confirm merge/squash choices, readable blockers, approve, pipeline jobs and job retry; on a board, move a card and confirm the list label changes in GitLab. The plugin tests run on fixtures recorded from GitLab CE (`plugins/gitlab/fixtures/recorded.json`); no desktop instance was launched by this peer.
-## Plugin hot reload re-reads sub-modules (1809-010d) — Rust restart required
 ## Settings owner prerequisites (1787-4778) — Rust restart required
 
 - [ ] After Boss manually restarts `make dev` or installs `make build`, verify isolated owner requests follow an Ego launch profile change and first configuration without recreating the registry. Verify removal of an on-connect SSH connection stops its ephemeral daemon after settings persistence. The integrated cutover closes the owner inventory gaps and replaces the config tool with settings; load the batch build before checking this path. Targeted owner regressions cover the saved-record callback, profile resolution and bindings-save failure. Do not restart the running app for this check.
@@ -709,12 +634,7 @@
 
 - [ ] After Boss manually restarts `make dev` or installs `make build`, open a new shell. With OpenCode native scrollback enabled, verify `opencode mcp list` receives no `--mini`; a bare interactive launch still does. Verify Goose `run`/`session` with `--name=work`, `-nwork`, `--path f.jsonl`, `--path=f.jsonl`, and `run --no-session` receive no TUIC `--name`. Existing shells keep their sourced wrappers until reopened. Automated argv tests cover bash, zsh and fish.
 
-## Scoped plugin settings (1785-c7a1) — Rust restart required
-
 ## AI Chat retry countdown (1536-1c9c)
-
-- [x] Provider retries count down to “retrying now”, clear on recovery/error, and user-message Copy stays on one line. _(verified: 195 targeted Vitest tests and isolated full-shell actual-ego/local-503 screenshots in ~/Gits/.tmp/results/fix-1536cd/live/countdown-{0,6,11}s.png; copy-before/after.json show four text lines becoming one; final-recovery.png has no retry status.)_
-
 
 - [ ] After Boss manually restarts `make dev` or installs `make build`, use an isolated instance with a configurable plugin. Describe its settings, patch a non-secret field using its revision, and verify its existing unload/load callback consumes the new value. A token reads as set/unset through settings; unloading removes its catalogue entries. Automated isolated owner/HTTP tests cover persistence, dispatch, zero limits, and refusal of linked settings paths; the current desktop needs a rebuild/restart to load this Rust change.
 ## Mobile keyboard correction (1878-3a3c)
@@ -731,7 +651,6 @@
 
 ## Continuous answer regions (1872-1870)
 
-- [x] Recorded Codex paragraphs form one CLI and Chat tint with no visible answer glyphs. _(verified: worktree CanvasTerminal and Transcript screenshots in ~/Gits/.tmp/results/1872/before-grid-chat.png and after-grid-chat.png; real Codex VT replayed with the Rust grid.)_
 # To Test
 
 - [ ] [HUMAN] Mobile PWA bottom band (#2116-0213): remove the old iPhone Home Screen install and add it again from updated Safari content to load the non-overlay status-bar metadata. Check keyboard closed/open/reopened, composer taps, Home Indicator interaction and background reaching the screen bottom. Keep the approved CLI bottom padding at 4px. iPhone 17 Pro / iOS 26.4 simulator screenshots and XCUITest confirm the band is removed and the composer accepts taps/draft text, including after keyboard dismissal through session navigation. Physical-phone ergonomics remain unverified. If a band remains, capture the device screen, device/iOS, orientation and keyboard state before reloading.
@@ -745,8 +664,6 @@
 ## Ego settings adapter (1775-330c) — Rust restart required
 
 - [ ] After Boss manually restarts `make dev` or installs `make build`, model reads/writes in Settings > Providers use the configured Ego profile and AI Chat workspace. Existing ACP and PTY sessions keep their launch configuration. Internal settings adapters await the later transport-registration step; targeted fixture tests cover owner commands and readback without touching production credentials. _(triage 2026-10-14: WAITS — Needs the named integration/plugin release to land and load before the consumer check.)_
-
-
 
 ## Screen stays awake while dictating (1767-3071)
 
@@ -771,13 +688,9 @@
 ## Design Mode recipient follows the starter (1734-9785)
 
 - [ ] [VISUAL] In Boss's Edge profile, run Start Design Mode from a session (for example feat-1719). The side panel preselects that session labelled "started Design Mode" and lists other agents under "Other agents". A manual choice holds until the next Start. Vitest and a real side panel in Chrome for Testing with a stub native host cover it. _(audit 2026-10-13: HUMAN — Boss's Edge profile.)_ _(triage 2026-10-14: WAITS — Needs the installed extension/profile operated by Boss; no profile reload performed.)_
-## Automations worktree cleanup render (1623-8b2a)
-
 ## Design Mode navigation restart (1724-fe7e) — Rust restart required
 
 - [ ] After Boss manually restarts `make dev` or installs `make build`, reload the Design Mode extension and request navigation to a local page. Confirm the first navigation reaches the reviewed tab, with and without an idle heartbeat before the request. Automated heartbeat boundary tests cover delivery and failed-update retry; no desktop instance was started by this peer. _(audit 2026-10-13: HUMAN — Needs Edge extension reload.)_ _(triage 2026-10-14: WAITS — Needs the installed extension/profile operated by Boss; no profile reload performed.)_
-## Settings info badge tips stay in view (1741-36e5)
-
 ## GitHub token chain without gh (1714-1c1d) — Rust restart required
 
 - [ ] After Boss manually restarts `make dev` or installs `make build`, start TUIC with `GH_TOKEN` and `GITHUB_TOKEN` unset and no OAuth login, while `gh auth login` is still valid. Confirm Settings > Git & GitHub shows "Not connected" and that no `gh auth token` process starts (`ps` during boot and polling). Sign in with OAuth and confirm PR status, CI rings and PR writes work. Then set `GH_TOKEN` and confirm the tab shows "Environment variable". An account record saved earlier with `auth_source: gh_cli` must load as the OAuth github.com account. Targeted rb tests cover the chain order, the record load and the empty `gh` spawn allowlist; a live GitHub call is unverified. No desktop instance was started or restarted by this peer. _(audit 2026-10-13: HUMAN — OAuth sign-in/GH_TOKEN/Settings view. Partial: rb github_http_guard_tests::production_code_spawns_no_gh passed; no `gh` process in ps.)_ _(triage 2026-10-14: WAITS — Needs Boss’s provider authentication, external service fixture or authorized live account operation.)_
@@ -799,13 +712,9 @@
 ## Plugin account requests (1697-4cdc) — Rust restart required
 
 - [ ] After Boss restarts `make dev` or installs `make build`: install a plugin whose manifest declares `"capabilities":["net:http"]` and a `providers` descriptor, confirm the provider appears in the account add flow, add a throwaway account, and call `host.httpFetch(<site>/<path>, { account })` from the plugin. The response arrives without the token; a URL outside the site and a plugin without that provider are refused. Uninstall the plugin and confirm the account remains listed. Local-server tests on rb cover injection, host rule, consent, redirects and redaction; a real Jira/GitLab/GitHub call is not verified. No desktop instance was launched by this peer. _(NOT VERIFIED 2026-10-12: needs the desktop WebView/Tauri UI, which a headless tuic-remote does not have, and this lane may not launch a desktop. Isolated headless tuic-remote built from branch chore/1706-a443-to-test-runs (main 67ccd72c3) and run on the rb box; no desktop, no Boss instance.)_ _(audit 2026-10-13: HUMAN — Needs account add flow (token) + plugin install. Partial: rb plugin_http::account_tests (7) passed.)_ _(triage 2026-10-14: WAITS — Needs Boss’s provider authentication, external service fixture or authorized live account operation.)_
-## Work-item links and sidebar badge (1685-4b12) — Rust restart required
-
 ## Window resize background (1678-158c / GitHub #125) — Boss build required
 
 - [ ] After Boss runs `make build` (or manually restarts `make dev`), rapidly enlarge and shrink the main window on macOS. Repeat with Commander, VS Code Light, and a theme with different terminal/app backgrounds. Confirm exposed resize areas use the app background; switch themes and reopen secondary/panel windows. Also cold-start with a saved light theme. Rust does not hot-reload. Regression tests cover native window/webview color requests for all bundled themes and saved-theme resolution; actual native paint remains unverified. A headless Chrome startup-document screenshot attempt timed out after 50 seconds without an image. No TUIC instance was launched, restarted or killed by this peer. _(audit 2026-10-13: HUMAN — Native paint, resize.)_ _(triage 2026-10-14: WAITS — MacControl Screen Recording: native resize paint and secondary windows require observation.)_
-## Automation precheck context editor (1624-c5f5)
-
 ## Core provider accounts (1679-1419) — Rust restart required
 
 - [ ] After landing and Boss's manual `make dev` restart or `make build`, list accounts through `POST /accounts/action`; confirm existing GitHub IDs and repo bindings, plus presence-only credential status. OAuth success replies must omit `access_token`. No app was launched, restarted or killed by this peer. _(audit 2026-10-13: HUMAN — List would probe credential presence (keychain risk); HTTP auth blocked; add flow needs a token. rb not run for accounts.)_ _(triage 2026-10-14: WAITS — Needs Boss’s provider authentication, external service fixture or authorized live account operation.)_
@@ -814,21 +723,15 @@
 ## iPhone hands-free Now Playing (1670-fdc8)
 
 - [HUMAN] After landing and reloading the iPhone PWA, arm hands-free and lock the phone. Confirm the title is **TUICommander hands-free**; Pause holds the spoken reply and Play resumes at its position while the microphone stays active. Stop (if iOS exposes it) ends capture and drops queued replies. Also stop from the PWA and confirm controls no longer act on the ended session. Check a reply still uses media volume with the microphone open, then re-arm. Browser boundary tests cover registration, HTTP action routing and cleanup; physical iPhone audio/lock-screen behavior is unverified. No Rust change or backend restart is required. _(audit 2026-10-13: HUMAN — iPhone.)_ _(triage 2026-10-14: WAITS — Needs Boss’s phone/tablet or installed PWA for the specified device behavior.)_
-## Saved AI Chat tabs (1628-4459)
-
 ## Terminal paste text precedence
 
 - [ ] After loading the updated frontend, copy a text line by selection in terminal Chat and paste into Claude Code; confirm text appears rather than an image attachment. Capture the paste event's MIME types to identify the original WebView clipboard payload. Also check a screenshot-only paste and a Finder image copy still attach. Component tests cover the mixed text/image precedence; this peer did not access Boss's running WebView or clipboard. _(audit 2026-10-13: HUMAN — needs real WebView clipboard / Finder image copy)_ _(triage 2026-10-14: WAITS — MacControl Screen Recording: needs native desktop/cross-app observation.)_
 ## Scrollbar history marks (1665-ce9b)
 
 - [ ] After landing, compare a live terminal with recorded command/prompt metadata against `~/Gits/.tmp/results/scrollbar-marks-1665.png`. The screenshot uses the production marks renderer with representative metadata; it does not prove the affected live terminal has prompt metadata. No Rust restart is required. _(audit 2026-10-13: HUMAN — visual compare of live terminal (2 sub-items already [x]))_ _(triage 2026-10-14: WAITS — actual live-terminal visual/metadata comparison requires native screen capture permission from Boss. Production renderer/geometry fixtures passed; MacControl capture is denied, and the documented `__TUIC__.terminal` projection omits commandBlocks/userPromptLines.)_
-## MCP upstream secret headers (1657-e1a4) — Rust restart required
-
 ## Mobile hands-free composer ownership (1662-c549)
 
 - [ ] After loading the updated PWA frontend, dictate during a busy Claude turn, including after a dialog/draft hold and while interrupting speech. Confirm the PTY queues the phrase once and the mobile composer keeps only local typing. Toggle spoken-reply mute mid-phrase and confirm the same behavior. Real microphone, speaker, and Safari PWA timing need a device check; component tests cover unsolicited, delayed, and reconnect input echoes plus keyboard/keybar Tab and editable Up/Down history recall. No Rust production change or backend restart is needed for this fix. _(audit 2026-10-13: HUMAN — mic/speaker/Safari PWA device)_ _(triage 2026-10-14: WAITS — Needs real microphone/speaker/hotkey observation; do not disturb Boss’s voice session.)_
-## Once automation dispatch (1615-57cf) — Rust restart required
-
 ## Mobile Claude dot pulse (1654-a3d5)
 
 - [ ] On an actual iPhone and iPad installed Safari PWA, run a long Claude Bash tool call; confirm grey ON/OFF pulses and green completion preserve text position and continuation indentation. Real OutputView browser geometry passes in Chromium at 390×844 and 1024×1366; device emulation does not prove Safari fonts or touch behavior. _(audit 2026-10-13: HUMAN — real iPhone/iPad Safari)_ _(triage 2026-10-14: WAITS — Needs Boss’s phone/tablet or installed PWA for the specified device behavior.)_
@@ -841,8 +744,6 @@
 ## Crate diet stage A (1640-ecee) — Rust restart required
 
 - [ ] After landing and Boss's planned `make dev` restart or `make build`, confirm CUID2 generation still returns 24 lowercase base36 characters starting with a letter, and an upstream OAuth sign-in completes with PKCE S256. Rust changes require a manual restart to load; this peer does not restart desktop. _(audit 2026-10-13: PARTIAL — CUID2 PASS: 8 live `generate_value{type:cuid2}` via Tauri invoke all matched `^[a-z][0-9a-z]{23}$` (r57bhcn7wlqzid68qdybl8w3, …). Upstream OAuth PKCE S256 sign-in = HUMAN (login))_ _(triage 2026-10-14: WAITS — Needs Boss’s provider authentication, external service fixture or authorized live account operation.)_
-## Automation prechecks (1614-7e8f) — Rust restart required
-
 ## Plugin host phase 0 — backend restart required
 
 - [ ] After Boss's planned `make dev` restart or `make build`, verify browser Add account creates a named GitHub account while the default login stays unchanged. Also verify a plugin declaring `net:http` with no `allowedUrls` is rejected. The Rust HTTP handler and manifest validator are not hot-reloaded. No desktop instance was launched by the peer. _(audit 2026-10-13: PARTIAL — validator PASS: rb (RB_REF=ed776d323) `cargo nextest run --lib -E test(loading_http_manifest_without_allowed_urls_fails)` 1 passed (plugins.rs:338); check at plugins.rs:338-340…)_ _(triage 2026-10-14: WAITS — Needs Boss’s provider authentication, external service fixture or authorized live account operation.)_
@@ -873,10 +774,6 @@
 ## Mobile Markdown review (1569-1a1e) — Rust restart required
 
 - [ ] [VISUAL] After the next `make dev` restart or rebuild, open a Markdown file with `- [ ]` items in the mobile PWA Files view: tap each checkbox (also just beside it) and confirm the file on disk toggles; tap a paragraph, press Comment, save, and confirm the desktop Markdown tab shows the highlight and comment. Edit the file on the desktop between opening and tapping on the phone and confirm the notice and reload appear with no overwrite. Take a mobile screenshot of the bottom comment bar. Rust does not hot-reload; no desktop instance was launched by this lane. _(NOT VERIFIED 2026-10-12: needs the desktop WebView/Tauri UI, which a headless tuic-remote does not have, and this lane may not launch a desktop. Isolated headless tuic-remote built from branch chore/1706-a443-to-test-runs (main 67ccd72c3) and run on the rb box; no desktop, no Boss instance.)_ _(audit 2026-10-13: HUMAN — phone/PWA + screenshot)_ _(triage 2026-10-14: WAITS — Needs Boss’s phone/tablet or installed PWA for the specified device behavior.)_
-## Paged MCP terminal output (1551-5fa4) — Rust restart required
-
-## Progress blocked badge supersede (1537-6c4b) — Rust restart required
-
 ## AI Chat provider retry line (1536-1c9c, ego 288-f994)
 
 - [ ] [VISUAL] After ego `fix/288-provider-retry` is merged and installed, cause an overloaded or 503 provider (or wait for a real one) in AI Chat and take a screenshot: one orange line `… — connection problem, retrying in Ns (attempt n/6)` that updates in place, disappears when the answer starts, and gives way to the turn error after 6/6, with the next prompt accepted. Frontend only (HMR); ego must be rebuilt. _(NOT VERIFIED 2026-10-12: needs the desktop WebView/Tauri UI, which a headless tuic-remote does not have, and this lane may not launch a desktop. Isolated headless tuic-remote built from branch chore/1706-a443-to-test-runs (main 67ccd72c3) and run on the rb box; no desktop, no Boss instance.)_ _(audit 2026-10-13: HUMAN — needs ego + 503 provider + screenshot)_ _(triage 2026-10-14: WAITS — Needs the installed ego retry build and a recorded overloaded provider response.)_
@@ -901,8 +798,6 @@
 ## Remote hand-launched agent detection (1420-f3de) — Rust restart required
 
 - [ ] After Boss approves and loads the rebuilt desktop and remote daemon, use the configured Mac-mint connection through desktop MCP only: create a disposable shell PTY, start Claude by hand, confirm `agent_state` appears, submit one task after its composer is ready, send mail with a payload-free wake and read the reply. Check that a plain shell rejects submit with a cause and a corrective action. Do not restart or redeploy Mac-mint while its live PTYs must be preserved. Coordinator harness: `scripts/test-remote-mcp.py` from story 1419. _(audit 2026-10-13: HUMAN — Mac-mint; list_peers shows connection error "daemon must support /mcp/peer" (remote daemon not redeployed))_ _(triage 2026-10-14: WAITS — Needs the specified remote daemon/SSH fixture and coordinated rollout; no live daemon restart.)_
-## Suspend Tab (1358-d008) — desktop menu
-
 ## Global AI Chat (1157-1e54)
 
 - [ ] After a `make dev` restart, open AI Chat and switch between three repositories: `ps` shows no new `ego acp` process and the tabs stay. Send a message: exactly one `ego acp -C ~/Gits` starts, and ego's answer knows which repository was on screen. Reload the webview and send again: still one process. Quit TUICommander: no `ego acp` survives. _(NOT VERIFIED 2026-09-29: Needs real ego binary (`ego acp`) and a live AI Chat agent conversation.)_ _(audit 2026-10-13: HUMAN — needs driving live AI Chat with real ego (ego 0.1.0 installed, no `ego acp` running now))_ _(triage 2026-10-14: WAITS — MacControl Screen Recording: needs native desktop/cross-app observation.)_
@@ -910,8 +805,6 @@
 ## ego MCP over ACP (1156-1b61)
 
 - [ ] After a `make dev` restart and an ego build that advertises `mcpCapabilities.acp`, open AI Chat in an isolated `TUIC_APP_INSTANCE=<id>` and ask ego to list terminals. `ps` shows no `tuic-bridge` child of ego, the app log shows no `MCP initialize` line per tool call, and the tool answers. _(NOT VERIFIED 2026-09-29: needs a real ego agent (ACP) session; not available headless)_ _(audit 2026-10-13: HUMAN — same)_ _(triage 2026-10-14: WAITS — Needs Boss live ego tool turn plus native process/log observation after rebuild; installed ego ACP capability handshake verified. Evidence: phase2-acp-replay-capabilities-proof.json)_
-## AI Chat replay storm (1151-4243)
-
 ## Crate split restart
 
 - [ ] Restart `make dev` after the `tuic-terminal`, `tuic-core`, `tuic-git` (including its GitHub domain), and `tuic-dictation` crate splits. Rust changes do not hot-reload in the running development instance. After the restart, use an isolated `TUIC_APP_INSTANCE=<id>` to check GitHub PR status and CI notifications, push-to-talk transcription, and one hands-free spoken reply with real audio; the current live backend still has the previous crate layout. _(NOT VERIFIED 2026-09-30: needs the desktop frontend; deferred until after Boss restart. Backend: Restart-of-make-dev item; instance is a headless tuic-remote of HEAD bef15c20f. Backend crate-split behaviour exercised across r0 items (sessions, worktrees, git); UI part needs desktop build.)_ _(audit 2026-10-13: HUMAN — real audio + GitHub token; app up on the split build)_ _(triage 2026-10-14: WAITS — Needs real microphone/speaker/hotkey observation; do not disturb Boss’s voice session.)_
@@ -932,14 +825,6 @@
 ## Remote file drops (1434-1719) — Rust restart required
 
 - [ ] After Boss restarts the desktop and updates the remote daemon, drop a Mac file and a folder onto a registered remote repository in tree and flat views. Verify remote bytes, unchanged local sources, directory confirmation and conflict skipping. This native Finder-to-Tauri interaction requires the desktop rebuild; no second desktop instance was launched. _(audit 2026-10-13: HUMAN — Finder drag)_ _(triage 2026-10-14: WAITS — Needs the specified remote daemon/SSH fixture and coordinated rollout; no live daemon restart.)_
-## Safe orphan cleanup countdown (story 1257-a30b) — Rust restart required
-
-## Queued Claude notice confirmation (story 1251-9ec8) — Rust restart required
-
-## Shared agent mail identity (story 1246-46e3) — Rust restart required
-
-## Managed child idle close (story 1209-cc47) — Rust restart required
-
 ## Native desktop notifications — Rust restart required
 
 - [ ] [HUMAN] After a manual `make dev` restart in an isolated `TUIC_APP_INSTANCE`, leave TUICommander unfocused and trigger an agent question and a Progress `done` entry. Confirm each appears once in macOS Notification Center, with the terminal or project name; clicking each brings TUICommander to the named terminal or Progress project. Confirm a focused window produces none. This requires real cross-app focus and Notification Center; the running Rust backend cannot load the native handler without restart. _(NOT VERIFIED 2026-09-30: blocked — HUMAN: macOS Notification Center with real cross-app focus needs desktop app (headless tuic-remote has no native notification handler); not automatable here.)_ _(audit 2026-10-13: HUMAN — Notification Center; second item duplicates 89)_ _(triage 2026-10-14: WAITS — MacControl Screen Recording: needs native desktop/cross-app observation.)_
@@ -970,28 +855,18 @@
 ## Concurrent config saves (story 900-43dd) — Rust restart required
 
 - [ ] With two independently hydrated settings windows, disable Gemini in A, then change only the IDE in B; both preferences must persist after reopening. _(FAILED 2026-10-14: actual production settingsStore/updateAppConfig in independent browser frames submits B base.disabled_agents=["gemini"] but config.disabled_agents=[] on an IDE-only edit. Backend delta application would explicitly re-enable Gemini. Evidence: ~/Gits/.tmp/results/to-test-1014/config-windows-proof.json and config-windows-browser2.log; second save captured only, no live config mutation. Follow-up story 1876-ceee (historical story 900-43dd).)_ _(triage 2026-10-14: WAITS — Reproduced failure and linked story retained; regression verification awaits an integrated fixed build.)_
-## Current MCP tool results (story 1190-75eb) — Rust restart required
-
-## ACP peer mail receipt (1176-e82e) — Rust restart required
-
 ## Push-to-talk sustained speech (story 1135-b600) — Rust restart required
 
 - [ ] [HUMAN] After restarting `make dev` with an isolated `TUIC_APP_INSTANCE`, record a short noise burst, ordinary speech, and quiet genuine speech with push-to-talk. Confirm that only sustained speech reaches the prompt and that a rejected capture shows `no sustained speech` in the dictation ring. The synthetic command tests cover duration and threshold boundaries; the real microphone separation remains unverified and is tracked by story 1117. _(NOT VERIFIED 2026-09-30: blocked — HUMAN: push-to-talk with real microphone speech (audio hardware blocked).)_ _(audit 2026-10-13: HUMAN — to-test.md:448; Real microphone / Fn / Metal GPU capture requires hardware.)_ _(triage 2026-10-14: WAITS — Needs real microphone/speaker/hotkey observation; do not disturb Boss’s voice session.)_
 ## Push-to-talk final skip reason (story 1140-28e3) — Rust restart required
 
 - [ ] [HUMAN] After a manual `make dev` restart in an isolated `TUIC_APP_INSTANCE`, use a microphone capture that triggers a final RMS or Whisper speech gate. Confirm the dictation status and ring show the specific gate reason. An empty successful transcript still shows `no speech detected`. The focused Rust command tests prove response mapping without a microphone; live audio remains unverified. _(NOT VERIFIED 2026-09-30: blocked — HUMAN: needs microphone capture to trigger RMS/Whisper gates (audio hardware blocked).)_ _(audit 2026-10-13: HUMAN — to-test.md:452; Real microphone / Fn / Metal GPU capture requires hardware.)_ _(triage 2026-10-14: WAITS — Needs real microphone/speaker/hotkey observation; do not disturb Boss’s voice session.)_
-## AI Chat persistent approval (story 1147-33ec)
-
 ## AI Chat layout and composer (story 1166-ef2f)
 
 - [ ] In an isolated AI Chat conversation, confirm the tool count and status remain on one line at the panel's normal width, raw shell commands appear only after expanding a call, and Copy has room in both message types. While at the bottom, stream an answer and confirm the typing dots stay visible; scroll up and confirm the view stays put. Paste over 200 words and an image, then confirm the compact marker expands to the full prompt on Send and the image preview is removable. Targeted component tests cover these behaviors; the mandated stealth browser wrapper timed out on screenshot and snapshot commands for this worktree fixture. _(NOT VERIFIED 2026-09-29: Needs a real ego (ACP) AI Chat session streaming an answer; stealth browser wrapper reportedly unreliable)_ _(audit 2026-10-13: VISUAL-OWED — Targeted panel tests passed layout anchors, bottom follow, typing indicator, >200 word compact paste and image removal. AIChatPanel.test.tsx:440,483,515,1829,2198…)_ _(triage 2026-10-14: WAITS — Reproduced failure and linked story retained; regression verification awaits an integrated fixed build.)_ _(FAILED 2026-10-14: user Copy wraps vertically and clips at500px panel; tool row, streaming follow/read position,201-word paste and image removal pass. See [1166-ef2f](stories/archive/1166-ef2f-complete-P2-ai-chat-polish-tool-call-row-layout-copy-button-sp.md); evidence: ~/Gits/.tmp/results/to-test-1014/phase2-chat-layout-failure.json.)_
 ## CLI sidecar replacement (story 1165-e905) — Rust restart required
 
 - [ ] After a manual `make dev` restart when current sessions may be discarded, install or update `tuic` from Settings in an isolated `TUIC_APP_INSTANCE`. Confirm `tuic --version` runs and a previously running CLI process is unaffected. The live backend cannot load the Rust installer change until restart; fixture tests cover replacement through hard links and symlinks. _(NOTE 2026-09-29: partial evidence only — Installer replacement covered by fixture tests (hard links/symlinks) per item; live install would overwrite Boss's installed /usr/local/bin/tuic, so not done from an isolated instance.)_ _(NOT VERIFIED 2026-09-30: needs the desktop frontend; deferred until after Boss restart. Backend: Settings CLI install is UI; /usr/local/bin/tuic (Sep 29 build) runs and talks to the instance socket, but the sidecar replacement flow was not exercised.)_ _(audit 2026-10-13: HUMAN — Settings install overwrites Boss's /usr/local/bin/tuic.)_ _(triage 2026-10-14: WAITS — Boss native Settings install updates the shared /usr/local/bin/tuic; an isolated app instance does not isolate that installed executable. Existing replacement fixture tests do not prove this native update.)_
-## AI Chat message Copy and trailing suggestions (story 1150-4042)
-
-## AI Chat failed turns and choice buttons (story 1139-7310) — Rust restart required
-
 ## AI Chat shared ACP prompt queue (story 1079-fe88) — Rust restart required
 
 - [ ] After a manual `make dev` restart in an isolated `TUIC_APP_INSTANCE`, open the same disposable ego conversation on desktop and phone. Start a long desktop turn, queue a phone prompt, and confirm both views show it. Cancel a queued item from desktop and confirm it disappears from phone without reaching ego; queue another, stop the running turn from phone, and confirm desktop shows cancellation and the queued prompt starts only after the ACP response. Pause a turn with a prompt queued; confirm it stays queued until Resume and remains cancellable from either view. The live backend cannot load this Rust change until restart; targeted Rust fixture and frontend tests cover the protocol and rendering paths. _(NOT VERIFIED 2026-09-30: blocked — Needs a real phone (PWA) plus ego ACP.)_ _(audit 2026-10-13: HUMAN — to-test.md:478; Real phone/PWA cross-device check explicitly requires iPhone; forbidden by brief.)_ _(triage 2026-10-14: WAITS — Needs an actual phone plus desktop ACP conversation; protocol/rendering evidence does not prove cross-device live interaction.)_
@@ -999,10 +874,6 @@
 
 - [ ] After the next planned native rebuild/restart, confirm AI Chat appears in `agent list_peers` as an ego peer without a terminal. Reconnect and restart, then send fresh mail to its restored UUID and read it with `agent wait`. _(NOTE 2026-10-14: the peer address persists; the in-memory inbox does not promise to preserve old mail across an app restart.)_ _(verified: phase2-acp-peer-identity-proof.json; UUID reload and nonterminal wait tests pass)_ _(triage 2026-10-14: WAITS — Boss native ego restore/list_peers/new-mail observation; this lane cannot launch or restart desktop.)_
 - [ ] With phone push configured, submit blocked progress from an idle ego ACP conversation while away and verify the notification arrives on the real phone and opens that conversation. _(verified 2026-10-14: phase2-acp-peer-identity-proof.json; real child spawn has ACP peer parent_session_id and blocked progress event carries acpSessionId without PTY; three targeted tests pass)_ _(triage 2026-10-14: WAITS — Real phone Web Push delivery and native ego conversation require Boss; do not touch push credentials.)_
-## AI Chat ACP session details (story 1072-6787)
-
-## AI Chat ego profile (story 1074-9373) — Rust restart required
-
 ## AI Chat image paste (story 1085-fa65)
 
 - [ ] [HUMAN] In an isolated desktop test instance with an image-capable ego connection, copy a PNG from another app and paste it into AI Chat. Confirm the thumbnail renders, can be removed, and an image-only submit reaches ego. Repeat with plain text paste. Targeted component/client tests prove the ACP block and guards; browser accessibility showed the thumbnail and controls, but Chrome's screenshot command timed out twice, so the visual result and real cross-app clipboard path remain unverified. _(NOT VERIFIED 2026-09-29: needs a human listening/speaking (audio hardware) — not reproducible in the isolated headless/browser instance)_ _(audit 2026-10-13: HUMAN — to-test.md:499; Real cross-app clipboard path requires multi-app interaction.)_ _(triage 2026-10-14: WAITS — MacControl Screen Recording: needs native desktop/cross-app observation.)_
@@ -1015,20 +886,12 @@
 ## Agent Enter gap (stories 974-254a, 975-1de1) — Rust restart required
 
 - [ ] After restarting `make dev` in an isolated `TUIC_APP_INSTANCE`, send text plus `special_key=enter` to a disposable Claude MCP session and confirm it submits. Launch Codex through a wrapper that foreground detection does not recognize, then send a long prompt from a suggestion or dictation while the tab still has no agent type; confirm it submits and check app logs for one unknown-foreground warning. The current backend cannot load the Rust change until restart. _(NOT VERIFIED 2026-09-30: partial — Claude MCP session input text + special_key=enter submits (used in r0-cl4 run, turn started). Wrapper foreground-detection and log-warning not tested.)_ _(audit 2026-10-13: PARTIAL — (a) Claude MCP `input text + special_key=enter` in one call submitted (ENTEROK reply). (b) Codex launched through an unrecognised wrapper (sh script running codex as child): no agent_type…)_ _(verified 2026-10-14: three timing/framing contracts plus the null-agent foreground probe contract pass; the source guards the unknown-process warning once per session. Actual long Codex turn submission is still unproved; historical 0.159 evidence shows why delay tests alone are insufficient. Scope: ~/Gits/.tmp/results/to-test-1014/phase2-unknown-enter-proof.json.)_ _(triage 2026-10-14: WAITS — Needs a disposable unknown-wrapper Codex tab in Boss’s rebuilt native instance; this lane may not launch desktop TUIC. Verify actual submission and one emitted warning.)_
-## Managed Codex wrapper trust (story 1047-c41c) — Rust restart required
-
 ## AI Chat pending ACP badge and notification (story 1070-38ce)
 
 - [ ] After Boss's planned native rebuild, with AI Chat hidden and the desktop window unfocused, trigger a real ego permission request and confirm the AI Chat toggle badge and one native notification appear. Answer it and confirm the badge clears. _(NOTE 2026-10-14: an already-sent native notification cannot be withdrawn; `src/services/nativeNotifications.ts:12`. Settlement cancels only a notice still waiting for native permission, rather than closing an OS-delivered notice.)_ _(verified 2026-10-14: five targeted StatusBar/notifications contracts pass: hidden-panel pending count, visible-panel suppression, settlement clearing, native notifier despite WebView permission denial, once-per-interaction notification, cancellation during permission await, and focused-window suppression. Evidence `~/Gits/.tmp/results/to-test-1014/acp-attention-contracts.log`.)_ _(triage 2026-10-14: WAITS — real ego request plus native macOS notification appearance requires Boss's rebuilt desktop; this peer may not launch another desktop instance.)_
-## AI Chat ACP pause settlement (story 1069-97bd) — Rust restart required
-
 ## Push-to-talk native release — Rust restart required
 
 - [ ] After a manual `make dev` restart in an isolated `TUIC_APP_INSTANCE`, hold Fn while dictating, then release it while the WebView is briefly busy or loses focus. The macOS microphone indicator must go off on release, the captured phrase must transcribe once, and the file log must show Fn down/up, native stop and IPC stop latency plus audio seconds and final/partial character counts. Repeat a recording longer than 30 seconds; its opening words must remain. The current live backend cannot load this Rust change without a restart. _(NOT VERIFIED 2026-09-30: blocked — Needs Fn key hold, macOS mic indicator and real microphone (audio hardware blocked).)_ _(audit 2026-10-13: HUMAN — to-test.md:557; Real microphone / Fn / Metal GPU capture requires hardware.)_ _(triage 2026-10-14: WAITS — Needs real microphone/speaker/hotkey observation; do not disturb Boss’s voice session.)_
-## Claude awaiting badge — Rust restart required
-
-## Queued agent command diagnostics — Rust restart required
-
 ## Mobile remote sessions, Progress, and Activity — Rust restart required
 
 - [ ] [HUMAN] After Boss restarts `make dev` when current PTYs can be interrupted, verify `/api/version` identifies the integrated build, then open the Tailscale HTTPS `/mobile` PWA on a phone. _(NOT VERIFIED 2026-09-30: blocked — HUMAN item needing a real phone/Tailscale HTTPS PWA (real phone blocked). Only /api/version checked: {"version":"1.7.7","git_hash":"bef15c20f"} on rust0930 instance.)_ _(audit 2026-10-13: HUMAN — real phone + Tailscale HTTPS + second machine)_ _(triage 2026-10-14: WAITS — Needs Boss’s phone/tablet or installed PWA for the specified device behavior.)_
@@ -1049,19 +912,13 @@
 ## Mobile completion push limit (story 1041-cdc7) — Rust, needs `make dev` restart
 
 - [ ] [HUMAN] After restarting `make dev` when Boss is ready to end the current sessions, use a real subscribed phone while the desktop is away. Trigger a titled question followed immediately by session completion; confirm the phone displays one notification. Real phone delivery and display cannot be verified by the local HTTP push receiver. The targeted Rust test verifies accepted push requests, expiry after 30 seconds, and independent session limits. _(NOT VERIFIED 2026-09-30: blocked — HUMAN: needs a real subscribed phone for push delivery (real phone blocked); instance has push.enabled=false.)_ _(audit 2026-10-13: HUMAN — real subscribed phone)_ _(triage 2026-10-14: WAITS — Needs Boss’s phone/tablet or installed PWA for the specified device behavior.)_
-## Managed agent workspace trust (2026-09-26) — Rust, needs `make dev` restart
-
 ## Remote repository browsing and terminal attach (stories 1025-8103, 1026-7633) — Rust restart and remote daemon update
 
 - [ ] After restarting an isolated `TUIC_APP_INSTANCE=<id>` dev instance and updating its test remote daemon, open the remote repository picker. Confirm it starts at the remote host's home directory, a denied directory shows a readable error while manual path entry and Up remain usable, and a terminal in a remote repository renders its prompt. Opening a terminal with a missing cwd must show a readable error instead of a blank pane; a failed grid stream must show an error toast. Use only disposable test connections and sessions; the live `make dev` backend cannot load the new home-directory route or cwd validation without a restart. _(NOT VERIFIED 2026-09-30: needs the desktop frontend; deferred until after Boss restart. Backend: Remote repository picker is UI; needs remote daemon.)_ _(audit 2026-10-13: HUMAN — needs a remote daemon + saved connection (Boss's config))_ _(triage 2026-10-14: WAITS — Needs the specified remote daemon/SSH fixture and coordinated rollout; no live daemon restart.)_
-## Claude question state after wrapped suggestions (story 1023-dcc9) — Rust, needs `make dev` restart
-
 ## Remote update and restart — Rust, needs `make dev` restart
 
 - [ ] After restarting an isolated `TUIC_APP_INSTANCE=<id>` dev instance, use a disposable remote daemon to check the per-connection Auto-update option. Verify zero live sessions updates once through the daemon restart, live sessions show a manual offer with a count that refreshes while connected, and a failed update shows its error. During automatic transfer, confirm the manual update button is disabled; a stalled transfer eventually reports a timeout and resumes connection checks. Check the checkbox and status layout visually; the automated browser screenshot timed out. Do not use Boss's saved daemon. The running Rust backend cannot load this change until restart. _(NOT VERIFIED 2026-09-30: blocked — Needs a second physical machine (remote daemon update).)_ _(audit 2026-10-13: HUMAN — needs a second machine daemon (Direct + SSH))_ _(triage 2026-10-14: WAITS — Needs the specified remote daemon/SSH fixture and coordinated rollout; no live daemon restart.)_
 - [ ] After restarting an isolated `TUIC_APP_INSTANCE=<id>` dev instance, connect a disposable Direct daemon and an SSH daemon, confirm the out-of-date badge and the exact live PTY count, then update each and verify reconnect with the new `/health.build.sha256`. The live backend cannot load this Rust change without a restart. Do not update Mac-mint or Boss's saved connections. _(NOT VERIFIED 2026-09-30: blocked — Needs a second physical machine (Direct and SSH daemons).)_ _(audit 2026-10-13: HUMAN — needs a second machine daemon (Direct + SSH))_ _(triage 2026-10-14: WAITS — Needs the specified remote daemon/SSH fixture and coordinated rollout; no live daemon restart.)_
-## Squash-merged worktree removal (story 1022-8291) — Rust, needs `make dev` restart
-
 ## Claude usage per profile (story 1016-9cf8) — Rust, needs `make dev` restart
 
 - [ ] On Boss's rebuilt macOS desktop, confirm two already-authenticated Claude profiles (default and a distinct `CLAUDE_CONFIG_DIR`) display their own actual account quota in the focused status badge and matching dashboard. _(verified 2026-10-14: five rb profile/environment/file-isolation/cache/backoff contracts pass; seven targeted frontend contracts prove focused-session polling and matching dashboard routing, unknown for unreadable/missing profile, stale quota clearing and late-response rejection. Evidence `~/Gits/.tmp/results/to-test-1014/claude-state-profile-contracts.log` and `claude-profile-focus.log`. Native macOS Keychain namespace tests are platform-gated on rb; no actual credentials read.)_ _(triage 2026-10-14: WAITS — real macOS account/Keychain quota display needs Boss; reading token stores or Keychain is forbidden to this peer.)_
@@ -1087,10 +944,6 @@
 ## Codex dictation auto-send (2026-09-25) — Rust, needs `make dev` restart
 
 - [ ] [HUMAN] After restarting `make dev` when ready to end the current sessions, dictate a long phrase into a Codex tab with Auto-send enabled. Confirm it submits once rather than inserting a newline. Real microphone input and the Codex TUI are required for this final check. _(NOT VERIFIED 2026-09-30: blocked — HUMAN: real microphone dictation plus Codex TUI (audio hardware blocked).)_ _(audit 2026-10-13: HUMAN — microphone + Codex TUI)_ _(triage 2026-10-14: WAITS — Needs real microphone/speaker/hotkey observation; do not disturb Boss’s voice session.)_
-## File browser default (2026-09-25) — Rust, needs `make dev` restart
-
-## Editor line wrapping (2026-09-25) — Vite hot reload
-
 ## Native WontFix dependency recovery (2026-09-25) — Rust, needs `make dev` restart
 
 - [ ] After restarting an isolated `TUIC_APP_INSTANCE=<id>` dev instance, create a plan with a WontFix prerequisite and a Backlog dependent through the test instance. Confirm the dialog marks the prerequisite abandoned, offers Remove only on that direct cancelled edge, and reports the plan Active until its remaining stories are Done or WontFix. The current live backend cannot load this Rust change without a restart. _(NOT VERIFIED 2026-09-30: needs the desktop frontend; deferred until after Boss restart. Backend: Dialog for WontFix dependency is UI.)_ _(audit 2026-10-13: PARTIAL — `tuic story --project ~/Gits/.tmp/totest-E/proj`: A wont_fix -> plan_view B,C abandoned:true (direct+indirect), wontFixCount 1, state active, allCancelled false…)_ _(triage 2026-10-14: WAITS — Reproduced failure and linked story retained; regression verification awaits an integrated fixed build.)_ _(FAIL 2026-10-14: #1875-c3d9 (follow-up to #927-d482) — real backend status `wont_fix` mismatches UI `wontfix`: cancelled status label and Remove action are missing; #1875-c3d9 (follow-up to #937-69a4) — Active plan state is hidden. Actual dialog replay of captured isolated rb response; evidence `~/Gits/.tmp/results/to-test-1014/stories-indirect.png` and `stories-api-proof.json`. Archived-story CLI worklog rejected; coordinator recorded follow-up #1875-c3d9.)_
@@ -1103,8 +956,6 @@
 ## Markdown link navigation guard (2026-09-25) — Rust, needs `make dev` restart
 
 - [ ] In the restarted instance, open an HTML preview, PDF preview, URL plugin panel on localhost, srcdoc plugin panel, and reveal.js deck. Their iframe content and in-frame links/slide navigation still load. Export a text download on Linux through a blob URL. _(Static coverage: `lib.rs` navigation guard allows the internal frame schemes and loopback origins; runtime platform behavior needs the restarted app.)_ _(NOT VERIFIED 2026-09-30: needs the desktop frontend; deferred until after Boss restart. Backend: Preview iframes are UI; download part also needs Windows/Linux.)_ _(audit 2026-10-13: PARTIAL — live: srcdoc (ui tab html) iframe rendered with sandbox "allow-scripts allow-same-origin"; URL tab on localhost loaded (GET /busy.html 200)…)_ _(triage 2026-10-14: WAITS — MacControl Screen Recording: native WebView navigation/download isolation needs a desktop window.)_
-## Worktree warm status and safe removal (2026-09-25) — Rust, needs `make dev` restart
-
 ## Workflow definitions (2026-09-25) — Rust, needs `make dev` restart
 
 - [ ] After a Rust restart in an isolated instance, launch a coordinator attempt into a registered throwaway worktree with `workflow_launch`, inspect its prompt and event timeline, create a story with `workflow_story_create` and retry its proposal key, submit `workflow_report` from that managed PTY, and verify a different PTY cannot report the attempt. Exit a second agent without reporting and confirm its attempt becomes interrupted and the run pauses. Do this only when losing the current dev sessions is acceptable. _(NOT VERIFIED 2026-10-12: the daemon starts the coordinator attempt itself, but without a claude/codex binary the attempt fails and the run pauses (events `attempt_started` then `paused`, commandId `daemon:failure:6`), so no worker or reviewer can report or integrate. The run is startable (see item 720) but this flow needs worker, reviewer or coordinator agent reports, a story worktree or a running published check. Evidence `~/Gits/.tmp/run-1706/b7.log`. Isolated headless tuic-remote built from branch chore/1706-a443-to-test-runs (main 67ccd72c3) and run on the rb box; no desktop, no Boss instance.)_ _(audit 2026-10-13: NOT RUN — each needs real claude/codex workers or reviewers driven by the engine in a story worktree (API cost, long-running); no isolated daemon can be reached without credentials (a debug tuic-remote…)_ _(triage 2026-10-14: WAITS — Reproduced failure and linked story retained; regression verification awaits an integrated fixed build.)_ _(verified 2026-10-14: production RunStore rejects wrong bound reporter, creates one story per proposal key only for bound coordinator, and clears interrupted coordinator ownership; six targeted tests in `~/Gits/.tmp/results/to-test-1014/workflow-report-contracts.log`. Actual launcher/process exit integration remains.)_ _(FAILED 2026-10-14: story 1883-eba0 — actual isolated workflow_launch rejects the registered branch worktree with “Cannot remove orphan worktree: checkout is not detached”; no child starts. Evidence: ~/Gits/.tmp/results/to-test-1014/workflow-launch-worktree-failure.json and workflow-launch-api-proof.json. Keep for regression verification.)_
@@ -1115,18 +966,12 @@
 - [ ] After rebuilding the isolated Rust instance, submit a managed `workflow_report` with `needs_input` and `inputRequest`; verify Run history shows the pause, an operator `answer_input` command survives restart, and `resume` is refused until an answer exists. Submit a reviewer report with criterion-indexed findings and verify the story status does not change from the report alone. _(NOT VERIFIED 2026-10-12: the daemon starts the coordinator attempt itself, but without a claude/codex binary the attempt fails and the run pauses (events `attempt_started` then `paused`, commandId `daemon:failure:6`), so no worker or reviewer can report or integrate. The run is startable (see item 720) but this flow needs worker, reviewer or coordinator agent reports, a story worktree or a running published check. Evidence `~/Gits/.tmp/run-1706/b7.log`. Isolated headless tuic-remote built from branch chore/1706-a443-to-test-runs (main 67ccd72c3) and run on the rb box; no desktop, no Boss instance.)_ _(audit 2026-10-13: NOT RUN — each needs real claude/codex workers or reviewers driven by the engine in a story worktree (API cost, long-running); no isolated daemon can be reached without credentials (a debug tuic-remote…)_ _(triage 2026-10-14: WAITS — Unlanded fix 1883-eba0: workflow_launch rejects a normal registered branch worktree before spawning; integrated managed reports and parallel worker checks need that launch. Targeted store evidence remains partial.)_ _(verified 2026-10-14: actual RunStore input pause/refused early resume/durable answer/replay and reviewer criterion-index validation/advisory status pass in `~/Gits/.tmp/results/to-test-1014/workflow-report-contracts.log`; remaining check is Run history display plus explicit answer recovery after a daemon restart.)_
 - [ ] After rebuilding an isolated Rust instance, launch two nonoverlapping story attempts from the active coordinator into two registered throwaway worktrees. Confirm distinct assignments appear in run history before spawn, a third attempt is held by the parallel limit, and overlapping or unknown scopes are serialized. Approve a prerequisite, run its pinned check in the assigned worktree, merge it into the canonical branch, then record integration and confirm the dependent releases. A failed post-merge check or later unrecorded ref movement must hold the dependent again. _(NOT VERIFIED 2026-10-12: the daemon starts the coordinator attempt itself, but without a claude/codex binary the attempt fails and the run pauses (events `attempt_started` then `paused`, commandId `daemon:failure:6`), so no worker or reviewer can report or integrate. The run is startable (see item 720) but this flow needs worker, reviewer or coordinator agent reports, a story worktree or a running published check. Evidence `~/Gits/.tmp/run-1706/b7.log`. Isolated headless tuic-remote built from branch chore/1706-a443-to-test-runs (main 67ccd72c3) and run on the rb box; no desktop, no Boss instance.)_ _(audit 2026-10-13: NOT RUN — each needs real claude/codex workers or reviewers driven by the engine in a story worktree (API cost, long-running); no isolated daemon can be reached without credentials (a debug tuic-remote…)_ _(triage 2026-10-14: WAITS — Unlanded fix 1883-eba0: workflow_launch rejects a normal registered branch worktree before spawning; integrated managed reports and parallel worker checks need that launch. Targeted store evidence remains partial.)_
 - [ ] **[VISUAL]** In the isolated rebuilt instance, open **Run history** for a plan with real persisted events. Confirm the timeline advances after an IPC/SSE wake and remains readable at normal and narrow window widths. The component was visually checked with a temporary Vite harness and mocked IPC at both widths (`~/Gits/.tmp/workflow-timeline-visual.png`, `~/Gits/.tmp/workflow-timeline-narrow.png`); live backend integration awaits the Rust rebuild. _(NOT VERIFIED 2026-10-12: needs the desktop WebView/Tauri UI, which a headless tuic-remote does not have, and this lane may not launch a desktop. Isolated headless tuic-remote built from branch chore/1706-a443-to-test-runs (main 67ccd72c3) and run on the rb box; no desktop, no Boss instance.)_ _(audit 2026-10-13: HUMAN — VISUAL; the desktop window is Boss's live one, MacControl screenshots unavailable, headless instance needs Basic auth)_ _(verified 2026-10-14: real isolated daemon emits SSE and preserves persisted events after its own restart; production Run history replay consumes that captured hint and grows from four to five event rows with sequence 5 and retained event details. No horizontal DOM overflow at 1280px. Scope: ~/Gits/.tmp/results/to-test-1014/phase2-workflow-history-proof.json.)_ _(triage 2026-10-14: WAITS — Normal/narrow visual readability remains: MacControl recording denied and neither locked headed Chrome nor bundled headless Chrome produced a screenshot. Needs Boss’s visual check; recorded-response replay does not claim direct browser-to-rb integration.)_
-## Native story API (2026-09-24) — Rust, needs `make dev` restart
-
 ## Remote Project Progress event (2026-09-24) — Rust, needs `make dev` restart
 
 - [ ] With a connected remote repository after restart, report a new Progress entry on the remote agent. The local desktop Progress bell and dialog update, and `progress_list` reads that repository's journal from its owning machine. _(NOT VERIFIED 2026-09-30: needs the desktop frontend; deferred until after Boss restart. Backend: Needs desktop build: remote connection + local Progress bell/dialog are desktop frontend/remote_mirror. Headless instance has no remote connection to configure. (A second local tuic-remote could serve as 'remote' for the phase-2 agent.))_ _(audit 2026-10-13: HUMAN — needs a connected remote repository)_ _(triage 2026-10-14: WAITS — Needs the specified remote daemon/SSH fixture and coordinated rollout; no live daemon restart.)_
-## Agent hook toggles store the default as absent (2026-09-24) — Rust, needs `make dev` restart
-
 ## Agent list on the `+` buttons (2026-09-25) — frontend, HMR
 
 - [ ] [HUMAN] Decide in the morning whether the sidebar `+` right-click should also open the agent list (withheld pending approval, AGENTS.md "Sidebar clicks"). Today: tab bar `+` right-click and long press open the agent list; sidebar branch `+` long press opens it; sidebar `+` right-click opens the branch menu. _(NOT VERIFIED 2026-09-29: needs a human listening/speaking (audio hardware) — not reproducible in the isolated headless/browser instance)_ _(audit 2026-10-13: HUMAN — Boss decision (sidebar + right-click opens the agent list?), not a test; goes to the morning digest.)_ _(triage 2026-10-14: WAITS — MacControl Screen Recording: needs native desktop/cross-app observation.)_
-## Sub-agent tag icon in the sidebar (2026-09-25) — frontend, HMR
-
 ## Mobile terminal prose reflow (2026-09-24) — frontend, refresh PWA
 
 - [ ] [VISUAL] On a phone-width PWA session with Claude output produced in a wider desktop terminal, read a long paragraph: words flow across the phone width without a short orphan line at the desktop row boundary. Lists and box-drawing tables keep their own rows and alignment. _(NOT VERIFIED 2026-09-29: needs a real phone / PWA client — not reproducible in the isolated headless/browser instance)_ _(audit 2026-10-13: HUMAN — phone-width PWA)_ _(triage 2026-10-14: WAITS — Recorded paragraph/reflow and component evidence retained; live Claude paragraph/list/table appearance at phone width needs actual rendered capture. Locked Chrome cannot capture; real phone remains Boss observation.)_
@@ -1144,8 +989,6 @@ HTTP import and delete (use the test instance on `:9877`):
 - [ ] Reinstall Italian from Settings > Voice while a downloaded voice (for example jean) and an imported voice are present. Both are still listed and still speak. _(NOT VERIFIED 2026-09-30: needs the desktop frontend; deferred until after Boss restart. Backend: Dictation/voice routes are desktop-only: GET /dictation/{status,config,speech/voices,hands-free/default-notice} -> 404 on this headless instance. Needs desktop build with Italian bundle+jean+imported voice; 'still speak' is ear-only, listing part checkable via GET /dictation/speech/voices.)_ _(audit 2026-10-13: NOT RUN — live app has dictation routes only over IPC (HTTP needs auth): needs valid Italian .safetensors fixture and would alter Boss's installed voices)_ _(triage 2026-10-14: WAITS — Needs real microphone/speaker/hotkey observation; do not disturb Boss’s voice session.)_
 - [ ] `GET /dictation/speech/voices?language=it` lists giovanni as `default`, then the downloaded and the imported voices. `?language=xx` returns an error that names `xx`. With the Italian bundle not downloaded it returns `[]`, and the voice picker offers only "Default for this language". _(NOT VERIFIED 2026-09-30: needs the desktop frontend; deferred until after Boss restart. Backend: Dictation/voice routes are desktop-only: GET /dictation/{status,config,speech/voices,hands-free/default-notice} -> 404 on this headless instance. GET /dictation/speech/voices?language= needs desktop build; picker UI too.)_ _(audit 2026-10-13: PARTIAL — live IPC `get_speech_voices`: it -> [{"id":"giovanni","source":"default"}] (no downloaded/imported voices at the time); xx -> `No speech bundle ships for language "xx"`…)_ _(triage 2026-10-14: WAITS — Needs real microphone/speaker/hotkey observation; do not disturb Boss’s voice session.)_
 - Note: an isolated `TUIC_APP_INSTANCE` debug instance binds no TCP port while remote access is off; reach it with `curl --unix-socket <tuic-mcp-*.sock>` (the path is in its log).
-## Side panels follow an agent click to another repo (2026-09-24) — frontend, HMR
-
 ## Spoken replies at one level (2026-09-24) — Rust, needs `make dev` restart
 
 - [ ] [HUMAN] After the restart, arm hands-free and have the agent speak two replies in two different voices. Both sound equally loud, with no clipping or pumping. _(NOT VERIFIED 2026-09-30: blocked — Blocked: audio hardware (mic/speaker/ears): two spoken replies judged by ear. Dictation/voice routes are desktop-only: GET /dictation/{status,config,speech/voices,hands-free/default-notice} -> 404 o)_ _(audit 2026-10-13: HUMAN — Audio output/device/ears required; no speaker playback or dictation config changed. commands.rs:2992-3006 preserves speaker for level-only changes…)_ _(triage 2026-10-14: WAITS — Needs real microphone/speaker/hotkey observation; do not disturb Boss’s voice session.)_
@@ -1162,8 +1005,6 @@ HTTP import and delete (use the test instance on `:9877`):
 ## Opening AI Chat no longer aborts the app (2026-09-23) — Rust, needs `make dev` restart
 
 - [ ] After a `make dev` restart, open the AI Chat panel (ego over ACP) and send a prompt. The app stays up and the reply streams in. Before the fix, `acp_subscribe` called `tokio::spawn` on the main thread, which panicked with `TryCurrentError` (SIGABRT, crash report `tuicommander-2026-09-23-164623.ips`) and killed every PTY session. _(NOT VERIFIED 2026-09-30: needs the desktop frontend; deferred until after Boss restart. Backend: AI Chat panel (ego over ACP) and acp_subscribe main-thread panic are Tauri desktop-only; headless tuic-remote has no main thread/UI. Needs desktop build with the frontend AI Chat panel.)_ _(audit 2026-10-13: HUMAN — Code acp_commands.rs:221-227 uses tauri::async_runtime::spawn outside current Tokio runtime; regression at :676 exists. Actual AI Chat prompt/subscription stream not exercised…)_ _(triage 2026-10-14: WAITS — Desktop regression gate attempted on rb but rustc was killed with SIGKILL before any test ran. Source acp_commands.rs:227/287 uses the global Tauri runtime; actual desktop stream remains unverified. Evidence: ~/Gits/.tmp/results/to-test-1014/phase2-subscription-markdown-proof.json.)_
-## Readable Design Mode tab badge (2026-09-23) — frontend via HMR
-
 ## Hands-free from the Command Palette (2026-09-23) — frontend only, Vite HMR
 
 - [ ] [HUMAN] With dictation enabled, open the Command Palette on an agent tab and run "Start hands-free conversation". Speak a sentence: it reaches that tab and the first earcon plays (priming happened inside the palette click). Switch tabs and reopen the palette: the entry reads "Stop hands-free conversation"; run it and the conversation stops. _(NOT VERIFIED 2026-09-29: needs a human listening/speaking (audio hardware) — not reproducible in the isolated headless/browser instance)_ _(audit 2026-10-13: HUMAN — Real speech and first-earcon hearing require audio hardware/ears. No hardware activation attempted.)_ _(triage 2026-10-14: WAITS — Needs real microphone/speaker/hotkey observation; do not disturb Boss’s voice session.)_
@@ -1190,8 +1031,6 @@ HTTP import and delete (use the test instance on `:9877`):
 
 - [ ] [VISUAL] Arm hands-free. The toast shows one thin horizontal voice meter and the phase text — no pulsing dot and no moving dots after the text. Push-to-talk (dictation hotkey) still shows the bar meter, the dot and the dots. _(NOT VERIFIED 2026-09-30: blocked — VISUAL-owned by tuic-live-checks)_ _(audit 2026-10-13: VISUAL-OWED — Pure rendering check; image access unavailable by assignment, no screenshot attempts.)_ _(triage 2026-10-14: WAITS — Needs real microphone/speaker/hotkey observation; do not disturb Boss’s voice session.)_
 - [ ] Stay silent with normal room noise (fan, typing): the voice meter stays flat. Speak: it fills at once and falls back smoothly over about 1.5 s after you stop, with no flicker between words. _(NOT VERIFIED 2026-09-30: blocked — Blocked: audio hardware (mic/speaker/ears): voice meter reaction to real speech/room noise. Also desktop-only (dictation routes 404 on headless).)_ _(audit 2026-10-13: HUMAN — Actual room noise/meter response requires microphone. No capture or image check attempted.)_ _(triage 2026-10-14: WAITS — Needs real microphone/speaker/hotkey observation; do not disturb Boss’s voice session.)_
-## Unmerged worktree removal (2026-09-23) — Rust, needs `make dev` restart
-
 ## Sub-agent tags and branch count (2026-09-23) — Rust, needs `make dev` restart
 
 - [ ] [VISUAL] After the restart, the in-window Activity Dashboard stays close to the detached window's width; a long terminal name remains readable beside the robot marker and project badge, and a narrow main window has no horizontal overflow. _(NOT VERIFIED 2026-09-30: blocked — VISUAL-owned by tuic-live-checks)_ _(audit 2026-10-13: VISUAL-OWED — Pure rendering check; image access unavailable by assignment, no screenshot attempts.)_ _(triage 2026-10-14: WAITS — MacControl Screen Recording: needs native desktop/cross-app observation.)_
@@ -1202,10 +1041,6 @@ HTTP import and delete (use the test instance on `:9877`):
 - [ ] **Rust, needs another `make dev` restart:** arm hands-free on a hand-opened Claude tab, then `voice action=status` from that tab reports `available: true` instead of "Speech is bound to another session" (caller now resolved to its live PTY, `resolve_mcp_origin_pty`). _(NOT VERIFIED 2026-09-30: needs the desktop frontend; deferred until after Boss restart. Backend: Desktop-only feature (dictation/hands-free routes 404 on headless tuic-remote). Needs hands-free armed on a real Claude tab, then MCP voice status; on headless voice status returns 'connection is not bound to a terminal'.)_ _(audit 2026-10-13: HUMAN — Live voice/mic playback and real binding unavailable without activating shared dictation hardware. Caller resolution exists mcp_transport_ancillary.rs:883,1331…)_ _(triage 2026-10-14: WAITS — Needs real microphone/speaker/hotkey observation; do not disturb Boss’s voice session.)_
 - [ ] Settings → Dictation → Spoken replies lists English, French, German, Italian, Portuguese and Spanish. Set the Whisper language to English, download English, and a hands-free reply is spoken in English with the alba voice. _(NOT VERIFIED 2026-09-30: needs the desktop frontend; deferred until after Boss restart. Backend: Desktop-only feature (dictation/hands-free routes 404 on headless tuic-remote). Settings->Dictation list, ~390MB downloads; audible part is ear-only. Desktop only.)_ _(audit 2026-10-13: HUMAN — Live voice/mic playback and real binding unavailable without activating shared dictation hardware. Caller resolution exists mcp_transport_ancillary.rs:883,1331…)_ _(triage 2026-10-14: WAITS — Needs real microphone/speaker/hotkey observation; do not disturb Boss’s voice session.)_
 - [ ] French (24-layer, ~390 MB): download and speak one reply. The engine reads the layer count from `bundle.json`, but no 24-layer bundle has been run here before. _(NOT VERIFIED 2026-09-30: needs the desktop frontend; deferred until after Boss restart. Backend: Desktop-only feature (dictation/hands-free routes 404 on headless tuic-remote). French bundle download+speak; desktop only; audible verification is ear-only.)_ _(audit 2026-10-13: HUMAN — Live voice/mic playback and real binding unavailable without activating shared dictation hardware. Caller resolution exists mcp_transport_ancillary.rs:883,1331…)_ _(triage 2026-10-14: WAITS — Needs real microphone/speaker/hotkey observation; do not disturb Boss’s voice session.)_
-## Alias survives a WebView reload (2026-09-23) — Rust, needs `make dev` restart
-
-## Compose panel pin (2026-09-23) — frontend, live via HMR
-
 ## Hands-free earcons (2026-09-23) — **Rust, needs a `make dev` restart**
 
 - [ ] Arm hands-free on the desktop, speak a turn: after the hold-back a short, quiet blip plays as it reaches the agent. Set an activation phrase and speak without it: a softer, lower blip plays and nothing is sent. Neither blip opens a turn or stops a spoken reply. Repeat from a browser tab at `:9876` — the tab beeps, the desktop stays silent. Also check the first blip after arming from the global hotkey is audible (WKWebView may keep an ungestured AudioContext suspended). Turn the Earcons setting off and repeat: no sound on the desktop, and none in a browser tab armed after the change. _(NOT VERIFIED 2026-09-30: blocked — Blocked: audio hardware (mic/speaker/ears): earcon blips heard through speakers. Also desktop-only (dictation routes 404 on headless).)_ _(audit 2026-10-13: HUMAN — Earcon hearing/direction and no acoustic feedback need real output/mic. No playback attempted.)_ _(triage 2026-10-14: WAITS — Needs real microphone/speaker/hotkey observation; do not disturb Boss’s voice session.)_
@@ -1216,15 +1051,9 @@ HTTP import and delete (use the test instance on `:9877`):
 - [ ] With Auto-send on, dictate 30+ seconds into a Claude tab: the text is submitted without pressing Enter, and no "Removed 1 invisible character" notice appears. _(NOT VERIFIED 2026-09-29: Needs 30+ s of real dictated audio into a Claude tab.)_ _(audit 2026-10-13: HUMAN — Real Claude/Codex prompt or dictation audio needed; no logged-in agent spawned. Current MCP catalogue explicitly says mail stays mail and is not typed into composer (mcp_transport_catalogue.rs:554)…)_ _(triage 2026-10-14: WAITS — Needs real microphone/speaker/hotkey observation; do not disturb Boss’s voice session.)_
 - [ ] Dictate a short phrase into Claude and into a Codex tab: both still submit. _(NOT VERIFIED 2026-09-29: Needs real dictation audio and real Claude and Codex tabs.)_ _(audit 2026-10-13: HUMAN — Real Claude/Codex prompt or dictation audio needed; no logged-in agent spawned. Current MCP catalogue explicitly says mail stays mail and is not typed into composer (mcp_transport_catalogue.rs:554)…)_ _(triage 2026-10-14: WAITS — Needs real microphone/speaker/hotkey observation; do not disturb Boss’s voice session.)_
 - [ ] **After a `make dev` restart (Rust):** `session action=submit` with a 600+ char input to a Claude tab returns `acknowledged:true` and the prompt runs; a peer `agent send` of a long message also submits. _(NOT VERIFIED 2026-09-29: Needs a real Claude tab to run the long prompt and peer agent send)_ _(audit 2026-10-13: HUMAN — Real Claude/Codex prompt or dictation audio needed; no logged-in agent spawned. Current MCP catalogue explicitly says mail stays mail and is not typed into composer (mcp_transport_catalogue.rs:554)…)_ _(triage 2026-10-14: WAITS — Captured queued submission tests passed; fresh long Claude prompt acknowledgement needs owned live vendor runtime, currently unavailable with rb SSH down. NOTE: agent send now delivers mail to inbox; it intentionally does not submit message text to composer.)_
-## New-tab long press and settings button spacing (2026-09-23) — frontend, live via HMR
-
 ## Mobile Progress header (story 1214-2b95)
 
 - [ ] [HUMAN] On a 360 px and a 390 px phone, open the Progress tab with a project available. Confirm the title, project and terminal selectors, **List | Flow**, and **Blocked only** are visible without horizontal scrolling; tap both view choices and the filter. Browser geometry at those widths is checked separately; this item covers real touch and device rendering. _(NOT VERIFIED 2026-09-29: needs a human listening/speaking (audio hardware) — not reproducible in the isolated headless/browser instance)_ _(audit 2026-10-13: HUMAN — Real phone touch/device rendering explicitly HUMAN. No iPhone operation attempted; prior audio explanation in checklist is wrong.)_ _(triage 2026-10-14: WAITS — Needs Boss’s phone/tablet or installed PWA for the specified device behavior.)_
-## Progress Flow view (2026-09-23) — **Rust, needs a `make dev` restart**
-
-The List | Flow toggle is frontend and appears through HMR at once, but the running backend has no `progress_flow` until it restarts, so Flow shows an error line until then. The first open after the restart migrates `progress.sqlite3` (table rebuild for the new kinds).
-
 ## Markdown block review handoff (2026-09-23) — frontend, live via HMR
 
 - [ ] With tweak comments in the file, choose a same-repository agent in the Markdown topbar and click **Send**. An idle agent receives the request immediately; a busy agent shows one queued command and receives it on its next idle transition. _(NOT VERIFIED 2026-09-29: Needs a real agent tab in the same repository with idle/busy transitions to observe immediate delivery vs queued delivery.)_ _(audit 2026-10-13: HUMAN — Markdown comment source-range/item contracts exist ContentRenderer.test.tsx:63 and tweakComments.test.ts:88,121; no browser hover/save real file operation. Targeted tests refused protected checkout…)_ _(triage 2026-10-14: WAITS — Same-repository selection, enqueue-once and queued toast component test passed in subscription-markdown-contracts.log; actual idle/busy vendor delivery needs owned backend unavailable while rb SSH is down.)_ _(verified partial 2026-10-14: production MarkdownTab test filters other repositories and enqueues once for selected session; prior captured backend ready/queue tests pass separately. Actual vendor idle/busy handoff remains. Evidence: ~/Gits/.tmp/results/to-test-1014/phase2-subscription-markdown-proof.json.)_
@@ -1260,21 +1089,6 @@ that checkout merely to run this check.
       the first four modules; closing the bound terminal turns the hover
       highlight off, and a later start delivers no click made in between;
       closing Chrome and starting again works on the first click.
-## Terminal Progress (2026-09-23) — Rust, needs a `make dev` restart
-
-## Terminal scrollbar thumb minimum 48px (2026-09-23) — frontend, live via HMR
-
-## Branch icon toggles agents (2026-09-22) — frontend, live via HMR
-
-## Theme review applied (2026-09-23) — **Rust, needs a `make dev` restart**
-
-Bundled JSONs updated (VS Code Dark now follows VS Code Dark 2026), Deep Black / Delicate One removed, "Clean"
-shown as "Ink" and "VS Code Light" as "Paper", default and fallback moved to
-Commander (`config.rs` default, `DEFAULT_THEME` in `settings.ts`). Before/after
-reference: `docs/design/theme-gallery-2026-09-22/`. `seed_builtin_themes` is a
-no-op once `<config>/themes` exists, so an existing install sees none of the
-new colors or names until the JSONs are copied into that folder.
-
 ## DL and SU stop manufacturing scrollback (story `834-1878`, 2026-09-22) — **Rust, needs a `make dev` restart**
 
 `delete_lines` and `scroll_up` used to push the rows they removed into history.
@@ -1384,7 +1198,6 @@ that already has one is dropped.
 
 - [ ] In Settings → Notifications, play each Test sound through the output device that previously crackled. The tone must end cleanly, with no relay-like click after its release. The source now reaches an exact zero sample and feeds 100 ms of silence before closing, but only the real CoreAudio device can verify the hardware-buffer teardown. _(NOT VERIFIED 2026-09-30: blocked — BLOCKED class: audio hardware (real CoreAudio output device and ears).)_ _(audit 2026-10-13: HUMAN — CoreAudio teardown crackle explicitly depends on affected real output device and ears; no playback attempted.)_ _(triage 2026-10-14: WAITS — Needs Boss to listen on the previously affected audio output device.)_
 ## Progress dialog and journal (2026-09-19)
-
 
 - [ ] Open Progress (palette: "Open Project Progress"), move the pointer across three rows, then off the list. Every delete icon must be hidden again; before, WKWebView kept the icon of every row crossed. CSS only, live via HMR — no restart. Item created because the fix could not be reproduced programmatically. _(NOT VERIFIED 2026-09-29: WKWebView-specific hover-stuck icon; author states it could not be reproduced programmatically; needs desktop app and human.)_ _(audit 2026-10-13: VISUAL-OWED — WKWebView hover-stuck delete-icon check requires rendering observation. CSS ProgressDialog.module.css:38-43 removes opacity transition and uses hover-only reveal; no pointer live check.)_ _(triage 2026-10-14: WAITS — WKWebView-specific regression needs Boss native observation; MacControl Screen Recording is denied.)_ _(verified partial 2026-10-14: actual Chromium ProgressDialog hides all three delete icons after pointer leaves; cannot establish the WKWebView-specific regression. Evidence: ~/Gits/.tmp/results/to-test-1014/progress-hover-after-leave.json.)_
 ## ego reaches TUIC over the stdio bridge (story `796-7fa3`, 2026-09-20) — **Rust, needs a `make dev` restart**
@@ -1609,11 +1422,6 @@ on a socket the peer never answers.
 
 - [ ] With the network still down, disable GitHub polling in Settings. It must _(NOT VERIFIED 2026-09-30: partial — Not run: depends on the network outage of 1760 and a Settings toggle (frontend).)_ _(audit 2026-10-13: HUMAN — Requires interaction with Boss-owned active app/repository or vendor/provider process; no ownership of that state. Contract test/source search performed…)_ _(triage 2026-10-14: WAITS — Needs owned outage/poller execution; github_poller.rs has stop_aborts_a_poll_that_never_resolves and stop_poller_reaches_a_loop_parked_inside_a_request, but remote SSH is currently unreachable. No Boss network/settings changed.)_
   stop immediately, not after the in-flight request gives up.
-## Git status and index.lock ownership (story 673-19fa, Rust — needs `make dev` restart)
-
-The sidebar dirty badge now reads the gix porcelain-v2 counts, and the stale
-`index.lock` sweep asks `lsof` who owns the lock before trusting the age rule.
-
 ## Weekly advisory scan (story 663-feea, CI — verify after merge)
 
 `audit.yml` now installs a prebuilt `cargo-audit` and reads its ignore list from
@@ -2085,10 +1893,6 @@ does not carry them, so `tuic-remote` answers 404 (#810-4986).
 - [ ] `website/index.html`, "Git worktrees, fully managed": the second bullet _(NOT VERIFIED 2026-09-29: partial — Rendered website/index.html in a same-origin srcdoc iframe (no screenshot). 1200px: 'Warm worktrees' bullet names copy-on-write, li 544x69, no overflow. 390px: bullet wraps (92px tall, code chips intact) but its column right edge is 402 > 390 viewport and document scrollWidth is 508 (several .feature-content blocks are 361-484px wide, all sections )_ _(audit 2026-10-13: VISUAL-OWED — No screenshot attempts per brief. Progress rendering source: src/components/ProgressDialog/ProgressDialog.module.css:3,14,45,57 (width/embedded/wrap/muted italic), ProgressDialog.tsx:281 intent row…)_ _(triage 2026-10-14: WAITS — Needs Boss’s phone/tablet or installed PWA for the specified device behavior.)_
       now names the copy-on-write warming that `docs/user-guide/worktrees.md`
       documents. Checked at 1200px; check it on a phone width too.
-## A missing bridge says so (#809-724c)
-
-Rust — needs a `make dev` restart.
-
 ## Pocket TTS speech synthesis (#823-c260)
 
 Rust — needs a `make dev` restart. Nothing calls the port yet (playback is
@@ -2383,14 +2187,6 @@ stream gets the identical body. Only a restart loads them.
       `interrupted` rather than `finished`, and that it arrives — the transition
       happens on the render thread after `speak` has long returned, which is the
       case a polling client used to miss entirely.
-## Agent toast repository action (story `835-314c`, 2026-09-22) — **frontend visual**
-
-The rendered DOM was exercised with the real Vite modules and contained two
-toasts at once: the different-repository toast had `Go to repo`; the current-
-repository toast did not. `agent-browser` navigation and DOM inspection worked,
-but `Page.captureScreenshot` timed out repeatedly, and CUA could not bind the
-headed test browser window.
-
 ## SSH local-forward readiness (story `1159-4e28`, 2026-09-28) — **Rust, needs a `make dev` restart**
 
 - [ ] After restarting an isolated test instance, connect the Installed-service _(NOT VERIFIED 2026-09-30: blocked — second physical machine: aws-graviton (56481148) SSH remote; AWS box is DOWN per coordinator brief, and instance config must not be edited by hand.)_ _(audit 2026-10-13: HUMAN — Configured aws-graviton connection needs remote login/host readiness; no connection or credential changes attempted.)_ _(triage 2026-10-14: WAITS — Needs the specified remote daemon/SSH fixture and coordinated rollout; no live daemon restart.)_
@@ -2400,8 +2196,6 @@ headed test browser window.
       Record the elapsed time and the tunnel status transitions. Use only the
       configured host and credentials; the targeted Rust tests cover delayed
       local ports and delayed health independently.
-## Config defaults and expert-mode UI pref (story `863-03c1`, 2026-09-24) — **Rust, needs a `make dev` restart**
-
 ## Error messages name the reorganized Settings pages (story `861-977b`, 2026-09-24) — **Rust, needs a `make dev` restart**
 
 - [ ] [VISUAL] Settings → General with Experimental Features **off**: an **ego** _(NOT VERIFIED 2026-09-30: blocked — VISUAL-owned by tuic-live-checks)_ _(audit 2026-10-13: VISUAL-OWED — Pure visual requirement; screenshot/image inspection unavailable per brief; not attempted.)_ _(triage 2026-10-14: WAITS — GeneralTab.tsx:385/441/483/487 shows native Code Intelligence then ego, tooltip and Select/Clear outside the experimental gate; AiChatTab owns model/providers. Browser mode uses a text input instead of native file selection; prior GeneralTab DOM and AI Chat setup tests pass. Native visual arrangement remains: MacControl recording denied and locked Chrome cannot capture images. Evidence: ~/Gits/.tmp/results/to-test-1014/phase2-chat-setup-proof.json and ego-profile-row-proof.json.)_
@@ -2503,8 +2297,6 @@ headed test browser window.
 ## Codex questions on mobile PWA (story 1201-ae16)
 
 - [ ] [VISUAL] On a real phone after `make dev`, open a Codex session that is waiting on a `request_user_input` question. Confirm the question text and its options are fully visible and each option can be tapped/selected without clipping at 360 px width. Confirm choosing an option submits exactly once and the question clears from both the session list badge and the session detail. Captured-fixture and 360 px DOM geometry tests already pass; the real-device check remains. _(NOT VERIFIED 2026-09-29: needs a real phone / PWA client — not reproducible in the isolated headless/browser instance)_ _(audit 2026-10-13: VISUAL-OWED — Pure visual requirement; screenshot/image inspection unavailable per brief; not attempted.)_ _(triage 2026-10-14: WAITS — Needs Boss’s phone/tablet or installed PWA for the specified device behavior.)_
-## Git panel Log tab layout (story 1263-7d7d)
-
 ## Branch integration proofs (story 1295-a2ce)
 
 - [ ] After Boss restarts `make dev` or rebuilds the release, query `repo action=branch_integrations` and `repo action=branch_integration` on throwaway fixtures and confirm the new proof fields are available. Check that an integrated squash branch appears in the branch panel and sidebar, and a content-based proof requires an archive of the current tip before safe deletion. Automated real-Git lifecycle, MCP and deletion checks passed; the installed process has not been restarted to load this Rust change. _(PARTIAL 2026-10-11: branch_integrations and branch_integration returned proof fields (in_sync, ancestry, patch_equivalence for a squash branch); deletion with an archived tip succeeded (proof archived) and an unarchived unmerged branch was refused. A content_superset proof could not be reproduced and the branch panel/sidebar was not checked. Evidence `~/Gits/.tmp/totest-1011b/ev/git2.json`. Isolated headless daemon built from main d2f8f13df.)_ _(audit 2026-10-13: VISUAL-OWED — Prior 2026-10-11 partial proof fields retained; integrated squash branch panel/sidebar and content_superset archive not exercised.)_ _(triage 2026-10-14: WAITS — Prior actual proof-fields/deletion evidence retained; content_superset archive branch case and live branch-panel/sidebar remain incomplete. Owned runtime unavailable and native screenshot denied.)_
@@ -2788,8 +2580,6 @@ Needs an iPhone (iOS 16.4+, 18.4+ preferred), the desktop TUICommander running a
 - [ ] Beta update channel after backend rebuild: Settings → General → Expert Mode → Update Channel offers Beta and preserves it after restart. Before the first beta feed exists, Check for Updates reports no beta release (or offers a newer stable). After a beta tag workflow completes, beta.1 offers beta.2 from its immutable download page; after 2.0.0 publishes, it offers the final in-app. Stable channel stays on stable. Rust changes require Boss's manual restart to load. _(audit 2026-10-13: HUMAN — updater.test.ts 45 passes cover beta.2/final/stable/missing beta feed. Actual saved restart + release workflow publication requires permitted restart/release artifact beyond scope.)_ _(triage 2026-10-14: WAITS — Prior updater45-test evidence retained; full immutable beta.1→beta.2→final feed progression depends on published release artifacts and coordinated native updater restart, not executable in an audit lane.)_
 ## Shared form controls (1815-01c9)
 
-- [x] Tasks create, Settings account/list fields, Automations, Git review, worktree creation, AI Chat elicitation, desktop filters and mobile New Session render with shared themed controls. _(verified: worktree Vite screenshots in `~/Gits/.tmp/results/form-controls/`, before/after per migration group; mobile 390×844 retains 44px fields.)_
-- [x] Native select keyboard/form behavior, reactive values, refs, change targets, multi-selection, disabled state and semantic classes remain intact; the Tasks view switch supports arrows/Home/End. _(verified: `src/__tests__/components/FormControls.test.tsx` and existing migrated-module suites.)_
 - [ ] #1753-f6b8 (Rust restart required): after restarting TUIC, open Inspect Launch Instructions on a session with 10+ MCP reconnects. Confirm one **MCP initialize instructions** row with a count and last-seen time, plus the Launch brief row; close the session and reopen: the error shows the backend reason.
 
 - [ ] GitHub Work (#1693-a816): after a manual `make dev` restart or `make build`, sign in again with an existing GitHub OAuth account and confirm consent includes Projects read access (`read:project`). Existing tokens require reauthorization; no automatic upgrade occurs. Verify a Projects v2 board loads rather than reporting `INSUFFICIENT_SCOPES`.
@@ -2815,14 +2605,10 @@ Needs an iPhone (iOS 16.4+, 18.4+ preferred), the desktop TUICommander running a
 - [ ] [VISUAL] On the iPhone PWA after a reload, open a session: Send is outside the input box (36 px visible, 44 px hit area), the mic sits inside the box, and the text wraps at the same width as before. Chromium measured 286 px wrap at 390 px; the iOS Safari layout is unverified. No Rust restart. _(Moved from the story by Boss's rule 2026-10-13.)_ _(triage 2026-10-14: WAITS — Needs Boss’s phone/tablet or installed PWA for the specified device behavior.)_
 ## Worktree recycling benchmark (1705-67b3) — Rust restart required
 
-- [x] Native isolated headless API measurement completed on 2026-10-14: 15 recycled creations, 10.802 s total; Defender peak 284.4%, fseventsd peak 19.1%. See `docs/evidence/worktree-recycling-1705-native.md` for raw data and baseline comparison. The small serial fixture does not prove production speedup or Defender reduction. No desktop restart needed for this isolated check.
-
 - [ ] After Boss rebuilds/restarts the Rust backend, create 15 worktrees in a row with recycling and compare the time and the Defender/fseventsd CPU with the 2026-10-10 benchmark. Rust does not hot-reload. _(Moved from the story by Boss's rule 2026-10-13.)_ _(triage 2026-10-14: WAITS — Needs coordinator-owned benchmark/mutation scheduling; no expensive batch gate started by this peer.)_
 ## Launch marker instructions (1810-c28c) — Rust restart required
 
 - [ ] After Boss restarts `make dev`, start Claude, Codex, grok, goose, pi and ego from a TUIC shell (typed command, alias and resume) and one opencode tab; open **Inspect Launch Instructions** and confirm each agent got the marker text through its own flag (or `OPENCODE_CONFIG_CONTENT` for opencode), once, and that a launch by absolute path is the known miss. The flags were verified only against the installed `--help` of 2026-10-12. _(Moved from the story by Boss's rule 2026-10-13.)_ _(triage 2026-10-14: WAITS — Installed help/launch-flag and controlled argv evidence retained; full typed/alias/resume launch instructions for seven actual vendors needs owned rebuilt runtime and live sessions. rb unavailable; no Boss composer used.)_
-## Terminal Chat file links (1835-a278)
-
 ## Truncated dictation incident (1763-3361) — Rust restart required
 
 - [ ] When Boss meets a truncated dictation again, correlate its time with the file log (`focus-loss` stop lines, `~/Gits/.tmp/results/ui-1763-dictation-evidence.log` shows the method) and note whether the cause was the Fn focus-loss stop. The 11:49/11:51 focus-loss stops and the RED prove the native defect only; the link to all three reported truncations is unproven. _(Moved from the story by Boss's rule 2026-10-13.)_ _(triage 2026-10-14: WAITS — Needs real microphone/speaker/hotkey observation; do not disturb Boss’s voice session.)_
@@ -2852,7 +2638,6 @@ Needs an iPhone (iOS 16.4+, 18.4+ preferred), the desktop TUICommander running a
 - [ ] [to-test] With Quit, verify confirmation with live sessions, immediate quit without sessions or with confirmation disabled, and persistence of the remembered policy after restart.
 - [ ] After a manual backend restart, verify an unknown `/tasks/no-such-endpoint` returns JSON 404 rather than the SPA shell (tasks API prefix fix).
 - [ ] #1873-bbc2 revision: After a manual Rust restart/rebuild, verify Claude stays working/busy while blocking Stop hooks run after final choices; chips publish once when ready. Automated recorded Stop-hook regression and replay oracle cover the backend.
-
 
 ## Background hidden state (#1803-00d9)
 
@@ -2885,9 +2670,6 @@ Needs an iPhone (iOS 16.4+, 18.4+ preferred), the desktop TUICommander running a
 - [ ] Jira create: choose Reporter and Assignee by search, enter new comma-separated Labels, fill required Parent for sub-tasks, and verify Project/Type do not require duplicate entry (#1859-c01f).
 ## Jira JQL errors (#1861-8a4c)
 
-- [x] `jql: project =` shows the recorded Jira parse failure and a correction hint; the typed query remains intact and previous rows are marked stale. _(verified: real TasksShell and Jira provider in the read-only Vite harness, screenshot and UI request trace in `~/Gits/.tmp/fix-1861/`; no text fallback request.)_
-- [x] Explicit text, key lookup, valid JQL, saved-filter predicates and board query scoping retain their meanings. _(verified: `plugins/jira/jql-errors.test.js`, 31 Jira tests pass; 11 Tasks consumer tests pass.)_
-
 - [ ] Tasks/plugins batch 1013: after Boss restarts `make dev` (or rebuilds release), verify review-bot findings in Tasks and PR review threads. The merged Rust changes require a backend restart to load.
 
 - [ ] Tasks small-list mode (#1851-7ade): after Boss restarts the Rust backend, check a GitHub small scope shows local queries and title sorting, while unknown-total Jira stays server mode. New project_work_items IPC/HTTP requires rebuild; never reload the desktop during agent work.
@@ -2904,7 +2686,6 @@ Needs an iPhone (iOS 16.4+, 18.4+ preferred), the desktop TUICommander running a
 
 - [ ] After Boss restarts the backend, recycle a finished linked checkout and confirm the old workspace and declared agent placements are absent from repositories.json and the sidebar; sibling workspaces stay intact. Automated persisted-state and frontend regression tests cover the change; the live app does not load Rust edits through HMR.
 - [ ] After a manual `make dev` restart or release rebuild, verify GitLab planning dates still render in Roadmap and have no list filter/group control (`queryable` schema support requires the rebuilt Rust backend). _(triage 2026-10-14: WAITS — Three Tasks date/list tests passed in tasks-date-contracts.log; actual GitLab provider integration needs its planning-date update and an account. Read-only main plugin checkout 4150e41 model.js:32-33 currently exposes milestone text and due date, with no planning-date fields/queryable schema.)_
-
 
 ## Mobile Claude CLI / Chat (#1770-3e28)
 - [ ] [HUMAN] On a real iPhone, measure first Chat open and resume after more than 20 seconds hidden at 2000 entries; verify gentle touch detaches during streaming and CLI returns to latest output. Browser timings are recorded separately and do not prove phone performance.
@@ -3044,7 +2825,6 @@ Needs an iPhone (iOS 16.4+, 18.4+ preferred), the desktop TUICommander running a
 ## Ego mobile question forms (1973-3d1b) — backend restart required
 
 - [ ] After Boss manually restarts `make dev` or installs `make build`, open ego single-choice, multiple-choice, and free-text questions from a narrow mobile terminal. Confirm **Input** and the header question action for each. Multiple-choice taps must toggle without submitting until **Submit answers**; free-text must show its full question above the reply composer. The current running backend cannot load this Rust change through hot reload.
-- [x] Capture all three recorded ego question cards in Commander and Paper at390×844 and834×844. _(verified: `.tmp/mobile-question-visual/after-1973/png/`; actual SessionDetailScreen with existing Rust replay state; cards end at746px above the first key at747px, Paper contrast11.386:1. Presentation only, not a live PTY or physical-phone check.)_
 - [ ] Capture the originally requested360×800 geometry if that exact smaller viewport remains required; this follow-up captured390/834 widths, not360.
 
 ## Telegram AI Chat fallback (#1983-1b47)
@@ -3074,7 +2854,6 @@ Needs an iPhone (iOS 16.4+, 18.4+ preferred), the desktop TUICommander running a
 
 ## Settings startup contract (#1790-1011)
 
-- [x] Coordinator batch: exercise the published GitHub/Ego settings facade with isolated owners, covering refusal/confirmation expiry, device-flow refusal/expiry, stale revisions and persisted apply/readback failure; never use production credentials. _(verified: targeted Linux runs on f5c637467d passed startup_flow_tests, startup_uses_only_published_schema and provider_authorization_deadline_cannot_authenticate_or_persist in both configurations; the headless run also passed persisted_apply_failure_publishes_unapplied_generation)_
 - [ ] After Boss restarts the Rust backend, discover GitHub list_accounts and Ego begin_login/login_status through Settings. Complete a human Ego login in the returned terminal; verify closed/expired is never success and provider refresh shows owner credential state. Use only an isolated test account/instance. Automated isolated recovery tests passed; live authentication remains unverified. See docs/backend/settings-startup.md for prerequisites and the redacted evidence checklist.
 - [ ] After the next backend restart, check Claude trust, external-import and Bash permission dialogs in mobile CLI: all options and the footer must remain visible (#1987-606c). Rust changes require a manual restart to load.
 
@@ -3120,7 +2899,6 @@ Needs an iPhone (iOS 16.4+, 18.4+ preferred), the desktop TUICommander running a
 - [ ] On a real iPhone, confirm the session menu Markdown list stays still during session updates; on an iPad, open a listed file from the top-bar Markdown dropdown and return to the session (#2024-9a86, #2025-82cb). Browser evidence covers 390 px and 1024 px, not physical touch behavior.
 
 - [ ] After the next planned desktop rebuild, confirm desktop startup and browser/mobile static pages still load. Story 2041-04c4 moves Tauri context construction into the binary; no restart was performed by the agent.
-- [x] Mobile Markdown review send (#2042-a71b): 360×800 agent-browser fixture check ticks a checkbox, saves a block comment, sends one path-and-count prompt, and displays transient queued feedback with amber commented-block highlighting; screenshots are in the orchestrator report. The fixture uses real components with an isolated transport, not a live backend round trip.
 
 - [ ] Mobile CLI on a real phone: answer paragraphs show a continuous green gutter instead of protocol speech bubbles; verify native text selection and touch scrolling. Browser evidence at 390×844 is retained under `~/Gits/.tmp/2070/` (#2070-773d).
 
@@ -3144,11 +2922,9 @@ Needs an iPhone (iOS 16.4+, 18.4+ preferred), the desktop TUICommander running a
 
 - [ ] After Boss rebuilds/restarts the app, install a disposable plugin ZIP with a root manifest and another with a single top-level directory; confirm their files load. On Windows, install the speech runtime from its ZIP and confirm the selected library loads. Automated extraction/name tests run on rb; this item records that the currently running backend cannot load the ZIP 9 migration without a rebuild. Do not restart the running app for this check.
 
-
 ## 1638-c94c — generated workload WKWebView replay
 
 - [ ] After story 2086's isolated `make agent-test` harness lands, run the single-command `scripts/stall-workload/desktop-replay.mjs` procedure from its README against the generated recording in `~/Gits/.tmp/stall-1638/font-workload/frame-workload.json`. Verify named-instance/executable guards, collect native heartbeat-command round trips and independent backend timings, and retain the result. This is paint-only replay of generated output, not the original captured-real-stall RED. No Boss-app restart or second ordinary desktop instance is needed or authorized.
-- [x] Mobile AI Chat tab availability (#2087-07bf): isolated worktree Vite + headless backend at 390×844 shows four tabs without ego and five with ego; host config saves update the tab over SSE without page reload. _(verified: ~/Gits/.tmp/feat-2087-visual/transcript.txt and with-ego.png / without-ego.png)_
 
 - [ ] After Boss rebuilds/restarts the Rust backend, ask ego for a native selector immediately after a TUIC connection/intent or successful tool receipt. Desktop and mobile must show only the native question title, with the same choices (#2088-98ea). The running app does not hot-reload this parser change; do not restart it during agent work.
 
@@ -3185,15 +2961,12 @@ Needs an iPhone (iOS 16.4+, 18.4+ preferred), the desktop TUICommander running a
   session tokens/cost, unavailable and stale states. Never restart the daily app
   during active sessions for this check. Rust changes do not hot reload.
 
-- [x] Capture the isolated 390×844 session-usage browser fixture. _(verified 2026-10-23: available, unavailable and stale viewport PNGs captured with the authorized browser wrapper; accessibility text and DOM bounds checked. Fixture-only, not live provider evidence. Evidence: `~/Gits/personal/orchestrator/reports/tuicommander/img/2026-10-23-2150/README.md`.)_
-
 ## Worktree discovery diagnostics (#2157-eb64)
 
 - [ ] After the next deliberate Rust rebuild/restart, check forced duplicate-branch and moved-checkout fixtures: read-only diagnostics retain paths and repair guidance; bisect and relative-gitdir rebase keep their branch rows. The currently running backend does not hot-reload this change.
 
 - [ ] After rebuilding, move a detached checkout manually: its old registration stays visible as a repair diagnostic and survives Ask/On automatic cleanup; explicit user removal can discard it.
 
-- [x] Native story QA (#2168-7fbc): the isolated native `agent-test-2168` instance verified QA-only filtering, the QA Kanban card, enabled manual checks, QA failed → In progress, Submit for QA → QA, and QA passed → Done. CLI/API and DOM evidence: `~/Gits/.tmp/results/tuic-2168-live/`. The daily Rust process still needs a manual restart to load this change.
 - [ ] Native all-manual workflow start (#2168-7fbc): after a backend restart, start a Ready story with only manual checks and verify the run pauses for QA without an implementer session or worktree. <!-- DEFERRED (2026-10-23) — critic F1 changes Rust dispatch; prior native live evidence covers story controls, not this new workflow pause. -->
 - [ ] Native story QA screenshot (#2168-7fbc): inspect the QA column and detail controls on an unlocked screen. <!-- DEFERRED (2026-10-23) — own-window screencapture failed with "could not create image from window" while loginwindow was frontmost; API and native DOM verification passed. --> EVIDENCE: `~/Gits/.tmp/results/tuic-2168-live/main-screenshot-error.txt`.
 
@@ -3204,8 +2977,6 @@ Needs an iPhone (iOS 16.4+, 18.4+ preferred), the desktop TUICommander running a
 - [ ] After rebuilding the Rust backend, use an isolated agent-test instance to archive a throwaway native story at its current revision, confirm that the default list omits it and `archived: true` selects it, then restore it and inspect archive history. Do not use daily-instance data. Also check the independent Archived plans/Archived stories toggles and revision-checked Restore controls in StoriesDialog.
 
 - [ ] After a Rust rebuild, archive and restore a workflow-integrated Done story. Confirm the restored plan stays Done and its dependent stays Ready; a story-root workflow must still allow archival of an unrelated unclaimed sibling.
-
-- [x] Story 2173: claimed story metadata, managed transition history and New story plan-step persistence. _(verified: isolated agent-test-2173 API and DOM evidence in `~/Gits/.tmp/results/tuic-2173-live/`; screenshot unavailable because no agent-test window was found.)_
 
 - [ ] Mobile Sessions: confirm Working / Idle / Awaiting totals and layout on iPad; Finished rows do not count, and Awaiting still opens the first Input row (#2181-c98f).
 
@@ -3228,10 +2999,7 @@ Needs an iPhone (iOS 16.4+, 18.4+ preferred), the desktop TUICommander running a
   retain cards without allowing moves while issue/PR actions still work. Live move
   and read-back need an explicitly authorized scratch project; do not use a real board.
 - [ ] After a manual Rust rebuild/restart, verify GitHub Status keeps the monitored-repository count after query-cache expiry, removes deleted repository paths, and resets it when monitoring stops (#2336-da0a). This change does not hot-reload.
-- [x] #2336-da0a: On 2026-10-25, isolated `agent-test-2336` Tasks loaded 140 public GitHub items through the production provider and plugin HTTP transport with no account credential. An instance-only CONNECT proxy rejection settled with an error and retained stale results. Restoring the proxy and selecting Refresh loaded 140 items again and removed the stale/error indicators. A separate mute-proxy check settled after 30.004 seconds with a timeout and stale results. Native-window screenshots and timestamped DOM/provider evidence are in `~/Gits/.tmp/results/tuic-2336-{baseline,drop,recovery,mute}*`. This did not reproduce the historical loading hang or verify authenticated native GitHub polling.
 - [ ] [HUMAN] #2336-da0a: Log in through the isolated instance's GitHub device flow, configure an unreachable remote, and verify authenticated local sidebar PR/issue data and recovery after an instance-only network interruption. No daily credentials were read or copied; the daily app was not restarted.
-
-- [x] Rebuilt `tuic-remote`: `python3 scripts/test-headless-github.py /absolute/path/to/tuic-remote` verifies isolated Unix-socket GitHub monitoring (#2345-49f0). _(verified: empty paths and a scratch no-remote repository start, return status/data, stop and restart; no authenticated GitHub fetch is claimed. The running desktop backend needs a manual restart to load Rust changes.)_
 
 - [ ] After the next backend rebuild/restart, check story 2349-f6f8: the mobile session menu reaches Copy session ID and Terminate session, repeated Markdown paths appear once, and Claude/Codex quota text names the plan and window with local reset times. Rust changes do not hot-reload.
 
@@ -3270,7 +3038,6 @@ Needs an iPhone (iOS 16.4+, 18.4+ preferred), the desktop TUICommander running a
   installed mdkb; explicitly ignored in unattended runs).
 - [ ] Story title edit (#2427-a125): review the invalid-title border and Save tooltip at 201 characters; confirm 200 non-BMP characters remain intact. _(Headless capture attempted but Chrome returned no DOM or screenshot; unit RED and TypeScript evidence are retained separately.)_
 
-
 - [ ] After rebuilding the backend, put a short-TTL task secret, spawn with its scope, and confirm echoed output is masked in desktop, mobile and a diagnostic capture. A later spawn must reject the expired scope while the original session remains masked (#2319-02f6). Rust does not hot-reload; restart only when ready to end the current live app session.
 - [ ] Issue triage (#2324-424d): after a manual `make dev` restart or release rebuild, configure a throwaway allowlisted repository and an operator-attested read-only triage profile. With explicit GitHub-write authorization, verify accepted/rejected/needs-input decisions and comment/label delivery across restart. No live GitHub-write pilot was run by the implementer. TUIC does not enforce absence of git/gh credentials.
 ## Reviewed event issue publication (#2325-10c4)
@@ -3296,4 +3063,5 @@ Isolated Chrome screenshot capture timed out after 35 seconds; visual rendering 
 - [ ] After rebuilding/restarting the Rust backend, complete a coloured automation run and check Automations > Recent runs: no raw terminal escapes, readable Unicode, the final report retained after more than 256 KiB of logs, and a truncation warning only when the cleaned output exceeds 256 KiB (#2467-5cda). Existing saved runs are not rewritten.
 - [ ] After a backend rebuild, open an untrusted ego project on mobile. Check that the project-trust prompt shows awaiting input and Yes/No. Answer each choice in separate scratch projects (#2461-1403).
 
+- [ ] After a manual backend restart, set archive retention to 1 day in a throwaway repository and refresh after expiry. Confirm the status names deleted clean and retained dirty archives, with archive refs intact (#2469-c93f). Rust does not hot-reload.
 - [ ] After the next backend rebuild, create a worktree in a repo that ignores `stories/`: the shared link must not add a dirty badge. In a repo that does not ignore stories, creation must warn and leave the main untracked files visible (#2476-b3eb).

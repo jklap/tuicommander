@@ -10,6 +10,12 @@ const mod = isMacOS() ? "Cmd" : "Ctrl";
 
 export const TIPS: Tip[] = [
 	{
+		feature: "Archived worktree retention",
+		description:
+			"Set retention days in Git & GitHub Worktree Defaults or override them per repository. 0 keeps archives; cleanup keeps dirty work and preserves commit recovery refs.",
+		shortcut: null,
+	},
+	{
 		feature: "Mobile session state filters",
 		description:
 			"Tap Working, Idle or Awaiting on the mobile Sessions screen to filter by those states. Select multiple counters or clear all to show every session; search and sorting still apply.",

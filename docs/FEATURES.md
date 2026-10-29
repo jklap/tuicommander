@@ -3562,3 +3562,7 @@ the GitHub head SHA. New heads supersede older in-flight results. Permanent head
 deduplication and publication claims survive restart; uncertain writes are not
 retried. This executor never repairs code, runs checks, pushes, creates PRs,
 approves or merges. See [Incoming PR reviews](user-guide/automations.md#incoming-pr-reviews-review-only).
+
+## Archived worktree retention
+
+Opt-in global and per-repository retention in days (0/Off by default). Repository refresh removes only eligible recorded checkouts under `__archived/`, keeps dirty or unsafe archives with named status reasons, and retains commit recovery refs. No new timer or branch deletion. See [Worktrees](user-guide/worktrees.md#archived-worktree-retention).

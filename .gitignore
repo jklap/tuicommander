@@ -167,6 +167,7 @@ PR.md
 # Scratch worktree consolidation / temp working dir (local only)
 .tmp/
 .screenshots/
+/plugins__wt/
 
 # Python bytecode from the terminal-stress harness
 __pycache__/
@@ -180,7 +181,7 @@ ORCHESTRATOR.md
 .vitest/
 
 # Mutation test artifacts
-/reports/mutation/
+/reports/
 /.stryker-tmp/
 !scripts/audit-control-styles.mjs
 

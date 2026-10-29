@@ -91,7 +91,7 @@ async function enqueue(view: ReturnType<typeof mount>, text: string) {
 // Catches: successful queue clears the input but leaves Chat with only a transient toast.
 it("shows queued text immediately before the lifecycle count arrives, then clears on delivery", async () => {
 	const view = mount();
-	fireEvent.click(view.getByRole("button", { name: "Chat" }));
+	fireEvent.click(view.getByRole("tab", { name: "Chat" }));
 	await enqueue(view, "Review the migration");
 	const region = await view.findByRole("region", { name: "Queued prompts" });
 	expect(within(region).getByRole("status").textContent).toBe("Queued · 1");
@@ -108,7 +108,7 @@ it("keeps queued CLI text on switching to Chat and adopts desktop queue count ch
 	const view = mount();
 	await enqueue(view, "Queued in CLI");
 	await view.findByText("Queued in CLI");
-	fireEvent.click(view.getByRole("button", { name: "Chat" }));
+	fireEvent.click(view.getByRole("tab", { name: "Chat" }));
 	expect(view.getByText("Queued in CLI")).toBeTruthy();
 	queue.push({ id: nextId++, kind: "user_command", text: "Queued on desktop" });
 	view.updateCount(2);
@@ -124,7 +124,7 @@ it("cancels stable queue ids and clears remaining entries from the server snapsh
 		{ id: 85, text: "Second task", kind: "user_command" },
 	];
 	view.updateCount(2);
-	fireEvent.click(view.getByRole("button", { name: "Chat" }));
+	fireEvent.click(view.getByRole("tab", { name: "Chat" }));
 	fireEvent.click(await view.findByRole("button", { name: "Cancel queued prompt First task" }));
 	await waitFor(() => expect(view.queryByText("First task")).toBeNull());
 	expect(rpc).toHaveBeenCalledWith("remove_queued_agent_command", {
@@ -148,10 +148,10 @@ it("does not render a departed terminal's late queue snapshot", async () => {
 		});
 	});
 	view.updateCount(1);
-	fireEvent.click(view.getByRole("button", { name: "Chat" }));
+	fireEvent.click(view.getByRole("tab", { name: "Chat" }));
 	await waitFor(() => expect(resolveOld).toBeTypeOf("function"));
 	view.setSession((s) => ({ ...s, session_id: "next-queue" }));
-	fireEvent.click(view.getByRole("button", { name: "Chat" }));
+	fireEvent.click(view.getByRole("tab", { name: "Chat" }));
 	resolveOld([{ id: 23, text: "Wrong terminal task", kind: "user_command" }]);
 	await Promise.resolve();
 	expect(view.queryByText("Wrong terminal task")).toBeNull();
@@ -162,7 +162,7 @@ it("keeps queued text when cancellation fails and explains the failure", async (
 	const view = mount();
 	queue = [{ id: 91, text: "Keep this task", kind: "user_command" }];
 	view.updateCount(1);
-	fireEvent.click(view.getByRole("button", { name: "Chat" }));
+	fireEvent.click(view.getByRole("tab", { name: "Chat" }));
 	const cancel = await view.findByRole("button", { name: "Cancel queued prompt Keep this task" });
 	vi.mocked(rpc).mockImplementation(async (command) => {
 		if (command === "remove_queued_agent_command") throw new Error("offline");

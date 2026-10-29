@@ -53,6 +53,7 @@ it("feeds a journal-derived synthetic topology through real refresh reconciliati
 			clearOrphanCleanup: vi.fn(async () => {}),
 			removeOrphanWorktree: vi.fn(async () => {}),
 			getWorkspaceLifecycle: vi.fn(),
+			sweepArchiveRetention: vi.fn().mockResolvedValue({ deleted: [], kept: [] }),
 			finalizeMergedWorktree: vi.fn(),
 		},
 		dialogs: {},
