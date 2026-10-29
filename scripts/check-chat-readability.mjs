@@ -3,14 +3,14 @@
 // Starts only fixture Vite (no desktop/backend), runs real-browser regressions, traps shutdown.
 import { spawn } from "node:child_process";
 import { accessSync, constants, mkdirSync, mkdtempSync } from "node:fs";
-import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { browserWrapper } from "./browser-wrapper.mjs";
 import { createServer } from "vite";
 import solid from "vite-plugin-solid";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const wrapper = process.env.TUIC_CHAT_BROWSER_WRAPPER ?? join(homedir(), "Gits/personal/brainstorming/tools/browser-stealth/ab-stealth.sh");
+const wrapper = process.env.TUIC_CHAT_BROWSER_WRAPPER ?? browserWrapper();
 if (process.platform !== "darwin") throw new Error("check-chat-readability requires macOS and the approved mac-chrome stealth wrapper; run this local gate at landing");
 accessSync(wrapper, constants.X_OK);
 mkdirSync(join(root, ".tmp"), { recursive: true });

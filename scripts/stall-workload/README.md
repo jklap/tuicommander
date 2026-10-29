@@ -18,7 +18,7 @@ Run through build-slot, in the background through the managed runner:
 ```sh
 STALL_SECONDS=30 STALL_SESSIONS=4 STALL_VISIBLE=1 \
   "$HOME/Gits/personal/orchestrator/tools/build/build-slot.sh" \
-  node scripts/stall-workload/run.mjs "$HOME/Gits/.tmp/stall-workload-example"
+  node scripts/stall-workload/run.mjs "$TMPDIR/stall-workload-example"
 ```
 
 The output directory must not exist. Start with three seconds and one session

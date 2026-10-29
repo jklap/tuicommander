@@ -169,6 +169,28 @@ class AgentTestPlanTests(unittest.TestCase):
             self.assertEqual(plan["connect"],
                              f"curl --unix-socket '{plan['socket']}' http://localhost/health # Agents use this socket; TCP requires Basic auth")
 
+    def test_runtime_files_live_under_the_host_temp_dir_never_home(self):
+        # Bug caught: the socket dir was hard-coded under the home directory, which is
+        # not writable for other users or sandboxes. A test wrapper's long TMPDIR
+        # must not leak in either: the host temp dir it recorded wins.
+        host = self.plan(TUIC_TEST_HOST_TMPDIR="/var/host-tmp", TMPDIR="/long/per-run/test/root/")
+        self.assertEqual(Path(host["pid_file"]).parent.parent, Path("/var/host-tmp/tuic-at"))
+        digest = Path(host["socket"]).name.removeprefix("tuic-mcp-").removesuffix(".sock")
+        self.assertEqual(Path(host["socket"]).parent.name, digest[:8])
+        self.assertEqual(host["environment"]["TMPDIR"], str(Path(host["socket"]).parent) + "/")
+        explicit = self.plan(TUIC_AGENT_TEST_ROOT="/short", TUIC_TEST_HOST_TMPDIR="/var/host-tmp")
+        self.assertTrue(Path(explicit["socket"]).is_relative_to("/short"))
+        self.assertFalse(Path(self.plan(TUIC_TEST_HOST_TMPDIR="/var/host-tmp")["socket"]).is_relative_to(Path.home()))
+        # A 49-byte macOS host temp dir (/var/folders/xx/<28>/T) must fit SUN_LEN.
+        mac = self.plan(TUIC_TEST_HOST_TMPDIR="/var/folders/rd/" + "b" * 30 + "/T/")
+        self.assertLess(len(mac["socket"].encode()), 104)
+        result = subprocess.run(
+            ["make", "--no-print-directory", "agent-test", "AGENT_TEST_DRY_RUN=1"],
+            cwd=ROOT, env={**os.environ, "TUIC_AGENT_TEST_ROOT": "/" + "x" * 80},
+            text=True, capture_output=True)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("TUIC_AGENT_TEST_ROOT", result.stderr)
+
     def test_static_wiring_keeps_guards_before_machine_wide_effects(self):
         # Static audit requested by the story: dropping a runtime guard must fail
         # even though this peer cannot start the desktop app to observe OS effects.

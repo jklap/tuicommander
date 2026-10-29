@@ -84,8 +84,11 @@ make agent-test-stop
 The dry run does not build, create runtime files, read application configuration,
 or start a desktop process. The launch runs in the foreground. It builds the
 frontend, then uses one Cargo build through the mbx shim for
-`tuicommander-agent-test`, `tuic-bridge` and `tuic`. The existing orchestrator
-build-slot wrapper serializes these builds when installed. `mbx doctor` must
+`tuicommander-agent-test`, `tuic-bridge` and `tuic`. A build admission wrapper
+(e.g. the orchestrator's build-slot script) serializes these builds when
+`TUIC_BUILD_SLOT` names an executable one; `scripts/replay-oracle.sh` honours it
+too. When `TUIC_BUILD_FREEZE` names an existing freeze file, the launch refuses to
+build unless that file allows it. `mbx doctor` must
 succeed. Do not set `CARGO_TARGET_DIR`. No Vite server, Tauri watcher, release
 bundle, signing operation or installed executable is involved. Embedded frontend
 assets use `tauri/custom-protocol` even though this is a debug build.
@@ -263,7 +266,7 @@ part of the unattended shell/Rust/JS suites.
 | --- | --- |
 | Daily binary, dev-bin and installed app bundle | No writes. Only the worktree's distinctly named binary and adjacent sidecars are copied. A held supervisor lock prevents replacing the running test executable. |
 | Config, credential vault, databases and file locks | Existing named-instance namespace; debug credentials remain file-backed. The test never claims the global-input lock, even in its own namespace. |
-| HTTP and MCP | Explicit loopback-only `127.0.0.1:19876`; never port 9876 or automatic next-port fallback. Unix MCP socket uses the selected instance hash and the launch's short `TMPDIR` under `~/Gits/.tuic/tuic-at/`. Child CLI/bridge processes inherit the same namespace. Runtime temp stays outside the intentional ego scratch grant `~/Gits/.tmp`, so its negative filesystem probe remains meaningful. Do not grant the runtime temp parent to ego or disable confinement to admit a conversation. Stop older instances with their original launcher before updating: their FIFO/socket remains at the old path. |
+| HTTP and MCP | Explicit loopback-only `127.0.0.1:19876`; never port 9876 or automatic next-port fallback. Unix MCP socket uses the selected instance hash and the launch's short `TMPDIR`, `<host temp>/tuic-at/<first 8 hex digits of the hash>/`: the host temp dir is `TUIC_TEST_HOST_TMPDIR` (recorded by `scripts/with-test-tmp.sh`), else `TMPDIR`; `TUIC_AGENT_TEST_ROOT` replaces `<host temp>/tuic-at` when the socket path would exceed the macOS 104-byte limit. Child CLI/bridge processes inherit the same namespace. |
 | Global window shortcut and Fn/Globe monitor | Input ownership refused and shortcut registration rejected at runtime, including later Settings changes. The verification window is non-focusable; drive its own HTTP/socket API. |
 | Microphone and dictation | Not compiled by default. With explicit authorization, `AGENT_TEST_SPEECH_OUTPUT=1` and an `agent-test-<name>` instance enable runtime speech output only: effective listening is forced off, microphone permission/capture is refused, and global input ownership stays disabled. Speech output is audible; do not use this option without authorization. |
 | Telegram bot | Supervisor never starts, tool availability is false, and setup changes are rejected. A copied or previously saved bot configuration cannot start polling. |
@@ -538,9 +541,10 @@ in a cleanup trap. It does not start Tauri or use a running app. The browser
 harness closes its own named tab and does not close shared Chrome.
 
 Prerequisites: installed frontend dependencies, `agent-browser`, matching Chrome
-for Testing, and the approved `ab-stealth.sh` wrapper under
-`~/Gits/personal/brainstorming/tools/browser-stealth/`. Set
-`TUIC_CHAT_BROWSER_WRAPPER` to override the wrapper path. Evidence defaults to a
+for Testing, and the approved `ab-stealth.sh` wrapper: `TUIC_BROWSER_WRAPPER`
+names it, else the first `ab-stealth.sh` on `PATH` (`scripts/browser-wrapper.mjs`;
+the other live browser harnesses resolve it the same way). Set
+`TUIC_CHAT_BROWSER_WRAPPER` to override the wrapper path for this gate only. Evidence defaults to a
 new `.tmp/chat-readability-*` directory in the checkout; set
 `TUIC_CHAT_EVIDENCE_DIR` to retain it elsewhere. Managed agents run this target
 through the shared build slot.

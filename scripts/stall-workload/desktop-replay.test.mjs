@@ -46,7 +46,7 @@ async function failureReport(callback) {
 			};
 		},
 		fetch: async (url) => {
-			if (url.endsWith("/health")) return reply({ ok: true, socket_path: `/tuic-at/${hash}/tuic-mcp-${hash}.sock` });
+			if (url.endsWith("/health")) return reply({ ok: true, socket_path: `/tuic-at/${hash.slice(0, 8)}/tuic-mcp-${hash}.sock` });
 			if (url.includes("/logs?")) return reply([{ message: "diagnostic log" }]);
 			assert.ok(url.endsWith("/debug/invoke_js"));
 			if (callback) {

@@ -8,8 +8,8 @@ reads a credential store, installs an agent, or fabricates terminal output.
 The agent uses the normal authenticated HOME by default, as authorized for these
 captures. CLI-owned authentication/session state remains in its normal location;
 scenario cwd and tool file writes stay in the throwaway output directory under
-`~/Gits`. Use `--agent-home` for an already authenticated alternate HOME under
-`~/Gits` if desired. The driver never reads/copies token stores or performs login.
+the host temp dir (`$TUIC_TEST_HOST_TMPDIR`, else `$TMPDIR`). Use `--agent-home`
+for an already authenticated alternate HOME under that directory if desired. The driver never reads/copies token stores or performs login.
 The daemon always has a separate HOME, config, debug file vault and temporary
 files inside the output directory. Release daemons are excluded because their
 startup reads the native vault; supply the debug artifact from its build directory.
@@ -19,7 +19,7 @@ python3 -B scripts/agent_capture/run.py inventory
 python3 -B scripts/agent_capture/run.py record \
   --daemon /absolute/path/to/debug/tuic-remote \
   --scenario scripts/agent_capture/codex-short.json \
-  --output "$HOME/Gits/.tmp/agent-capture-1343/codex-001"
+  --output "$TMPDIR/agent-capture-1343/codex-001"
 ```
 
 The output directory must not already exist. Each scenario selects an agent and
@@ -106,7 +106,7 @@ recordings:
 
 ```sh
 python3 -B scripts/agent_capture/run.py promote \
-  "$HOME/Gits/.tmp/pi-capture-001/capture.json" --name simple-turn-20261008
+  "$TMPDIR/pi-capture-001/capture.json" --name simple-turn-20261008
 ```
 
 The resulting `<agent>-<name>.tcap`, provenance `.md`, and `.scenario.json` enter the existing 1342
