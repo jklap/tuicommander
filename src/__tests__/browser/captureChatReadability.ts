@@ -19,6 +19,8 @@ export interface ChatAppearance {
 		marker: string;
 	}[];
 	unmarkedBorder: string;
+	paragraphRuleLeft: number;
+	answerLists: { listBorder: number; ruleLeft: number; items: { border: number; left: number }[] }[];
 }
 
 /** Uses the approved named-tab wrapper: no Chrome dump-dom dependency or shared-app access. */
@@ -39,6 +41,15 @@ export function captureChatReadability(baseUrl: string, directory: string, phase
 			timeout: 45000,
 			stdio: ["ignore", "pipe", "pipe"],
 		});
+	const closeBrowser = () => {
+		try {
+			run("--", "tab", "close");
+		} catch (error) {
+			// agent-browser refuses its last tab even though this named CDP page is owned.
+			if (!String(error).includes("Cannot close the last tab")) throw error;
+			run("--", "eval", "window.close()");
+		}
+	};
 	const appearances: ChatAppearance[] = [];
 	try {
 		for (const mobile of [false, true]) {
@@ -49,12 +60,12 @@ export function captureChatReadability(baseUrl: string, directory: string, phase
 				run("--", "wait", "--fn", "typeof window.chatReadability === 'function'");
 				const appearance = JSON.parse(run("--", "eval", "window.chatReadability()")) as ChatAppearance;
 				writeFileSync(join(directory, `${name}.json`), JSON.stringify(appearance, null, 2));
-				run("--", "screenshot", join(directory, `${name}.png`));
+				run("--", "screenshot", join(directory, `${name}.png`), "--full");
 				appearances.push(appearance);
 			}
 		}
 	} finally {
-		run("--", "tab", "close");
+		closeBrowser();
 	}
 	return appearances;
 }

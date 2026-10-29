@@ -486,6 +486,18 @@ function highlightAnswers(container: HTMLDivElement | undefined): void {
 		}
 		stripAnswerMarker(item);
 	}
+	// When every top-level item is an answer, the list owns the rule and its
+	// marker gutter, just like a list continuing an answer paragraph.
+	for (const list of elements.filter((element) => /^(UL|OL)$/.test(element.tagName))) {
+		const items = Array.from(list.children);
+		if (!items.length || !items.every((item) => item.hasAttribute("data-tuic-answer"))) continue;
+		list.setAttribute("data-tuic-answer-region-start", "");
+		list.setAttribute("data-tuic-answer", "end");
+		for (const item of items) {
+			item.removeAttribute("data-tuic-answer-region-start");
+			item.removeAttribute("data-tuic-answer");
+		}
+	}
 }
 
 /** Strip only the opening marker, including when Markdown splits it across text nodes. */

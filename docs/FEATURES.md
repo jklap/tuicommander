@@ -1213,6 +1213,7 @@ What went with the embedded engine (#784-0aec) and did not come back here:
 - Repo watcher: monitors `.git/index`, `.git/refs/`, `.git/HEAD`, `.git/MERGE_HEAD` for changes
 
 ### 7.2 Worktrees
+- Shared story, plan, and idea stores link only when the main checkout already ignores them. Directory-only ignores also cover the new symlinks; unignored stores are skipped with a warning instead of making the worktree dirty or hiding main-checkout files.
 - Auto-creation on branch select (non-main branches)
 - Configurable storage strategies: sibling (`__wt`), app directory, inside-repo (`.worktrees/`), or Claude Code default (`.claude/worktrees/`)
 - Sci-fi themed auto-generated names

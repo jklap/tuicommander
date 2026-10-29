@@ -364,6 +364,8 @@ After each copy, warming adds owner write permission to cloned files and
 directories. It does not follow symlinks or change the source checkout, so
 sealed ignored evidence remains available and the new worktree stays removable.
 
+Shared-store linking checks the main checkout with `git check-ignore` before adding a root-anchored entry to the common `info/exclude`. This file is shared by all worktrees: adding an entry is safe only for a store the main checkout already ignores. Stores not ignored there are skipped with a warning. A worktree-local negation also prevents linking. Existing paths are never replaced. No `extensions.worktreeConfig` or `core.excludesFile` configuration is changed.
+
 ## Tauri Commands
 
 ### Repository Info

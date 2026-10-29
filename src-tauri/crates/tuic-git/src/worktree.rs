@@ -2417,6 +2417,10 @@ fn link_shared_stores(src: &Path, dest: &Path) -> Vec<String> {
             ));
             continue;
         }
+        if let Err(error) = ignore_shared_store_link(src, dest, store) {
+            warnings.push(format!("could not link shared store '{store}': {error}"));
+            continue;
+        }
         #[cfg(unix)]
         let result = std::os::unix::fs::symlink(&source, &target);
         #[cfg(windows)]
@@ -2431,6 +2435,42 @@ fn link_shared_stores(src: &Path, dest: &Path) -> Vec<String> {
         }
     }
     warnings
+}
+
+/// Common excludes affect the main checkout too. Only extend an existing
+/// directory ignore to cover its symlink; never hide a previously visible store.
+fn ignore_shared_store_link(src: &Path, dest: &Path, store: &str) -> Result<(), String> {
+    let main = crate::git::canonical_repo_root(src);
+    git_cmd(&main)
+        .args(["check-ignore", "-q", "--", store])
+        .run()
+        .map_err(|_| "store is not ignored in the main checkout".to_string())?;
+    if git_cmd(dest)
+        .args(["check-ignore", "-q", "--", store])
+        .run()
+        .is_ok()
+    {
+        return Ok(());
+    }
+    let exclude = src
+        .join(rev_at(src, "--git-common-dir")?)
+        .join("info/exclude");
+    // Append one complete record so concurrent worktree creation cannot
+    // overwrite another creator's excludes. A duplicate pattern is harmless.
+    use std::io::Write;
+    std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&exclude)
+        .and_then(|mut file| file.write_all(format!("\n/{store}\n").as_bytes()))
+        .map_err(|error| format!("could not exclude the shared link: {error}"))?;
+    // A branch-local negation has precedence over info/exclude. Do not create
+    // an untracked link if that checkout deliberately exposes the store.
+    git_cmd(dest)
+        .args(["check-ignore", "-q", "--", store])
+        .run()
+        .map(|_| ())
+        .map_err(|error| format!("shared link is not ignored in the worktree: {error}"))
 }
 
 fn initialize_submodules(src: &Path, dest: &Path) -> Vec<String> {
@@ -10230,6 +10270,12 @@ branch refs/heads/feat
     #[test]
     fn create_workspace_links_existing_shared_stores_to_the_parent() {
         let (_temp, repo, workspaces) = workspace_fixture();
+        fs::write(repo.join(".gitignore"), "stories\n").unwrap();
+        git_cmd(&repo).args(["add", ".gitignore"]).run().unwrap();
+        git_cmd(&repo)
+            .args(["commit", "-m", "ignore shared store"])
+            .run()
+            .unwrap();
         fs::create_dir(repo.join("stories")).unwrap();
         fs::write(repo.join("stories/active.md"), "shared").unwrap();
         let config = WorktreeConfig {
@@ -10253,6 +10299,132 @@ branch refs/heads/feat
         assert_eq!(
             fs::canonicalize(created.path.join("stories/active.md")).unwrap(),
             fs::canonicalize(repo.join("stories/active.md")).unwrap()
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn shared_store_directory_ignores_do_not_leave_symlink_dirt() {
+        let (_temp, repo, workspaces) = workspace_fixture();
+        fs::write(repo.join(".gitignore"), "stories/\nplans/\nideas/\n").unwrap();
+        git_cmd(&repo).args(["add", ".gitignore"]).run().unwrap();
+        git_cmd(&repo)
+            .args(["commit", "-m", "ignore stores"])
+            .run()
+            .unwrap();
+        for store in SHARED_WORKTREE_STORES {
+            fs::create_dir(repo.join(store)).unwrap();
+            fs::write(repo.join(store).join("active.md"), "shared").unwrap();
+        }
+        let config = WorktreeConfig {
+            task_name: "shared-ignore".into(),
+            base_repo: repo.to_string_lossy().into_owned(),
+            branch: Some("shared-ignore".into()),
+            create_branch: true,
+        };
+        let created = create_workspace_unwarmed(&workspaces, &config, None).unwrap();
+        assert!(created.warnings.is_empty(), "{:?}", created.warnings);
+        for store in SHARED_WORKTREE_STORES {
+            assert!(
+                fs::symlink_metadata(created.path.join(store))
+                    .unwrap()
+                    .file_type()
+                    .is_symlink()
+            );
+        }
+        assert_eq!(
+            git_cmd(&created.path)
+                .args(["status", "--porcelain"])
+                .run()
+                .unwrap()
+                .stdout,
+            ""
+        );
+        // Repeated linking must not duplicate excludes or replace an existing link.
+        let exclude = repo.join(".git/info/exclude");
+        let before = fs::read(&exclude).unwrap();
+        assert_eq!(link_shared_stores(&repo, &created.path).len(), 3);
+        assert_eq!(fs::read(exclude).unwrap(), before);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn shared_store_unignored_main_files_stay_visible_without_dirty_links() {
+        let (_temp, repo, workspaces) = workspace_fixture();
+        fs::create_dir(repo.join("stories")).unwrap();
+        fs::write(repo.join("stories/active.md"), "real untracked story").unwrap();
+        let config = WorktreeConfig {
+            task_name: "unignored-store".into(),
+            base_repo: repo.to_string_lossy().into_owned(),
+            branch: Some("unignored-store".into()),
+            create_branch: true,
+        };
+        let created = create_workspace_unwarmed(&workspaces, &config, None).unwrap();
+        assert_eq!(
+            git_cmd(&repo)
+                .args(["status", "--porcelain", "--untracked-files=all"])
+                .run()
+                .unwrap()
+                .stdout,
+            "?? stories/active.md\n"
+        );
+        assert_eq!(
+            git_cmd(&created.path)
+                .args(["status", "--porcelain"])
+                .run()
+                .unwrap()
+                .stdout,
+            ""
+        );
+        assert!(!created.path.join("stories").exists());
+        assert_eq!(created.warnings.len(), 1);
+        assert!(created.warnings[0].contains("not ignored"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn shared_store_worktree_negation_does_not_create_untracked_link() {
+        let (_temp, repo, workspaces) = workspace_fixture();
+        let config = WorktreeConfig {
+            task_name: "negated-store".into(),
+            base_repo: repo.to_string_lossy().into_owned(),
+            branch: Some("negated-store".into()),
+            create_branch: true,
+        };
+        let created = create_workspace_unwarmed(&workspaces, &config, None).unwrap();
+        fs::write(repo.join(".gitignore"), "stories/\n").unwrap();
+        fs::create_dir(repo.join("stories")).unwrap();
+        fs::write(created.path.join(".gitignore"), "!stories\n").unwrap();
+        let warnings = link_shared_stores(&repo, &created.path);
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].contains("not ignored in the worktree"));
+        assert!(!created.path.join("stories").exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn shared_store_existing_checkout_files_are_not_replaced() {
+        let (_temp, repo, workspaces) = workspace_fixture();
+        let config = WorktreeConfig {
+            task_name: "existing-store".into(),
+            base_repo: repo.to_string_lossy().into_owned(),
+            branch: Some("existing-store".into()),
+            create_branch: true,
+        };
+        let created = create_workspace_unwarmed(&workspaces, &config, None).unwrap();
+        fs::create_dir(repo.join("stories")).unwrap();
+        fs::create_dir(created.path.join("stories")).unwrap();
+        fs::write(created.path.join("stories/local.md"), "keep").unwrap();
+        assert!(link_shared_stores(&repo, &created.path)[0].contains("already exists"));
+        assert_eq!(
+            fs::read_to_string(created.path.join("stories/local.md")).unwrap(),
+            "keep"
+        );
+        assert!(
+            !fs::symlink_metadata(created.path.join("stories"))
+                .unwrap()
+                .file_type()
+                .is_symlink()
         );
     }
 

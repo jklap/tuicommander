@@ -303,6 +303,8 @@ Select multiple worktrees using the checkboxes (shown when more than one selecta
 
 Use the **Select All** checkbox in the toolbar to toggle all non-main worktrees.
 
+New worktrees share existing `stories`, `plans`, and `ideas` directories through symlinks only when the main checkout already ignores each store. TUICommander adds a root-anchored, symlink-compatible Git exclude when needed, so directory-only ignore patterns do not produce a dirty badge. An unignored store is not linked and produces a creation warning; its files remain visible to Git in the main checkout. Existing worktrees are not changed.
+
 ## MCP Worktree Creation (AI Agents)
 
 AI agents connected via MCP can create worktrees using `repo action=worktree_create`.

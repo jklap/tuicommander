@@ -691,57 +691,37 @@ export const ChangesTab: Component<ChangesTabProps> = (props) => {
 					</Show>
 					<span class={s.fileBasename}>{base}</span>
 				</span>
-				<Show when={file.additions > 0 || file.deletions > 0}>
-					<span class={s.diffStats}>
-						<Show when={file.additions > 0}>
-							<span class={s.diffAdd}>+{file.additions}</span>
-						</Show>
-						<Show when={file.deletions > 0}>
-							<span class={s.diffDel}>-{file.deletions}</span>
-						</Show>
-					</span>
-				</Show>
-				<span class={s.actions}>
-					<Show when={section === "staged"}>
-						<Button
-							size="compact"
-							variant="ghost"
-							title="Unstage"
-							onClick={(e) => {
-								e.stopPropagation();
-								unstageFile(file.path);
-							}}
-						>
-							<UnstageIcon />
-						</Button>
-						<Button
-							size="compact"
-							variant="ghost"
-							title="Diff"
-							onClick={(e) => {
-								e.stopPropagation();
-								openDiff(file, section);
-							}}
-						>
-							<DiffIcon />
-						</Button>
+				<span class={s.rowSlot}>
+					<Show when={file.additions > 0 || file.deletions > 0}>
+						<span class={s.diffStats}>
+							<Show when={file.additions > 0}>
+								<span class={s.diffAdd}>+{file.additions}</span>
+							</Show>
+							<Show when={file.deletions > 0}>
+								<span class={s.diffDel}>-{file.deletions}</span>
+							</Show>
+						</span>
 					</Show>
-					<Show when={section === "unstaged"}>
-						<Button
-							size="compact"
-							variant="ghost"
-							title="Stage"
-							onClick={(e) => {
-								e.stopPropagation();
-								stageFile(file.path);
-							}}
-						>
-							<StageIcon />
-						</Button>
-						<Show when={file.status !== "?"}>
+					<span class={s.actions}>
+						<Show when={section === "staged"}>
 							<Button
 								size="compact"
 								variant="ghost"
+								shape="icon"
+								aria-label="Unstage"
+								title="Unstage"
+								onClick={(e) => {
+									e.stopPropagation();
+									unstageFile(file.path);
+								}}
+							>
+								<UnstageIcon />
+							</Button>
+							<Button
+								size="compact"
+								variant="ghost"
+								shape="icon"
+								aria-label="Diff"
 								title="Diff"
 								onClick={(e) => {
 									e.stopPropagation();
@@ -751,18 +731,51 @@ export const ChangesTab: Component<ChangesTabProps> = (props) => {
 								<DiffIcon />
 							</Button>
 						</Show>
-						<Button
-							size="compact"
-							variant="danger"
-							title="Discard changes"
-							onClick={(e) => {
-								e.stopPropagation();
-								setConfirmDiscard(file);
-							}}
-						>
-							<DiscardIcon />
-						</Button>
-					</Show>
+						<Show when={section === "unstaged"}>
+							<Button
+								size="compact"
+								variant="ghost"
+								shape="icon"
+								aria-label="Stage"
+								title="Stage"
+								onClick={(e) => {
+									e.stopPropagation();
+									stageFile(file.path);
+								}}
+							>
+								<StageIcon />
+							</Button>
+							<Show when={file.status !== "?"}>
+								<Button
+									size="compact"
+									variant="ghost"
+									shape="icon"
+									aria-label="Diff"
+									title="Diff"
+									onClick={(e) => {
+										e.stopPropagation();
+										openDiff(file, section);
+									}}
+								>
+									<DiffIcon />
+								</Button>
+							</Show>
+							<Button
+								size="compact"
+								variant="ghost"
+								class={s.discardAction}
+								shape="icon"
+								aria-label="Discard changes"
+								title="Discard changes"
+								onClick={(e) => {
+									e.stopPropagation();
+									setConfirmDiscard(file);
+								}}
+							>
+								<DiscardIcon />
+							</Button>
+						</Show>
+					</span>
 				</span>
 			</div>
 		);
@@ -798,6 +811,7 @@ export const ChangesTab: Component<ChangesTabProps> = (props) => {
 					<div class={s.commitRow}>
 						<Button
 							variant="primary"
+							size="compact"
 							disabled={committing() || (!commitMsg().trim() && !isAmend()) || (staged().length === 0 && !isAmend())}
 							onClick={doCommit}
 							title="Commit staged changes"
@@ -907,7 +921,7 @@ export const ChangesTab: Component<ChangesTabProps> = (props) => {
 					onKeyDown={onClickKeyDown(() => setUnstagedExpanded((v) => !v))}
 				>
 					<span class={cx(s.chevron, !unstagedExpanded() && s.chevronCollapsed)}>&#x25BC;</span>
-					<span class={s.sectionLabel}>Changes (unstaged)</span>
+					<span class={s.sectionLabel}>Changes</span>
 					<span class={s.sectionCount}>
 						{filterQuery() ? `${filteredUnstaged().length}/${unstaged().length}` : unstaged().length}
 					</span>
