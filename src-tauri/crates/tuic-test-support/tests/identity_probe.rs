@@ -133,24 +133,65 @@ fn install_makes_an_executable_at_a_nested_path_and_leaves_no_staging_file() {
 }
 
 /// Re-installing over a probe that is still running replaces the file, not
-/// its pages: the running process survives and the new copy runs.
+/// its pages: the running process survives and the path names a new inode
+/// holding the probe.
+///
+/// Exactly one fresh executable is exec'd here. Each first exec of a new
+/// inode pays exec-time scanning, which a backlog under a full parallel run
+/// can stretch past nextest's 120 s kill (src-tauri/AGENTS.md, "A freshly
+/// written executable"). That the new copy runs is already
+/// `an_installed_copy_runs_under_any_name_without_being_killed`'s subject.
+#[cfg(unix)]
 #[test]
 fn reinstalling_over_a_running_probe_leaves_it_running() {
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
     let dir = scratch();
     let exe = tuic_test_support::install_identity_probe(dir.path(), "claude");
-    let mut running = spawn_blocked(&exe);
+    let first_inode = std::fs::metadata(&exe).unwrap().ino();
+    let mut running = spawn_with_stall_note(&exe);
     let again = tuic_test_support::install_identity_probe(dir.path(), "claude");
     assert_eq!(again, exe);
-    let out = Command::new(&again)
-        .args(["--print", "ok"])
-        .output()
-        .unwrap();
-    assert_eq!(out.stdout, b"ok\n");
+    let replaced = std::fs::metadata(&again).unwrap();
+    assert_ne!(
+        replaced.ino(),
+        first_inode,
+        "reinstall rewrote the running file in place instead of renaming a new one over it"
+    );
+    assert_eq!(replaced.permissions().mode() & 0o777, 0o755);
+    assert_eq!(
+        std::fs::read(&again).unwrap(),
+        std::fs::read(tuic_test_support::identity_probe_bin()).unwrap()
+    );
     assert!(
         running.try_wait().unwrap().is_none(),
         "the running probe died when its file was replaced"
     );
     reap(running);
+}
+
+/// [`spawn_blocked`], printing a diagnosis if the exec has not returned after
+/// 20 s. It never fails the test: nextest's bound still decides, but its
+/// TIMEOUT report then names exec-time scanning instead of a probe hang.
+#[cfg(unix)]
+fn spawn_with_stall_note(exe: &Path) -> Child {
+    let (done, waiting) = std::sync::mpsc::channel::<()>();
+    let path = exe.display().to_string();
+    let note = std::thread::spawn(move || {
+        if waiting
+            .recv_timeout(std::time::Duration::from_secs(20))
+            .is_err_and(|e| e == std::sync::mpsc::RecvTimeoutError::Timeout)
+        {
+            eprintln!(
+                "exec of the freshly installed probe {path} has not returned after 20 s: \
+                 exec-time scanning of a new inode (src-tauri/AGENTS.md, \"A freshly \
+                 written executable\"), not a probe bug"
+            );
+        }
+    });
+    let child = spawn_blocked(exe);
+    drop(done);
+    note.join().unwrap();
+    child
 }
 
 #[cfg(any(target_os = "macos", target_os = "linux"))]
