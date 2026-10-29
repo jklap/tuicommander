@@ -25,6 +25,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Keep the CLI | Chat switch on the Context row in both modes, and reserve equal content clearance with or without Context, including 44px touch controls (#2488-369b).
+
 - Centre the CLI | Chat switch on the terminal Context header without crossing its divider, and keep its position unchanged between modes (#2485-31ce).
 - Restore terminal keyboard focus when returning from Chat to CLI, including native-answer and unavailable-Chat paths, without taking focus from another editor or inactive pane (#2484-9adb).
 
