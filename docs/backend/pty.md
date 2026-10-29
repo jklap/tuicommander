@@ -388,9 +388,12 @@ than flag:
   to ~2 frames/s without making the ticker's stuck-frontend warning fire.
 
 **Coalesced scroll (`pending_scroll`).** The wheel and the scrollbar drag do not
-take the vt lock: `terminal_scroll_to_offset` — the Tauri command and the
-`POST /sessions/{id}/terminal/scroll-to-offset` route alike — stores the absolute
-display offset in a per-session `AtomicI64` and marks the grid dirty. The ticker
+take the vt lock: the frontend calls `terminal_scroll_to_anchor` (an all-time row,
+so output arriving meanwhile cannot move the target; HTTP
+`POST /sessions/{id}/terminal/scroll-to-anchor`), and `terminal_scroll_to_offset`
+(`POST /sessions/{id}/terminal/scroll-to-offset`) remains for display-offset
+callers. Both store the target in the per-session pending-scroll slot and mark the
+grid dirty. The ticker
 consumes it (`take_pending_scroll`) under the lock it already holds, so a burst of
 wheel events costs one grid move, latest wins, and scrolling never contends with
 the PTY output processor.
@@ -1135,7 +1138,7 @@ The fix has three parts, all additive and fail-safe:
 1. `tuic-hook` also emits `bgtasksummary`: the same array as distinct `type/status` pairs with
    counts (`teammate/running*2,shell/completed`) — bounded by distinct pairs, so it cannot lose
    a late `running` to the 512-byte payload cap the way the joined-status `bgtasks` can.
-2. `pty.rs` stores it as `SilenceState::declared_task_summary` (`DeclaredTaskSummary {
+2. `pty/lifecycle.rs` stores it as `SilenceState::declared_task_summary` (`DeclaredTaskSummary {
    non_teammate_running, teammate_running }`), written right after the `bgtasks` declaration
    in the same hook fire and under the same turn epoch. It is authoritative for that fire —
    it sets or clears the declaration itself, repairing a `bgtasks` whose joined statuses were

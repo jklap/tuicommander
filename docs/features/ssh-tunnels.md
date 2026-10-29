@@ -191,7 +191,7 @@ One form — Name + a Kind dropdown (SSH Tunnel / Remote Server — SSH / Remote
 - A Test Connection button (one-shot SSH connectivity check, no forwards, before Save)
 - Validation errors shown inline
 
-`SshConnectionFields` and `PortForwardsEditor` are also used by `TunnelEditorModal.tsx`, which still exists and is still fully tested, but nothing in the live app opens it anymore — Settings owns tunnel editing end to end now.
+The old standalone `TunnelEditorModal.tsx` is gone (nothing in the live app opened it once Settings owned tunnel editing); its pure forward-shaping tests now live in `PortForwardsEditor.shaping.test.ts`.
 
 ### TunnelStatusBadge / ConnectionStatusBadge
 
