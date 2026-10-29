@@ -85,7 +85,7 @@ mod critic_tests {
         let bytes = crate::test_support::insert_recording_session(&state, sid);
         state.session_maps.sessions.get(sid).unwrap().lock().cwd =
             Some(repo.to_string_lossy().into_owned());
-        let png = include_bytes!("../../../spike/design-mode-v2-s0/evidence/cft-panel-0.png");
+        let png = include_bytes!("fixtures/cft-panel-0.png");
         let image = format!(
             "data:image/png;base64,{}",
             base64::engine::general_purpose::STANDARD.encode(png)

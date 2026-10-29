@@ -2420,6 +2420,7 @@ pub fn run(mut context: tauri::Context<tauri::Wry>) {
             worktree::generate_clone_branch_name_cmd,
             worktree::merge_and_archive_worktree,
             worktree::finalize_merged_worktree,
+            worktree::sweep_archive_retention,
             worktree::list_local_branches,
             worktree::list_base_ref_options,
             worktree::switch_branch,

@@ -85,7 +85,7 @@ export const rpc=async(cmd)=>({
 })[cmd];
 export const FONT_FAMILIES = {"JetBrains Mono": "monospace"};
 export const githubStore = {setPrHideDrafts:()=>{},setIssueFilter:()=>{}};
-const [defaults, setDefaults] = createStore({baseBranch:"automatic",copyIgnoredFiles:false,copyUntrackedFiles:false,setupScript:"npm install",runScript:"npm run dev",archiveScript:"",worktreeStorage:"sibling",promptOnCreate:true,deleteBranchOnRemove:true,autoArchiveMerged:false,orphanCleanup:"ask",orphanCleanupCountdownSeconds:10,prMergeStrategy:"squash",afterMerge:"archive",autoFetchIntervalMinutes:0,autoDeleteOnPrClose:"off"});
+const [defaults, setDefaults] = createStore({baseBranch:"automatic",copyIgnoredFiles:false,copyUntrackedFiles:false,setupScript:"npm install",runScript:"npm run dev",archiveScript:"",worktreeStorage:"sibling",promptOnCreate:true,deleteBranchOnRemove:true,autoArchiveMerged:false,archiveRetentionDays:0,orphanCleanup:"ask",orphanCleanupCountdownSeconds:10,prMergeStrategy:"squash",afterMerge:"archive",autoFetchIntervalMinutes:0,autoDeleteOnPrClose:"off"});
 export const repoDefaultsStore = new Proxy({state: defaults}, {get(target,key){ if(key in target)return target[key]; return(value)=>{const field=key.slice(3);setDefaults(field[0].toLowerCase()+field.slice(1),value);}; }});
 export const owningConnectionFor=()=>undefined;
 export const listen=async()=>()=>{};

@@ -637,6 +637,28 @@ pub(super) async fn workspace_lifecycle_http(
     }
 }
 
+pub(super) async fn sweep_archive_retention_http(
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<serde_json::Value>,
+) -> Response {
+    let Some(repo_path) = body.get("repoPath").and_then(serde_json::Value::as_str) else {
+        return (StatusCode::BAD_REQUEST, "repoPath is required").into_response();
+    };
+    if let Err(error) = validate_repo_path(repo_path) {
+        return error.into_response();
+    }
+    let repo_path = repo_path.to_owned();
+    // The IPC wrapper is desktop-gated; both transports offload this shared core.
+    match tokio::task::spawn_blocking(move || {
+        crate::worktree::sweep_archive_retention_impl(&state, &repo_path)
+    })
+    .await
+    {
+        Ok(result) => json_result(result),
+        Err(error) => err_500(&format!("task panic: {error}")),
+    }
+}
+
 pub(super) async fn finalize_merged_worktree_http(
     State(state): State<Arc<AppState>>,
     Json(body): Json<FinalizeMergeRequest>,

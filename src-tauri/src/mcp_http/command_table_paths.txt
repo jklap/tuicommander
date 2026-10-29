@@ -394,6 +394,7 @@
 /workflows/run/action
 /workitem-links
 /worktrees
+/worktrees/archive-retention
 /worktrees/dir
 /worktrees/finalize
 /worktrees/generate-name

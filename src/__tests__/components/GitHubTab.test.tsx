@@ -123,6 +123,7 @@ vi.mock("../../stores/settings", () => ({ settingsStore: { state: {} } }));
 vi.mock("../../stores/repoDefaults", () => ({ repoDefaultsStore: { state: {} } }));
 vi.mock("../../utils/openUrl", () => ({ handleOpenUrl: vi.fn() }));
 vi.mock("../../components/SettingsPanel/SettingFields", () => ({
+	SettingInput: () => null,
 	SettingSelect: () => null,
 	SettingToggle: () => null,
 }));

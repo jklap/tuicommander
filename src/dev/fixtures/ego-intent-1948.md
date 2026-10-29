@@ -11,7 +11,7 @@ the remaining 24-row viewport with default blanks. No captured cell is edited.
 Ego hard-wraps this paragraph with cursor moves: the second row is neither
 soft-wrapped nor indented. It is retained as observed, not invented as a wrap.
 
-The mounted regression and `/ego-intent-harness.html` use the same frame.
-The harness uses fixture-only IPC and never connects to a live TUIC instance.
+The mounted regression uses this frame with fixture-only IPC and never connects
+to a live TUIC instance.
 The recorded intent is already classified at column zero before the fix;
 the defect is that the painter discards intent blocks, not a missing prefix.

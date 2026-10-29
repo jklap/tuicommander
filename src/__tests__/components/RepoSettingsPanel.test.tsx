@@ -107,6 +107,7 @@ describe("SettingsPanel — repo context", () => {
 			promptOnCreate: null,
 			deleteBranchOnRemove: null,
 			autoArchiveMerged: null,
+			archiveRetentionDays: null,
 			orphanCleanup: null,
 			prMergeStrategy: null,
 			afterMerge: null,

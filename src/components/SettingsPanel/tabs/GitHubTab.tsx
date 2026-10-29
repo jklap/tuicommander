@@ -25,7 +25,7 @@ import { Select } from "../../ui/Select";
 import { Textarea } from "../../ui/Textarea";
 import { ContextualHelp } from "../ContextualHelp";
 import { ExpertSetting } from "../ExpertSetting";
-import { SettingSelect, SettingToggle } from "../SettingFields";
+import { SettingInput, SettingSelect, SettingToggle } from "../SettingFields";
 import s from "../Settings.module.css";
 import { SectionCard, SettingPageHeader } from "../SettingsPrimitives";
 import g from "./GitHubTab.module.css";
@@ -985,6 +985,23 @@ export const GitHubTab: Component = () => {
 							hint="Move worktree to archive directory when its PR is merged"
 						/>
 					</ExpertSetting>
+
+					<SettingInput
+						settingId="repo_defaults.archive_retention_days"
+						row
+						label="Archived worktree retention (days)"
+						hint="0 is Off. Delete eligible archives on repository refresh; keep dirty archives."
+						type="number"
+						min={0}
+						max={4294967295}
+						step={1}
+						value={String(repoDefaultsStore.state.archiveRetentionDays)}
+						onInput={(value) => {
+							const days = Number(value);
+							if (!value || !Number.isInteger(days) || days < 0 || days > 4294967295) return false;
+							repoDefaultsStore.setArchiveRetentionDays(days);
+						}}
+					/>
 
 					<ExpertSetting configKey="repo_defaults.orphan_cleanup" value={repoDefaultsStore.state.orphanCleanup}>
 						<SettingSelect

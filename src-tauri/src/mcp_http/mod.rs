@@ -1358,6 +1358,10 @@ fn shared_routes() -> Router<Arc<AppState>> {
             post(worktree_routes::generate_worktree_name_http),
         )
         .route(
+            "/worktrees/archive-retention",
+            post(worktree_routes::sweep_archive_retention_http),
+        )
+        .route(
             "/worktrees/finalize",
             post(worktree_routes::finalize_merged_worktree_http),
         )

@@ -539,6 +539,8 @@ export function useRepository() {
 		generateCloneBranchName,
 		listBaseRefOptions,
 		mergeAndArchiveWorktree,
+		sweepArchiveRetention: (repoPath: string) =>
+			invoke<{ deleted: string[]; kept: string[] }>("sweep_archive_retention", { repoPath }),
 		finalizeMergedWorktree,
 		getMergedBranches,
 		getRepoSummary,

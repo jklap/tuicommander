@@ -1947,3 +1947,7 @@ is needed. The existing run SQLite store holds per-repository/PR latest observed
 heads, permanent head deduplication keys, publication claims and outcomes. A
 pending PR-review publication claim recovers to unknown, never to a retriable
 write. See [Incoming PR reviews](../user-guide/automations.md#incoming-pr-reviews-review-only).
+
+## Archived worktree retention
+
+`archive_retention_days` is a `u32` in global repo defaults (default 0, Off), nullable in repository overrides and optional in `.tuic.json`. Explicit 0 overrides an enabled default. The backend resolves the same three-level precedence as the rendered settings. A positive value permits eligible archived checkout deletion during the existing repository refresh cleanup; it does not install a timer. See [Worktrees](../user-guide/worktrees.md#archived-worktree-retention) for age and recovery rules.

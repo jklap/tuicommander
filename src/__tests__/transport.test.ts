@@ -4376,3 +4376,12 @@ it("maps story draft generation and owned cancellation with IPC-equivalent field
 		body: { project: "/repo", request: "Search work", requestId: "fill-1" },
 	});
 });
+
+// Catches: browser retention posting a different payload than IPC or losing repo ownership.
+it("maps archive retention to the owning repository with no caller threshold", () => {
+	expect(mapCommandToHttp("sweep_archive_retention", { repoPath: "/repo" })).toEqual({
+		method: "POST",
+		path: "/worktrees/archive-retention",
+		body: { repoPath: "/repo" },
+	});
+});

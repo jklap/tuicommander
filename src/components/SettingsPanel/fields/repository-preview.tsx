@@ -49,6 +49,7 @@ function Preview() {
 		promptOnCreate: null,
 		deleteBranchOnRemove: null,
 		autoArchiveMerged: null,
+		archiveRetentionDays: null,
 		orphanCleanup: null,
 		prMergeStrategy: null,
 		afterMerge: null,

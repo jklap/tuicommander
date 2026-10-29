@@ -1524,3 +1524,7 @@ one pinned COMMENT review. No generic agent, worktree, push, PR creation, approv
 or merge is available through this path. Unknown publication is non-retriable.
 The existing run history API carries output, publication intent and review URL.
 Deterministic checks and check-result publication are not part of this executor.
+
+## Archived worktree retention — Implemented (#2469-c93f)
+
+`archive_retention_days` defaults to 0 (Off), with nullable repository overrides and repo-local configuration. Existing repository-refresh cleanup invokes a shared host-side sweep. Only registered, completed immediate `__archived` children with matching recorded path and sufficient Unix-second archive age are eligible. Legacy archives without timestamps are kept. Non-force Git removal preserves archive refs, refuses dirty files without archive-time recovery, and protects locked or live checkouts. The status line names deleted and kept archives.
