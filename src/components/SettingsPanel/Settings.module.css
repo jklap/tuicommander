@@ -977,7 +977,8 @@ button[data-control-layout="row"].searchResult:hover {
 .settingRowText label { font-size: 13px; font-weight: 600; color: var(--fg-primary); }
 .settingRowText .hint { color: var(--fg-secondary); margin-bottom: 0; }
 .settingRowControl { flex: 0 1 260px; min-width: 0; max-width: 48%; display: flex; flex-direction: column; align-items: flex-end; gap: 8px; }
-.settingRowControl > div:not([class]) { width: 100%; display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: 8px; }
+/* Only aligned editors let named child layouts own their geometry. Other rows keep wrapping. */
+.settingRowControl > div:not(.settingRowValue):where(:not(.alignedRows [class])) { width: 100%; display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: 8px; }
 .settingRowControl > div > [data-form-control]:not(button):not([data-form-control="switch"]):not([data-form-control="color"]):not([data-form-control="swatch"]) { width: 100%; }
 .settingRowControl > div > .hint { margin: 0; text-align: right; }
 .settingRowControl > [data-form-control]:not(button):not([data-form-control="switch"]):not([data-form-control="color"]):not([data-form-control="swatch"]) { width: 100%; }

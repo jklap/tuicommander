@@ -2,6 +2,7 @@
 import { render } from "solid-js/web";
 import commander from "../../../src-tauri/src/themes/commander.json";
 import paper from "../../../src-tauri/src/themes/vscode-light.json";
+import { DictationSettings } from "../../components/SettingsPanel/DictationSettings";
 import { SmartPromptsTab } from "../../components/SettingsPanel/tabs/SmartPromptsTab";
 import { promptLibraryStore, type SavedPrompt } from "../../stores/promptLibrary";
 import "../../global.css";
@@ -47,12 +48,13 @@ const prompt = promptLibraryStore.createPrompt({
 render(
 	() => (
 		<main style={{ width: "520px", margin: "24px auto" }}>
-			<SmartPromptsTab />
+			{params.has("voice") ? <DictationSettings /> : <SmartPromptsTab />}
 		</main>
 	),
 	document.getElementById("app")!,
 );
-requestAnimationFrame(() => {
-	document.querySelector<HTMLButtonElement>(`button[aria-label="Edit ${prompt.name}"]`)?.click();
-	requestAnimationFrame(() => document.querySelectorAll("section")[2]?.scrollIntoView());
-});
+if (!params.has("voice"))
+	requestAnimationFrame(() => {
+		document.querySelector<HTMLButtonElement>(`button[aria-label="Edit ${prompt.name}"]`)?.click();
+		requestAnimationFrame(() => document.querySelectorAll("section")[2]?.scrollIntoView());
+	});

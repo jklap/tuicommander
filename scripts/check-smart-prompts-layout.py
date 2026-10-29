@@ -42,6 +42,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--evidence', type=Path, required=True)
     parser.add_argument('--capture-only', action='store_true')
+    parser.add_argument('--voice-only', action='store_true', help='Run only the shared Voice wrapper regression')
     parser.add_argument('--mock', type=Path, help='Optional approved HTML mock to capture before the component')
     args = parser.parse_args()
     evidence = args.evidence.resolve()
@@ -55,6 +56,7 @@ def main():
     config.write_text("import {defineConfig} from 'vite';import solid from 'vite-plugin-solid';export default defineConfig({plugins:[solid()],define:{__APP_VERSION__:'\"layout\"',__BUILD_GIT_HASH__:'\"layout\"'},optimizeDeps:{entries:['src/__tests__/browser/smartPromptsLayout.html']},server:{host:'127.0.0.1',port:15979,strictPort:true}});")
     daemon = None
     results = []
+    voice_results = []
     with (evidence / 'transcript.txt').open('w') as log, (evidence / 'vite.log').open('w') as vite_log:
         server = subprocess.Popen(['node', 'node_modules/vite/bin/vite.js', '--config', str(config)], cwd=ROOT,
                                   stdout=vite_log, stderr=subprocess.STDOUT, start_new_session=True)
@@ -81,13 +83,21 @@ def main():
                     break
                 except OSError:
                     time.sleep(.25)
-            for name, query in [(f'{mode}-{theme}', f'?mode={mode}&theme={theme}') for mode in ['inject','shell','api','headless'] for theme in ['dark','light']]:
+            for name, query in ([] if args.voice_only else [(f'{mode}-{theme}', f'?mode={mode}&theme={theme}') for mode in ['inject','shell','api','headless'] for theme in ['dark','light']]):
                 run(['http://127.0.0.1:15979/src/__tests__/browser/smartPromptsLayout.html' + query], optional=True)
                 run(['--', 'eval', READY])
                 run(['--', 'set', 'viewport', '1100', '1200'])
                 measured = json.loads(json.loads(run(['--', 'eval', MEASURE])))
                 results.append({'name': name, 'blocks': measured})
                 run(['--', 'screenshot', str(evidence / (name + '.png'))])
+            for theme in ['dark', 'light']:
+                run(['http://127.0.0.1:15979/src/__tests__/browser/smartPromptsLayout.html?voice&theme=' + theme])
+                run(['--', 'eval', "new Promise((resolve,reject)=>{const ready=()=>document.querySelector('input[placeholder=\"Heard text...\"]');if(ready())return resolve(true);const observer=new MutationObserver(()=>{if(ready()){observer.disconnect();resolve(true)}});observer.observe(document.documentElement,{childList:true,subtree:true});setTimeout(()=>reject(new Error('Voice editor did not mount')),45000);})"])
+                run(['--', 'set', 'viewport', '1100', '1200'])
+                measured = json.loads(json.loads(run(['--', 'eval', "JSON.stringify((()=>{const first=document.querySelector('input[placeholder=\"Heard text...\"]');const row=first.parentElement;row.scrollIntoView({block:'center'});const rect=e=>{const r=e.getBoundingClientRect();return {left:r.left,top:r.top,width:r.width,height:r.height};};return {fields:[...row.querySelectorAll('input')].map(rect),wrapper:rect(row),card:rect(row.closest('section'))};})())"])))
+                voice_results.append({'theme': theme, **measured})
+                run(['--', 'screenshot', str(evidence / ('voice-' + theme + '.png'))])
+            (evidence / 'voice-measurements.json').write_text(json.dumps(voice_results, indent=2) + '\n')
             (evidence / 'measurements.json').write_text(json.dumps(results, indent=2) + '\n')
         finally:
             # Navigation may time out before the wrapper prints its daemon name.
@@ -109,6 +119,13 @@ def main():
             config.unlink(missing_ok=True)
     if not args.capture_only:
         failures = []
+        # Catches F1: a global named-wrapper exemption shrinks both Voice correction inputs to 88px.
+        for voice in voice_results:
+            fields = voice['fields']
+            if len(fields) != 2 or any(field['width'] < 230 for field in fields):
+                failures.append('VoiceAutoCorrectionsWidth ' + voice['theme'] + ': fields lost their full-width wrapper contract')
+            if len(fields) == 2 and (abs(fields[0]['left'] - fields[1]['left']) > 1 or fields[1]['top'] <= fields[0]['top']):
+                failures.append('VoiceAutoCorrectionsWidth ' + voice['theme'] + ': fields no longer wrap on separate lines')
         expected = ['Toolbar', 'Command palette', 'Git · Changes', 'Git · Branches', 'PR popover', 'Issue popover', 'Terminal menu', 'File menu']
         for case in results:
             block = case['blocks']
