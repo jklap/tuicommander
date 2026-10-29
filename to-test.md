@@ -1,3 +1,6 @@
+## Relay admission ordering (2470-4d10) — relay rebuild/restart required
+
+- [ ] After deploying and restarting the rebuilt relay service, connect a daemon and desktop with an existing pairing bundle at the same time. Confirm first attach succeeds without replacing the bundle. The change is in `tuic-relay`, not the running desktop; restarting `make dev` alone does not load it. The daily app and relay service were not restarted by the agent.
 ## Worktree journal and empty-start archive (2475-ab3a) — Rust rebuild/restart required
 
 - [ ] After Boss manually restarts a rebuilt `make dev` or installs `make build`, confirm an agent worktree with only an empty start commit remains available with Auto-archive merged enabled and no live session. Parallel archive journal integrity and backend classification are covered by automated regression tests. Rust does not hot-reload; the daily app was not restarted.

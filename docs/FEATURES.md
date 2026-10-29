@@ -2817,6 +2817,7 @@ partial work, and their child processes may continue.
   `deploy` (`never | on_connect | installed`), `survive_secs` and
   `auto_update` (defaults to false)
 - The Basic Auth **password** goes to the OS credential vault (`Credential::RemoteConnection`), keyed by the connection UUID — never to `connections.json`, never readable back, and deleted with the connection
+- Relay peer admission publishes ordered presence before stats writes, so simultaneous joins do not restart the pairing handshake.
 - The relay pairing bundle goes to the vault (`Credential::RelayPairing`), keyed by the connection UUID, never to `connections.json`
 - Desktop-managed SSH deployments use a separate vault pairing token. It is the
   daemon session token, never appears in `connections.json`, and survives a
