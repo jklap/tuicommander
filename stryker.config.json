@@ -15,6 +15,7 @@
     "!src-tauri/crates/tuic-terminal/src/terminal_grid.rs",
     "!vitest.config.ts",
     "!scripts/ts-mutants.mjs",
+    "!scripts/build-stall-replay.mjs",
     "!tsconfig.json",
     "!package.json"
   ],
