@@ -6,7 +6,7 @@ On desktop and mobile CLI views, adjacent `💬` answer paragraphs share one con
 
 Turning **Show scrollbar marks** off or on updates history ticks immediately, even when the terminal is idle. Search-match ticks remain visible when history marks are off.
 
-The Context preview truncates before the CLI/Chat switch. Terminals without that switch use the full header width.
+The Context preview truncates before the CLI/Chat switch. The switch shares the Context row in both modes. When Context is hidden, both modes reserve the same control row above the content. Terminals without that switch use the full header width.
 
 ## Tablet Keyboard
 
