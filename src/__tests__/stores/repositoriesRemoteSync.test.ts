@@ -662,15 +662,13 @@ describe("repositoriesStore remote sync", () => {
 			// hydrated — the disk this test controls diverges from what's live here.
 			setDisk({ repos: { "/other": repoRecord("/other", "Other") }, repoOrder: ["/other"] });
 
-			// From here on: the very next load_repositories call (the broadcast's
-			// own re-read) is held open; save_repositories is held open too.
-			let firstLoadAfterHydrate = true;
+			// From here on every disk read is held open until released — the
+			// broadcast's own re-read, and also settingsRefresh's initial owner read,
+			// which can land in this same window — and save_repositories is held too.
+			let loadsReleased = false;
 			mockInvoke.mockImplementation((command: string) => {
 				if (command === "load_repositories") {
-					if (firstLoadAfterHydrate) {
-						firstLoadAfterHydrate = false;
-						return loadPromise;
-					}
+					if (!loadsReleased) return loadPromise;
 					return Promise.resolve(structuredClone(disk));
 				}
 				if (command === "save_repositories") return savePromise;
@@ -691,6 +689,7 @@ describe("repositoriesStore remote sync", () => {
 			// The read resolves now, with the save still in flight — adoption must
 			// defer rather than run against a baseline the in-flight save is about
 			// to move.
+			loadsReleased = true;
 			resolveLoad(structuredClone(disk));
 			await vi.advanceTimersByTimeAsync(0);
 			expect(store.get("/other")).toBeUndefined();

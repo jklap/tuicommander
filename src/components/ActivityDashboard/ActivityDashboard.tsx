@@ -350,7 +350,10 @@ export const ActivityDashboard: Component<ActivityDashboardProps> = (props) => {
 							<div class={s.rowMain}>
 								<div class={s.nameCell}>
 									<Show when={index() < 9}>
-										<span class={s.rowNumber}>{index() + 1}</span>
+										{/* Shortcut hint for the 1-9 row keys; not part of the row's name. */}
+										<span class={s.rowNumber} aria-hidden="true">
+											{index() + 1}
+										</span>
 									</Show>
 									<span class={s.termName}>{term.name}</span>
 									<Show when={term.subAgentTag}>
