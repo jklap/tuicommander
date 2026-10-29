@@ -15,6 +15,7 @@ vi.mock("../../../stores/settings", () => ({
 import { RepoWorktreeTab } from "../../../components/SettingsPanel/tabs/RepoWorktreeTab";
 import type { RepoDefaults } from "../../../stores/repoDefaults";
 import type { RepoSettings } from "../../../stores/repoSettings";
+import { settingControl } from "../../helpers/settingControl";
 
 function makeSettings(overrides: Partial<RepoSettings> = {}): RepoSettings {
 	return {
@@ -275,14 +276,14 @@ describe("RepoWorktreeTab", () => {
 		expect(onUpdate).toHaveBeenCalledWith("autoFetchIntervalMinutes", 30);
 	});
 
-	/** Find the tri-state cycling switch for a given row label. */
-	function triGroup(container: HTMLElement, label: string): HTMLElement {
-		return container.querySelector(`[role="checkbox"][aria-label="${label}"]`) as HTMLElement;
+	// Main's inherit select (wip's cycling TriStateToggle was retired for it in the
+	// rebase): "Use global default (On/Off)" / On / Off, bound to the catalogue id.
+	const INHERIT = "__inherit__";
+	function overrideSelect(container: HTMLElement, field: string): HTMLSelectElement {
+		return settingControl<HTMLSelectElement>(container, `repositories.repos.{key}.${field}`);
 	}
-
-	/** The row's full text (switch + trailing label/hint), for hint assertions. */
-	function triRowText(group: HTMLElement): string {
-		return group.closest(".triToggle")?.textContent ?? "";
+	function selectedText(select: HTMLSelectElement): string {
+		return select.selectedOptions[0]?.textContent ?? "";
 	}
 
 	it("resolves copyIgnoredFiles/copyUntrackedFiles against the global default when null, and selecting On/Off overrides it", () => {
@@ -294,27 +295,30 @@ describe("RepoWorktreeTab", () => {
 			/>
 		));
 		// copyIgnoredFiles inherits defaults.copyIgnoredFiles=true, copyUntrackedFiles inherits false.
-		const ignoredGroup = triGroup(container, "Copy ignored files");
-		const untrackedGroup = triGroup(container, "Copy untracked files");
-		expect(ignoredGroup.getAttribute("aria-checked")).toBe("mixed");
-		expect(untrackedGroup.getAttribute("aria-checked")).toBe("mixed");
+		const ignored = overrideSelect(container, "copy_ignored_files");
+		const untracked = overrideSelect(container, "copy_untracked_files");
+		expect(ignored.value).toBe(INHERIT);
+		expect(selectedText(ignored)).toBe("Use global default (On)");
+		expect(untracked.value).toBe(INHERIT);
+		expect(selectedText(untracked)).toBe("Use global default (Off)");
 
-		// Cycle order is Global -> On -> Off -> Global; from null (Global) one click selects On.
-		fireEvent.click(ignoredGroup);
+		fireEvent.change(ignored, { target: { value: "true" } });
 		expect(onUpdate).toHaveBeenCalledWith("copyIgnoredFiles", true);
+		fireEvent.change(untracked, { target: { value: "false" } });
+		expect(onUpdate).toHaveBeenCalledWith("copyUntrackedFiles", false);
 	});
 
-	it("shows the 'Use global default' hint only while the field is null, and clears it once overridden", () => {
+	it("shows the 'Use global default' choice only while the field is null, and the override once set", () => {
 		const nullCase = render(() => (
 			<RepoWorktreeTab settings={makeSettings({ copyIgnoredFiles: null })} defaults={defaults} onUpdate={onUpdate} />
 		));
-		expect(triRowText(triGroup(nullCase.container, "Copy ignored files"))).toContain("Use global default: On");
+		expect(selectedText(overrideSelect(nullCase.container, "copy_ignored_files"))).toBe("Use global default (On)");
 		nullCase.unmount();
 
 		const overriddenCase = render(() => (
 			<RepoWorktreeTab settings={makeSettings({ copyIgnoredFiles: true })} defaults={defaults} onUpdate={onUpdate} />
 		));
-		expect(triRowText(triGroup(overriddenCase.container, "Copy ignored files"))).not.toContain("Use global default");
+		expect(selectedText(overrideSelect(overriddenCase.container, "copy_ignored_files"))).toBe("On");
 	});
 
 	it("resolves warmIgnoredDirectories against the global default when null, and selecting Off overrides it", () => {
@@ -326,17 +330,14 @@ describe("RepoWorktreeTab", () => {
 			/>
 		));
 		// warmIgnoredDirectories inherits defaults.warmIgnoredDirectories=true.
-		const warmGroup = triGroup(container, "Warm ignored build directories");
-		expect(warmGroup.getAttribute("aria-checked")).toBe("mixed");
-		expect(triRowText(warmGroup)).toContain("Use global default: On");
+		const warm = overrideSelect(container, "warm_ignored_directories");
+		expect(selectedText(warm)).toBe("Use global default (On)");
 
-		// Cycle order is Global -> On -> Off -> Global; from null (Global, resolving
-		// to true) one click selects On explicitly, a second selects Off.
-		fireEvent.click(warmGroup);
-		expect(onUpdate).toHaveBeenCalledWith("warmIgnoredDirectories", true);
+		fireEvent.change(warm, { target: { value: "false" } });
+		expect(onUpdate).toHaveBeenCalledWith("warmIgnoredDirectories", false);
 	});
 
-	it("clears the 'Use global default' hint for warmIgnoredDirectories once overridden", () => {
+	it("shows the explicit override for warmIgnoredDirectories once overridden", () => {
 		const overridden = render(() => (
 			<RepoWorktreeTab
 				settings={makeSettings({ warmIgnoredDirectories: false })}
@@ -344,9 +345,9 @@ describe("RepoWorktreeTab", () => {
 				onUpdate={onUpdate}
 			/>
 		));
-		const warmGroup = triGroup(overridden.container, "Warm ignored build directories");
-		expect(warmGroup.getAttribute("aria-checked")).toBe("false");
-		expect(triRowText(warmGroup)).not.toContain("Use global default");
+		const warm = overrideSelect(overridden.container, "warm_ignored_directories");
+		expect(warm.value).toBe("false");
+		expect(selectedText(warm)).toBe("Off");
 	});
 
 	it("calls onUpdate for autoConsolidateWorktrees (no null/inherit state — always a concrete bool)", () => {
@@ -382,29 +383,17 @@ describe("RepoWorktreeTab", () => {
 		expect(onUpdate).toHaveBeenCalledWith("autoDeleteOnPrClose", "auto");
 	});
 
-	it("clicking the switch cycles Global -> On -> Off -> Global, calling onUpdate at each step", () => {
-		// The switch is fully controlled by props.settings, which this test does not
-		// feed back after onUpdate — so each starting value is asserted with its own
-		// render rather than chaining clicks against a value that never advances.
-		const nullCase = render(() => (
-			<RepoWorktreeTab settings={makeSettings({ prHideDrafts: null })} defaults={defaults} onUpdate={onUpdate} />
-		));
-		fireEvent.click(triGroup(nullCase.container, "Hide Draft PRs"));
-		expect(onUpdate).toHaveBeenCalledWith("prHideDrafts", true);
-		nullCase.unmount();
-
-		const onCase = render(() => (
-			<RepoWorktreeTab settings={makeSettings({ prHideDrafts: true })} defaults={defaults} onUpdate={onUpdate} />
-		));
-		fireEvent.click(triGroup(onCase.container, "Hide Draft PRs"));
-		expect(onUpdate).toHaveBeenCalledWith("prHideDrafts", false);
-		onCase.unmount();
-
-		const offCase = render(() => (
+	it("selecting inherit, Hide or Show writes null, true or false for a PR-visibility field", () => {
+		const { container } = render(() => (
 			<RepoWorktreeTab settings={makeSettings({ prHideDrafts: false })} defaults={defaults} onUpdate={onUpdate} />
 		));
-		fireEvent.click(triGroup(offCase.container, "Hide Draft PRs"));
+		const drafts = overrideSelect(container, "pr_hide_drafts");
+		fireEvent.change(drafts, { target: { value: "true" } });
+		expect(onUpdate).toHaveBeenCalledWith("prHideDrafts", true);
+		fireEvent.change(drafts, { target: { value: INHERIT } });
 		expect(onUpdate).toHaveBeenCalledWith("prHideDrafts", null);
+		fireEvent.change(drafts, { target: { value: "false" } });
+		expect(onUpdate).toHaveBeenLastCalledWith("prHideDrafts", false);
 	});
 
 	it("resolves PR-visibility fields against the global settingsStore value when null", () => {
@@ -416,8 +405,8 @@ describe("RepoWorktreeTab", () => {
 			/>
 		));
 		// mocked settingsStore.state: prHideDrafts=false, prHideConflicting=true
-		expect(triRowText(triGroup(container, "Hide Draft PRs"))).toContain("Use global default: Off");
-		expect(triRowText(triGroup(container, "Hide Conflicting PRs"))).toContain("Use global default: On");
+		expect(selectedText(overrideSelect(container, "pr_hide_drafts"))).toBe("Use global default (Show)");
+		expect(selectedText(overrideSelect(container, "pr_hide_conflicting"))).toBe("Use global default (Hide)");
 	});
 
 	describe("copyPaths list", () => {
@@ -547,12 +536,11 @@ describe("RepoWorktreeTab", () => {
 			<RepoWorktreeTab settings={makeSettings({ terminalMetaHotkeys: null })} defaults={defaults} onUpdate={onUpdate} />
 		));
 		expect(getByText("Enable Cmd+1-9 terminal hotkeys")).toBeTruthy();
-		const group = triGroup(container, "Enable Cmd+1-9 terminal hotkeys");
+		const select = overrideSelect(container, "terminal_meta_hotkeys");
 		// terminalMetaHotkeys has no real global setting — its "global" resolves to a
-		// hardcoded true (On), unlike the other tri-state rows above.
-		expect(triRowText(group)).toContain("Use global default: On");
-		// Cycle order is Global -> On -> Off -> Global; from null (Global) one click selects On.
-		fireEvent.click(group);
-		expect(onUpdate).toHaveBeenCalledWith("terminalMetaHotkeys", true);
+		// hardcoded true (On), unlike the other inherit rows above.
+		expect(selectedText(select)).toBe("Use global default (On)");
+		fireEvent.change(select, { target: { value: "false" } });
+		expect(onUpdate).toHaveBeenCalledWith("terminalMetaHotkeys", false);
 	});
 });

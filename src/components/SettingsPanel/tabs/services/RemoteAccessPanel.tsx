@@ -343,16 +343,20 @@ export const RemoteAccessPanel: Component = () => {
 						{(dir) => (
 							<div class={s.copyPathRow}>
 								<span class={s.copyPathText}>{dir}</span>
-								<button type="button" class={s.transferBtn} onClick={() => removeReadableDir(dir)}>
+								<Button
+									data-setting-id="app.additional_readable_dirs"
+									size="compact"
+									onClick={() => removeReadableDir(dir)}
+								>
 									{t("services.readableDirs.remove", "Remove")}
-								</button>
+								</Button>
 							</div>
 						)}
 					</For>
 
 					<div class={s.copyPathRow}>
-						<input
-							type="text"
+						<Input
+							data-setting-id="app.additional_readable_dirs"
 							class={s.copyPathInput}
 							value={newReadableDir()}
 							onInput={(e) => {
@@ -364,9 +368,14 @@ export const RemoteAccessPanel: Component = () => {
 							}}
 							placeholder={t("services.readableDirs.placeholder", "e.g. ~/.claude/plans")}
 						/>
-						<button type="button" class={s.transferBtn} onClick={addReadableDir} disabled={!newReadableDir().trim()}>
+						<Button
+							data-setting-id="app.additional_readable_dirs"
+							size="compact"
+							onClick={addReadableDir}
+							disabled={!newReadableDir().trim()}
+						>
 							{t("services.readableDirs.add", "Add")}
-						</button>
+						</Button>
 					</div>
 					<Show when={readableDirError()}>
 						<p class={s.hint} style={{ color: "var(--error)" }}>
@@ -724,12 +733,13 @@ export const RemoteAccessPanel: Component = () => {
 							<SectionCard title={t("services.heading.selfSignedHttps", "Self-Signed HTTPS")}>
 								<div class={s.group}>
 									<div class={s.row}>
-										<span class={s.label}>{t("services.label.selfSignedStatus", "Status")}</span>
+										<label class={s.label}>{t("services.label.selfSignedStatus", "Status")}</label>
 										<span class={s.value}>
 											<span class={cx(s.mcpStatusDot, ss.active && s.running)} />
 											{statusText}
-											<button
-												class={s.inlineBtn}
+											<Button
+												data-non-setting="Regenerate the self-signed certificate; a runtime action, not configuration"
+												size="compact"
 												disabled={regeneratingCert()}
 												onClick={async () => {
 													setRegeneratingCert(true);
@@ -748,13 +758,13 @@ export const RemoteAccessPanel: Component = () => {
 												{regeneratingCert()
 													? t("services.action.regenerating", "Regenerating…")
 													: t("services.action.regenerate", "Regenerate")}
-											</button>
+											</Button>
 										</span>
 									</div>
 									<Show when={ss.fingerprint_sha256}>
 										{(fingerprint) => (
 											<div class={s.row}>
-												<span class={s.label}>{t("services.label.selfSignedFingerprint", "Fingerprint")}</span>
+												<label class={s.label}>{t("services.label.selfSignedFingerprint", "Fingerprint")}</label>
 												<span class={s.value} style={{ "font-family": "monospace", "font-size": "0.85em" }}>
 													{fingerprint()
 														.match(/.{1,2}/g)

@@ -53,6 +53,7 @@ vi.mock("../../../plugins/dashboardRegistry", () => ({
 import { PluginsTab } from "../../../components/SettingsPanel/tabs/PluginsTab";
 import { PluginLogger } from "../../../plugins/pluginLogger";
 import type { PluginState } from "../../../stores/pluginStore";
+import { settingControl } from "../../helpers/settingControl";
 
 function makePlugin(overrides: Partial<PluginState> = {}): PluginState {
 	return {
@@ -74,16 +75,16 @@ describe("PluginsTab", () => {
 		pluginList = [];
 	});
 
-	it("renders the Plugins heading and the Installed/Browse sub-tabs", () => {
-		const { getByText } = render(() => <PluginsTab />);
-		expect(getByText("Plugins")).toBeTruthy();
+	it("renders the Manage plugins heading and the Installed/Browse sub-tabs", () => {
+		const { getByRole, getByText } = render(() => <PluginsTab />);
+		expect(getByRole("heading", { name: "Manage plugins" })).toBeTruthy();
 		expect(getByText("Installed")).toBeTruthy();
 		expect(getByText("Browse")).toBeTruthy();
 	});
 
 	it("shows the empty-state message when no plugins are installed", () => {
 		const { getByText } = render(() => <PluginsTab />);
-		expect(getByText("No plugins installed. Use the buttons below to install from a folder or ZIP file.")).toBeTruthy();
+		expect(getByText("No plugins installed.")).toBeTruthy();
 	});
 
 	it("renders an installed plugin's name, version, and enabled toggle", () => {
@@ -122,9 +123,8 @@ describe("PluginsTab", () => {
 	});
 
 	it("calls setAutoUpdatePluginsEnabled when the auto-update toggle changes", () => {
-		const { getByText } = render(() => <PluginsTab />);
-		const label = getByText("Check for plugin updates");
-		const checkbox = label.closest(".toggle")?.querySelector('input[type="checkbox"]') as HTMLInputElement;
+		const { container } = render(() => <PluginsTab />);
+		const checkbox = settingControl(container, "app.auto_update_plugins_enabled");
 		fireEvent.change(checkbox, { target: { checked: false } });
 		expect(mockSetAutoUpdatePluginsEnabled).toHaveBeenCalledWith(false);
 	});

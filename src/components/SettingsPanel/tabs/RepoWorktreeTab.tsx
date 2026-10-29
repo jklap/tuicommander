@@ -16,6 +16,7 @@ import type { CopyPathEntry, RepoSettings } from "../../../stores/repoSettings";
 import { settingsStore } from "../../../stores/settings";
 import { ColorSwatchPicker } from "../../shared/ColorSwatchPicker";
 import { DEFAULT_COLOR_PRESETS } from "../../shared/colorPresets";
+import { Button } from "../../ui/Button";
 import { Input } from "../../ui/Input";
 import { Select } from "../../ui/Select";
 import { Switch } from "../../ui/Switch";
@@ -303,24 +304,35 @@ export const RepoWorktreeTab: Component<RepoWorktreeTabProps> = (props) => {
 						{(entry) => (
 							<div class={s.copyPathRow}>
 								<span class={s.copyPathText}>{entry.path}</span>
-								<select
-									class={s.transferSelect}
+								<Select
+									data-setting-id="repositories.repos.{key}.copy_paths.{path}.mode"
+									compact
 									value={entry.mode}
 									onChange={(e) => updateCopyPathMode(entry.path, e.currentTarget.value as CopyPathEntry["mode"])}
 								>
-									<option value="copy">{t("repoWorktree.copyPaths.copy", "Copy")}</option>
-									<option value="symlink">{t("repoWorktree.copyPaths.symlink", "Symlink")}</option>
-								</select>
-								<button type="button" class={s.transferBtn} onClick={() => removeCopyPath(entry.path)}>
+									<For
+										each={settingOptions("repositories.repos.{key}.copy_paths.{path}.mode", {
+											copy: t("repoWorktree.copyPaths.copy", "Copy"),
+											symlink: t("repoWorktree.copyPaths.symlink", "Symlink"),
+										})}
+									>
+										{(option) => <option value={option.value}>{option.label}</option>}
+									</For>
+								</Select>
+								<Button
+									data-setting-id="repositories.repos.{key}.copy_paths.{path}.path"
+									size="compact"
+									onClick={() => removeCopyPath(entry.path)}
+								>
 									{t("repoWorktree.copyPaths.remove", "Remove")}
-								</button>
+								</Button>
 							</div>
 						)}
 					</For>
 
 					<div class={s.copyPathRow}>
-						<input
-							type="text"
+						<Input
+							data-setting-id="repositories.repos.{key}.copy_paths.{path}.path"
 							class={s.copyPathInput}
 							value={newCopyPath()}
 							onInput={(e) => setNewCopyPath(e.currentTarget.value)}
@@ -329,17 +341,29 @@ export const RepoWorktreeTab: Component<RepoWorktreeTabProps> = (props) => {
 							}}
 							placeholder={t("repoWorktree.copyPaths.placeholder", "e.g. .env or node_modules")}
 						/>
-						<select
-							class={s.transferSelect}
+						<Select
+							data-setting-id="repositories.repos.{key}.copy_paths.{path}.mode"
+							compact
 							value={newCopyMode()}
 							onChange={(e) => setNewCopyMode(e.currentTarget.value as CopyPathEntry["mode"])}
 						>
-							<option value="copy">{t("repoWorktree.copyPaths.copy", "Copy")}</option>
-							<option value="symlink">{t("repoWorktree.copyPaths.symlink", "Symlink")}</option>
-						</select>
-						<button type="button" class={s.transferBtn} onClick={addCopyPath} disabled={!newCopyPath().trim()}>
+							<For
+								each={settingOptions("repositories.repos.{key}.copy_paths.{path}.mode", {
+									copy: t("repoWorktree.copyPaths.copy", "Copy"),
+									symlink: t("repoWorktree.copyPaths.symlink", "Symlink"),
+								})}
+							>
+								{(option) => <option value={option.value}>{option.label}</option>}
+							</For>
+						</Select>
+						<Button
+							data-setting-id="repositories.repos.{key}.copy_paths.{path}.path"
+							size="compact"
+							onClick={addCopyPath}
+							disabled={!newCopyPath().trim()}
+						>
 							{t("repoWorktree.copyPaths.add", "Add")}
-						</button>
+						</Button>
 					</div>
 				</div>
 			</SectionCard>
@@ -660,7 +684,7 @@ export const RepoWorktreeTab: Component<RepoWorktreeTabProps> = (props) => {
 						<label>{t("repoWorktree.label.terminal", "Terminal")}</label>
 
 						<BooleanOverride
-							data-setting-exclusion="transient.repositories.terminal_meta_hotkeys"
+							settingId="repositories.repos.{key}.terminal_meta_hotkeys"
 							label="Enable Cmd+1-9 terminal hotkeys"
 							value={props.settings.terminalMetaHotkeys}
 							fallback={true}

@@ -4,6 +4,8 @@ import { terminalsStore } from "../../../stores/terminals";
 import { rpc } from "../../../transport";
 import { cx } from "../../../utils";
 import { updateAppConfig } from "../../../utils/updateAppConfig";
+import { Button } from "../../ui/Button";
+import { Select } from "../../ui/Select";
 import { SettingSlider, SettingToggle } from "../SettingFields";
 import s from "../Settings.module.css";
 
@@ -131,6 +133,7 @@ export const StreamDockTab: Component = () => {
 			</p>
 
 			<SettingToggle
+				settingId="app.streamdock.enabled"
 				checked={cfg().enabled}
 				onChange={(enabled) => saveConfigField((c) => (c.streamdock.enabled = enabled))}
 				label="Enable StreamDock integration"
@@ -150,7 +153,8 @@ export const StreamDockTab: Component = () => {
 
 			<div class={s.group}>
 				<label>Device</label>
-				<select
+				<Select
+					data-setting-id="app.streamdock.device_serial"
 					value={cfg().device_serial ?? ""}
 					onChange={(e) => {
 						const value = e.currentTarget.value || null;
@@ -165,11 +169,15 @@ export const StreamDockTab: Component = () => {
 							</option>
 						)}
 					</For>
-				</select>
+				</Select>
 				<div style={{ "margin-top": "8px" }}>
-					<button type="button" class={s.testBtn} onClick={refreshDevices} disabled={loadingDevices()}>
+					<Button
+						data-non-setting="Device discovery action; not configuration"
+						onClick={refreshDevices}
+						disabled={loadingDevices()}
+					>
 						{loadingDevices() ? "Scanning…" : "Rescan devices"}
-					</button>
+					</Button>
 				</div>
 				<Show when={devices().length === 0 && !loadingDevices()}>
 					<p class={s.hint}>No StreamDock device currently detected.</p>
@@ -177,6 +185,7 @@ export const StreamDockTab: Component = () => {
 			</div>
 
 			<SettingSlider
+				settingId="app.streamdock.screen_brightness"
 				label="Screen brightness"
 				value={cfg().screen_brightness}
 				onChange={(v) => setCfg({ ...cfg(), screen_brightness: v })}
@@ -187,6 +196,7 @@ export const StreamDockTab: Component = () => {
 			/>
 
 			<SettingSlider
+				settingId="app.streamdock.led_brightness"
 				label="LED brightness"
 				value={cfg().led_brightness}
 				onChange={(v) => setCfg({ ...cfg(), led_brightness: v })}
@@ -206,6 +216,7 @@ export const StreamDockTab: Component = () => {
 				<For each={liveSessions()}>
 					{(t) => (
 						<SettingToggle
+							settingId="app.streamdock.pinned_sessions"
 							checked={cfg().pinned_sessions.includes(t.sessionId)}
 							onChange={(pinned) => togglePinned(t.sessionId, pinned)}
 							label={t.alias ?? t.name ?? t.sessionId}
