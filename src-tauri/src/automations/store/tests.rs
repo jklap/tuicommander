@@ -279,7 +279,7 @@ fn saved_reports_bound_each_stream_and_keep_definition_snapshot_and_launch_point
     assert_eq!(result.stderr.len(), OUTPUT_LIMIT - 1);
     assert!(result.stdout_truncated && result.stderr_truncated);
     assert_eq!(result.duration_ms, 12);
-    assert_eq!(actual.stdout.text.len(), OUTPUT_LIMIT - 1);
+    assert_eq!(actual.stdout.text, format!("{}日", "a".repeat(262_141)));
     assert!(actual.stdout.truncated && actual.stderr.truncated);
     let precheck = actual.precheck.unwrap();
     assert_eq!(precheck.stdout.text.len(), OUTPUT_LIMIT - 1);
