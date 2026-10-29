@@ -54,9 +54,8 @@
 {"record":38,"state":{"shell":1,"agent":"awaiting_input","awaiting":true,"question":"","confident":true,"last_question":"","choice_sig":"Pick a fruit?|1,2,3,4","fullscreen":false}}
 {"record":39,"state":{"shell":1,"agent":"awaiting_input","awaiting":true,"question":"","confident":true,"last_question":"","choice_sig":"Pick a fruit?|1,2,3,4","fullscreen":false}}
 {"record":40,"state":{"shell":1,"agent":"awaiting_input","awaiting":true,"question":"","confident":true,"last_question":"","choice_sig":"Pick a fruit?|1,2,3,4","fullscreen":false}}
-{"record":41,"event":{"type":"choice-prompt","title":"two-option question (e.g. \"Pick a shape?\" with options Circle/Square). After","options":[{"key":"1","label":"Apple","highlighted":true,"destructive":false},{"key":"2","label":"Pear","highlighted":false,"destructive":false},{"key":"3","label":"Type something.","highlighted":false,"destructive":false},{"key":"4","label":"Chat about this","highlighted":false,"destructive":false}],"selection_mode":"navigate-enter","dismiss_key":"cancel","_turn_epoch":0}}
-{"record":41,"state":{"shell":1,"agent":"awaiting_input","awaiting":true,"question":"two-option question (e.g. \"Pick a shape?\" with options Circle/Square). After","confident":true,"last_question":"","choice_sig":"two-option question (e.g. \"Pick a shape?\" with options Circle/Square). After|1,2,3,4","fullscreen":false}}
-{"record":42,"event":{"type":"choice-cleared","_turn_epoch":0}}
+{"record":41,"event":{"type":"choice-cleared","_turn_epoch":0}}
+{"record":41,"state":{"shell":1,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":"","choice_sig":null,"fullscreen":false}}
 {"record":42,"state":{"shell":1,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":"","choice_sig":null,"fullscreen":false}}
 {"record":43,"event":{"type":"agent-metadata","field":"tool_name","value":"AskUserQuestion","_turn_epoch":0}}
 {"record":43,"event":{"type":"user-input","content":"","line":-1,"_turn_epoch":0}}
