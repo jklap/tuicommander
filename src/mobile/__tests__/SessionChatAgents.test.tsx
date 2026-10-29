@@ -37,7 +37,7 @@ function mount(agent: string, exists = true) {
 it("mobile_codex_chat_toggle_for_bound_transcript", async () => {
 	invoke.mockResolvedValue({ epoch: 1, nextSeq: 0, reset: true, updates: [], unknownRows: 0, malformedRows: 0 });
 	const view = mount("codex");
-	view.getByRole("button", { name: "Chat" }).click();
+	view.getByRole("tab", { name: "Chat" }).click();
 	await waitFor(() => expect(view.getByTestId("terminal-chat-view")).toBeTruthy());
 	await waitFor(() =>
 		expect(invoke).toHaveBeenCalledWith("chat_view_snapshot", {
@@ -46,7 +46,7 @@ it("mobile_codex_chat_toggle_for_bound_transcript", async () => {
 			fromSeq: 0,
 		}),
 	);
-	view.getByRole("button", { name: "CLI" }).click();
+	view.getByRole("tab", { name: "CLI" }).click();
 	expect(view.queryByTestId("terminal-chat-view")).toBeNull();
 });
 
@@ -56,8 +56,8 @@ it("returns unbound Codex to CLI with the backend binding reason", async () => {
 		new HttpRpcError("chat_view_snapshot", 500, '{"error":"not_bound: no exact Codex hook binding for this terminal"}'),
 	);
 	const view = mount("codex");
-	view.getByRole("button", { name: "Chat" }).click();
-	await waitFor(() => expect(view.getByRole("button", { name: "CLI" }).getAttribute("aria-pressed")).toBe("true"));
+	view.getByRole("tab", { name: "Chat" }).click();
+	await waitFor(() => expect(view.getByRole("tab", { name: "CLI" }).getAttribute("aria-selected")).toBe("true"));
 	expect(view.container.textContent).toContain("no exact Codex hook binding for this terminal");
 });
 
@@ -68,7 +68,7 @@ it.each([
 	["grok", false],
 ])("hides Chat for %s with live session %s", (agent, exists) => {
 	const view = mount(agent as string, exists as boolean);
-	expect(view.queryByRole("button", { name: "Chat" })).toBeNull();
+	expect(view.queryByRole("tab", { name: "Chat" })).toBeNull();
 	expect(invoke).not.toHaveBeenCalled();
 });
 
@@ -76,14 +76,14 @@ it.each([
 it("mobile_grok_chat_toggle_for_bound_transcript", async () => {
 	invoke.mockResolvedValue(grokSnapshot);
 	const view = mount("grok");
-	view.getByRole("button", { name: "Chat" }).click();
+	view.getByRole("tab", { name: "Chat" }).click();
 	await waitFor(() => expect(view.getByText("MOBILE_CHAT_REALITY_OK")).toBeTruthy());
 	expect(invoke).toHaveBeenCalledWith("chat_view_snapshot", {
 		sessionId: "mobile-grok",
 		epoch: null,
 		fromSeq: 0,
 	});
-	view.getByRole("button", { name: "CLI" }).click();
+	view.getByRole("tab", { name: "CLI" }).click();
 	expect(view.queryByTestId("terminal-chat-view")).toBeNull();
 });
 
@@ -97,7 +97,7 @@ it("returns unbound Grok to CLI with the backend binding reason", async () => {
 		),
 	);
 	const view = mount("grok");
-	view.getByRole("button", { name: "Chat" }).click();
-	await waitFor(() => expect(view.getByRole("button", { name: "CLI" }).getAttribute("aria-pressed")).toBe("true"));
+	view.getByRole("tab", { name: "Chat" }).click();
+	await waitFor(() => expect(view.getByRole("tab", { name: "CLI" }).getAttribute("aria-selected")).toBe("true"));
 	expect(view.container.textContent).toContain("no Grok session is registered for this terminal");
 });
