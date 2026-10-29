@@ -393,6 +393,38 @@ fn saved_run_output_has_no_terminal_escapes() {
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
 
+// Catches: cleaned-output truncation discarding the final report instead of old logs.
+#[test]
+fn saved_run_output_retains_final_report_after_long_log() {
+    let (dir, owner, run) = setup();
+    let _config = crate::config::set_config_dir_override(dir.path().to_owned());
+    let state = std::sync::Arc::new(crate::state::tests_support::make_test_app_state_in(
+        dir.path(),
+    ));
+    let mut buffer = crate::state::OutputRingBuffer::new(2 * 1024 * 1024);
+    buffer.write("build log\n".repeat(40_000).as_bytes());
+    buffer.write(b"\x1b[32mFINAL REPORT: 3 files changed, all checks passed\x1b[0m\n");
+    state
+        .session_maps
+        .output_buffers
+        .insert("owned".into(), parking_lot::Mutex::new(buffer));
+    state.session_maps.exit_codes.insert("owned".into(), 0);
+
+    reconcile(owner.store(), &NativeCompletion(&state), 300).unwrap();
+
+    let saved = owner.store().get(&run.id).unwrap();
+    assert_eq!(saved.status, RunStatus::Completed);
+    assert!(saved.stdout.truncated);
+    assert!(saved.stdout.text.len() <= 256 * 1024);
+    assert!(
+        saved
+            .stdout
+            .text
+            .ends_with("FINAL REPORT: 3 files changed, all checks passed\n"),
+        "saved output lost the final report after truncating a long log"
+    );
+}
+
 // Catches synchronous publication git/config work starving a one-worker runtime.
 #[cfg(unix)]
 #[tokio::test(flavor = "current_thread")]
