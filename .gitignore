@@ -180,7 +180,7 @@ ORCHESTRATOR.md
 .vitest/
 
 # Mutation test artifacts
-/reports/mutation/
+/reports/
 /.stryker-tmp/
 !scripts/audit-control-styles.mjs
 
