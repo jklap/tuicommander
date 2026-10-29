@@ -5154,6 +5154,86 @@ mod tests {
     use tempfile::TempDir;
     use tuic_test_support::{fail_with_stderr_script, print_file_script, touch_script};
 
+    // Catches: serde Display splits parallel appends into interleaved JSON fragments.
+    #[test]
+    fn concurrent_rename_journal_records_remain_complete_2475() {
+        let fixture = setup_test_repo();
+        let barrier = std::sync::Barrier::new(2);
+        std::thread::scope(|scope| {
+            for writer in 0..2 {
+                let barrier = &barrier;
+                let repo = fixture.path();
+                scope.spawn(move || {
+                    for record in 0..32 {
+                        barrier.wait();
+                        record_worktree_rename(
+                            repo,
+                            &format!("old/{writer}/{record}/quoted\"\nλ"),
+                            &format!("new/{writer}/{record}/back\\slash"),
+                        )
+                        .unwrap();
+                    }
+                });
+            }
+        });
+        let journal =
+            fs::read_to_string(fixture.path().join(".git/tuic-worktree-renames.jsonl")).unwrap();
+        let mut actual = std::collections::BTreeSet::new();
+        for (index, line) in journal.lines().enumerate() {
+            let value: serde_json::Value = serde_json::from_str(line)
+                .unwrap_or_else(|error| panic!("journal line {index}: {error}: {line}"));
+            assert_eq!(value.as_object().unwrap().len(), 2);
+            assert!(
+                actual.insert((
+                    value["old"].as_str().unwrap().to_owned(),
+                    value["new"].as_str().unwrap().to_owned(),
+                )),
+                "duplicate journal record"
+            );
+        }
+        let expected: std::collections::BTreeSet<_> = (0..2)
+            .flat_map(|writer| {
+                (0..32).map(move |record| {
+                    (
+                        format!("old/{writer}/{record}/quoted\"\nλ"),
+                        format!("new/{writer}/{record}/back\\slash"),
+                    )
+                })
+            })
+            .collect();
+        assert_eq!(actual, expected, "lost or altered journal records");
+        assert!(journal.ends_with('\n'));
+    }
+
+    // Catches: an empty start commit is called merged by no-op/patch heuristics.
+    #[test]
+    fn empty_start_commit_is_not_merge_evidence_2475() {
+        let mut failures = Vec::new();
+        for advance_default in [false, true] {
+            let (_temp, repo, _) = workspace_fixture();
+            let wt = add_worktree(&repo, "fresh-empty");
+            git_cmd(&wt)
+                .args(["commit", "--allow-empty", "-m", "start agent work"])
+                .run()
+                .unwrap();
+            if advance_default {
+                commit_file(&repo, "later.txt", "unrelated default work\n");
+            }
+            let verdict =
+                branch_integration_with_pr(&repo, "fresh-empty", |_, _, _| false).unwrap();
+            let lifecycle = inspect_workspace_lifecycle(&repo, "fresh-empty");
+            let merged = crate::git::get_merged_branches_impl(&repo).unwrap();
+            if verdict.integrated
+                || lifecycle.commit_status != WorkspaceCommitStatus::Unmerged
+                || merged.iter().any(|branch| branch == "fresh-empty")
+            {
+                failures.push(format!("advance_default={advance_default}: {verdict:?}; {lifecycle:?}; merged={merged:?}"));
+            }
+            assert!(wt.exists());
+        }
+        assert!(failures.is_empty(), "{}", failures.join("\n"));
+    }
+
     // Catches: bare metadata becomes a missing checkout, including through a linked base.
     #[test]
     fn bare_main_entry_has_no_missing_checkout_diagnostic() {
