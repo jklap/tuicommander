@@ -54,7 +54,7 @@
 {"fixture":"src-tauri/src/fixtures/agent_prompts/ego-mcp-questions-2088-2089.tcap","events":187}
 {"fixture":"src-tauri/src/fixtures/agent_prompts/ego-multiple-120-1973.tcap","events":28}
 {"fixture":"src-tauri/src/fixtures/agent_prompts/ego-multiple-44-1973.tcap","events":32}
-{"fixture":"src-tauri/src/fixtures/agent_prompts/ego-native-questions-2028.tcap","events":443}
+{"fixture":"src-tauri/src/fixtures/agent_prompts/ego-native-questions-2028.tcap","events":445}
 {"fixture":"src-tauri/src/fixtures/agent_prompts/ego-provider-failed-idle-2317.tcap","events":62}
 {"fixture":"src-tauri/src/fixtures/agent_prompts/ego-provider-failure-2335.tcap","events":19}
 {"fixture":"src-tauri/src/fixtures/agent_prompts/ego-provider-failure-approval-2317.tcap","events":26}
@@ -66,6 +66,8 @@
 {"fixture":"src-tauri/src/fixtures/agent_prompts/ego-single-question-20261012.tcap","events":20}
 {"fixture":"src-tauri/src/fixtures/agent_prompts/ego-slash-filter-2030.tcap","events":47}
 {"fixture":"src-tauri/src/fixtures/agent_prompts/ego-slash-zero-2030.tcap","events":38}
+{"fixture":"src-tauri/src/fixtures/agent_prompts/ego-trust-2461.tcap","events":8}
+{"fixture":"src-tauri/src/fixtures/agent_prompts/ego-trust-short-2461.tcap","events":8}
 {"fixture":"src-tauri/src/fixtures/agent_prompts/ego-wrapped-approval-2102.tcap","events":86}
 {"fixture":"src-tauri/src/fixtures/agent_prompts/goose-1.49.0-idle.tcap","events":97}
 {"fixture":"src-tauri/src/fixtures/agent_prompts/goose-1.49.0-interrupted.tcap","events":80}
