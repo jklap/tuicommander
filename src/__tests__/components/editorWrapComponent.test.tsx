@@ -5,6 +5,7 @@ import { CodeEditorTab } from "../../components/CodeEditorPanel/CodeEditorTab";
 import { changesField } from "../../components/CodeEditorPanel/gitGutter";
 import { editorTabsStore } from "../../stores/editorTabs";
 import { uiStore } from "../../stores/ui";
+import { nextAnimationFrame } from "../helpers/animationFrame";
 
 vi.hoisted(() => {
 	Object.defineProperty(navigator, "platform", { configurable: true, value: "Win32" });
@@ -26,7 +27,9 @@ beforeEach(() => {
 	uiStore._testCancelPendingSave();
 });
 
-afterEach(() => {
+afterEach(async () => {
+	// Let real editor measurement/focus frames settle after the test unmounts.
+	await nextAnimationFrame();
 	uiStore._testCancelPendingSave();
 	document.body.innerHTML = "";
 });

@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from "@solidjs/testing-library";
+import { fireEvent, render, screen, waitFor } from "@solidjs/testing-library";
 import { describe, expect, it, vi } from "vitest";
 
 vi.mock("../../invoke", () => ({ invoke: vi.fn().mockResolvedValue([]) }));
@@ -14,9 +14,11 @@ describe("shared branch actions", () => {
 		expect(grouping).toHaveAttribute("aria-pressed", "false");
 		fireEvent.click(screen.getByTitle("New branch"));
 		expect(screen.getByPlaceholderText("New branch name...")).toBeInTheDocument();
+		await waitFor(() => expect(document.activeElement).toBe(screen.getByPlaceholderText("New branch name...")));
 		fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
 		expect(screen.queryByPlaceholderText("New branch name...")).not.toBeInTheDocument();
 		fireEvent.click(screen.getByTitle("New branch"));
+		await waitFor(() => expect(document.activeElement).toBe(screen.getByPlaceholderText("New branch name...")));
 		fireEvent.keyDown(screen.getByPlaceholderText("New branch name..."), { key: "Escape" });
 		expect(screen.queryByPlaceholderText("New branch name...")).not.toBeInTheDocument();
 	});
