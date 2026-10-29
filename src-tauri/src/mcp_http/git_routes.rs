@@ -448,7 +448,7 @@ pub(super) async fn file_blame_http(Query(q): Query<FileBlameQuery>) -> Response
 // Reads call the cfg_attr commands / *_impl fns directly; mutations call the
 // non-gated *_impl + invalidate_repo_caches (mirroring the desktop wrappers).
 // update_from_base / switch_branch / merge_and_archive_worktree are intentionally
-// NOT mapped here (see todo.md). run_diff_triage used to be on that list; it went
+// NOT mapped here. run_diff_triage used to be on that list; it went
 // with the embedded AI engine (#784-0aec).
 
 pub(super) async fn get_gutter_changes_http(Query(q): Query<GitGutterQuery>) -> Response {

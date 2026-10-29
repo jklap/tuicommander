@@ -2888,7 +2888,7 @@ pub(super) fn finalize_spawn_args(
 /// `agent_type` gates the Claude-only flags: `--print` and `--output-format` are
 /// understood only by the `claude` CLI. For any other agent (codex, gemini,
 /// goose, …) they are DROPPED with a `warn` — injecting them makes the child
-/// clap-exit 2 and the spawn silently fails (todo.md O5). `--model` is generic
+/// clap-exit 2 and the spawn silently fails. `--model` is generic
 /// and passed through for every agent.
 ///
 /// Placement: when `default_template` is true (args came from
