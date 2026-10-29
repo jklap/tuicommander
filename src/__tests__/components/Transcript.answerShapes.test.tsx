@@ -108,3 +108,12 @@ it("rules a nested marked item without ruling its parent or sibling", async () =
 	expect(container.querySelector("blockquote li")?.textContent).toContain("💬 quoted item");
 	expect(container.querySelector("pre")?.textContent).toContain("💬 literal");
 });
+
+// Catches: independently marked items retaining inner rules rather than the list gutter.
+it.each(["-", "1."])("shares one outer rule for an entirely marked %s list", async (bullet) => {
+	const { container } = await show(`${bullet} 💬 First answer.\n${bullet} 💬 Second answer.`);
+	const list = container.querySelector("ul, ol")!;
+	expect(list.getAttribute("data-tuic-answer")).toBe("end");
+	expect(Array.from(list.children).map((item) => item.hasAttribute("data-tuic-answer"))).toEqual([false, false]);
+	expect(list.textContent).not.toContain("💬");
+});
