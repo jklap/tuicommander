@@ -65,8 +65,8 @@ import { toastsStore } from "../../stores/toasts";
 import { uiStore } from "../../stores/ui";
 import * as transport from "../../transport";
 import { keyFor } from "../../utils/hotkey";
-import { adoptSuspendedSession } from "../../utils/suspendedSessions";
 import { ptyCaptureStore } from "../../utils/ptyCapture";
+import { adoptSuspendedSession } from "../../utils/suspendedSessions";
 
 describe("TabBar", () => {
 	beforeEach(() => {
