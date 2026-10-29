@@ -32,12 +32,23 @@ window.setTerminalGeometry = (mode, context) => {
 };
 
 // Catches: Chat adds its own switch row, Context text overlaps the switch,
-// or removing that row lets no-Context chat content run beneath the controls.
+// removing that row lets no-Context chat content run beneath the controls,
+// or a 44px touch switch overflows the collapsed or expanded Context header.
 // Run in real Chrome through agent-browser; jsdom cannot measure layout.
 window.assertTerminalViewAlignment = () => {
   const failures = [];
   const results = [];
-  for (const hasContext of [true, false]) {
+  for (const context of ["collapsed", "expanded", "absent"]) {
+    const hasContext = context !== "absent";
+    // Remount Context so each case starts from its real collapsed state.
+    setContext(false);
+    setContext(hasContext);
+    if (context === "expanded") {
+      const bar = document.querySelector(`.${prompt.bar}`);
+      // Measure final layout, not the optional max-height animation.
+      bar.style.transition = "none";
+      bar.click();
+    }
     const modes = [];
     for (const mode of ['cli', 'chat']) {
       window.setTerminalGeometry(mode, hasContext);
@@ -51,15 +62,17 @@ window.assertTerminalViewAlignment = () => {
         if (toggle.bottom > bar.bottom - 1) failures.push(`${mode}: switch crosses Context divider`);
         if (text.right > toggle.left) failures.push(`${mode}: Context text runs under switch`);
         if (Math.abs(toggle.top - bar.top - 2) > 0.5) failures.push(`${mode}: switch has a separate row above Context`);
-      } else if (content.top < toggle.bottom) failures.push(`${mode}: content runs under switch without Context`);
-      if (toggle.height !== 22) failures.push(`${mode}: switch lost shared desktop toolbar height`);
-      modes.push({mode,top:toggle.top,left:toggle.left,contentTop:content.top,contextTop:bar?.top});
+      }
+      if (content.top < toggle.bottom) failures.push(`${mode}: content runs under switch with Context ${context}`);
+      const expectedHeight = window.innerWidth <= 600 ? 44 : 22;
+      if (toggle.height !== expectedHeight) failures.push(`${mode}: switch lost shared ${expectedHeight}px control height`);
+      modes.push({mode,top:toggle.top,left:toggle.left,bottom:toggle.bottom,height:toggle.height,contentTop:content.top,contextTop:bar?.top});
     }
     const [cli, chat] = modes;
     for (const key of ['top', 'left', 'contentTop', 'contextTop']) {
-      if (cli[key] !== chat[key]) failures.push(`context=${hasContext}: ${key} changes between modes (${cli[key]} / ${chat[key]})`);
+      if (cli[key] !== chat[key]) failures.push(`context=${context}: ${key} changes between modes (${cli[key]} / ${chat[key]})`);
     }
-    results.push({context:hasContext,modes});
+    results.push({context,modes});
   }
   window.setTerminalGeometry('cli', true);
   if (failures.length) throw new Error(failures.join('; '));
