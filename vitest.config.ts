@@ -89,13 +89,16 @@ export default defineConfig({
       // them again if a change makes CI red. Re-measured 2026-10-08 on the tree that replays
       // wip onto main (main had kept the never-enforced 80s; wip's 65/61/57/63 were measured
       // on wip alone): a clean-env `vitest run --coverage` over 766 files / 11,376 tests
-      // measured lines 79.99%, statements 77.57%, functions 76.95%, branches 71.21%. Floors
-      // below are each value minus one point, rounded down.
+      // measured lines 79.99%, statements 77.57%, functions 76.95%, branches 71.21%.
+      // Re-measured 2026-10-29 on the 2026-10-27 replay of wip-squashed onto main
+      // (1,088 files / 14,039 tests, mdKanban.test.ts excluded for the plugins-pin
+      // divergence): lines 86.3%, statements 84.43%, functions 84.79%, branches 76.7%.
+      // Floors below are each value minus one point, rounded down.
       thresholds: {
-        lines: 78,
-        functions: 75,
-        branches: 70,
-        statements: 76,
+        lines: 85,
+        functions: 83,
+        branches: 75,
+        statements: 83,
       },
     },
   },
