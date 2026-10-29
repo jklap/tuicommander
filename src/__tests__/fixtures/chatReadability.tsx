@@ -40,6 +40,14 @@ const entries: AcpTranscriptEntry[] = [
 		text: "💬 The answer includes these details:\n- First detail stays inside the answer indent.\n- Second detail wraps naturally when the conversation is narrow.\n  - Nested detail keeps its normal indent.\n\nUnmarked prose must not acquire an answer rule.\n\n💬 Ordered details:\n1. First ordered detail.\n2. Second ordered detail.\n\n> A real quotation keeps its own border.\n\n💬 Code follows:\n```txt\nexample\n```",
 	},
 ];
+entries.push(
+	{
+		id: "marked-list",
+		kind: "agent",
+		text: "💬 Answer paragraph reference.\n\nSeparate list:\n\n- 💬 First marked answer.\n- 💬 Second marked answer wraps naturally on the phone.\n\n1. 💬 First ordered answer.\n2. 💬 Second ordered answer.",
+	},
+	{ id: "mixed-list", kind: "agent", text: "Mixed list:\n\n- 💬 Marked mixed answer.\n- Unmarked mixed sibling." },
+);
 render(
 	() => (
 		<main>
@@ -95,6 +103,24 @@ render(
 			marker: getComputedStyle(item, "::marker").color,
 		};
 	});
+	const answerLists = Array.from(document.querySelectorAll<HTMLElement>("#terminal ul, #terminal ol"))
+		.filter(
+			(list) =>
+				list.textContent?.includes("marked answer") ||
+				list.textContent?.includes("ordered answer") ||
+				list.textContent?.includes("mixed answer"),
+		)
+		.map((list) => ({
+			listBorder: parseFloat(getComputedStyle(list).borderLeftWidth),
+			ruleLeft: list.getBoundingClientRect().left,
+			items: Array.from(list.children).map((item) => ({
+				border: parseFloat(getComputedStyle(item).borderLeftWidth),
+				left: item.getBoundingClientRect().left,
+			})),
+		}));
+	const reference = Array.from(document.querySelectorAll("#terminal p")).find(
+		(p) => p.textContent === "Answer paragraph reference.",
+	)!;
 	const unmarked = Array.from(document.querySelectorAll("#terminal p")).find((p) =>
 		p.textContent?.startsWith("Unmarked"),
 	)!;
@@ -105,5 +131,7 @@ render(
 		acp: sample("#acp"),
 		lists,
 		unmarkedBorder: getComputedStyle(unmarked).borderLeftWidth,
+		answerLists,
+		paragraphRuleLeft: reference.getBoundingClientRect().left,
 	};
 };

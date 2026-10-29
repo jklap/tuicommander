@@ -29,7 +29,7 @@ describe.skipIf(!url)("browser-rendered Chat readability", () => {
 	it("keeps answer list markers inside the text inset — catches list markers drawn over the rule", () => {
 		expect(appearances).toHaveLength(4);
 		for (const appearance of appearances) {
-			expect(appearance.lists.map((list) => list.tag)).toEqual(["UL", "OL"]);
+			expect(appearance.lists.slice(0, 2).map((list) => list.tag)).toEqual(["UL", "OL"]);
 			expect(parseFloat(appearance.unmarkedBorder)).toBe(0);
 			for (const list of appearance.lists) {
 				expect(list.border).toBe(3);
@@ -39,6 +39,27 @@ describe.skipIf(!url)("browser-rendered Chat readability", () => {
 				expect.soft(list.itemLeft - list.ruleRight).toBeGreaterThanOrEqual(13 + 2 * list.font);
 				expect(list.textLeft).toBeGreaterThanOrEqual(list.itemLeft);
 			}
+		}
+	});
+	it("aligns per-item answer lists with the paragraph rule — catches rules drawn after bullets", () => {
+		for (const appearance of appearances) {
+			expect(appearance.answerLists).toHaveLength(3);
+			for (const list of appearance.answerLists.slice(0, 2)) {
+				expect.soft(list.listBorder, JSON.stringify(appearance)).toBe(3);
+				expect.soft(list.ruleLeft).toBe(appearance.paragraphRuleLeft);
+				for (const item of list.items) {
+					expect.soft(item.border).toBe(0);
+					expect.soft(item.left - list.ruleLeft).toBeGreaterThanOrEqual(44);
+				}
+			}
+		}
+	});
+
+	it("leaves unmarked mixed-list siblings unruled — catches whole-list answer promotion", () => {
+		for (const appearance of appearances) {
+			const mixed = appearance.answerLists[2];
+			expect(mixed.listBorder).toBe(0);
+			expect(mixed.items.map((item) => item.border)).toEqual([3, 0]);
 		}
 	});
 });
