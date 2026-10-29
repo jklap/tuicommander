@@ -20,9 +20,10 @@ gix = { version = "0.89", default-features = false, features = [
     "parallel",
 ] }
 # `gix::diff::blob`'s unified-diff printer types need gix-imara-diff's own
-# `unified_diff` feature, which gix-diff does not forward (same reason as the
-# app crate's direct dependency); used by `diff_options`.
-gix-imara-diff = { version = "0.2.3", default-features = false, features = ["unified_diff"] }
+# `unified_diff` feature, which gix-diff does not forward; used by
+# `diff_options`. Must stay on the same minor as gix-diff's own copy (gix 0.89 →
+# gix-diff 0.69 → 0.3) so the feature unifies onto that one crate.
+gix-imara-diff = { version = "0.3", default-features = false, features = ["unified_diff"] }
 hex = "0.4"
 moka = { version = "0.12", features = ["sync"] }
 serde = { version = "1", features = ["derive"] }
