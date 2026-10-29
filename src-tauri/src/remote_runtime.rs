@@ -5021,28 +5021,45 @@ mod tests {
     /// at all: it sat in `Error` until a person pressed Connect. Measured on a
     /// live instance — mac-mint answered 200 throughout while the app showed it
     /// unreachable for forty minutes.
+    // Catches: a failed first attempt leaves no supervisor making real requests.
     #[tokio::test]
     async fn a_connect_that_fails_still_leaves_something_retrying() {
         let state = test_state();
-        // A port nothing answers on, so the attempt fails at connect time rather
-        // than on a status code — the same shape as a machine that is asleep.
-        let id = direct_connection(&state, "http://127.0.0.1:1");
+        let mut events = state.event_bus.subscribe();
+        let listener = Arc::new(tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap());
+        let id = direct_connection(
+            &state,
+            &format!("http://{}", listener.local_addr().unwrap()),
+        );
+        // Fail the explicit attempt, then hold the retry's TCP connection open.
+        // Accepting that connection orders the observation after the supervisor
+        // has reclaimed Connecting, without depending on refusal latency.
+        let first_listener = listener.clone();
+        let first = tokio::spawn(async move {
+            let (socket, _) = first_listener.accept().await.unwrap();
+            drop(socket);
+        });
 
         connect(&state, &id).await.unwrap_err();
-
-        assert_eq!(state.remote.status_of(&id), RemoteStatus::Error);
+        first.await.unwrap();
+        let (_retry, _) = listener.accept().await.unwrap();
+        let statuses = drain_statuses(&mut events);
         let supervising = state
             .remote
             .entries
             .get(&id)
             .and_then(|e| e.supervisor.as_ref().map(|h| !h.is_finished()));
+        teardown(&state, &id);
+
+        // connect returns this attempt's error, not a frozen runtime snapshot:
+        // the supervisor may already be retrying before the caller resumes.
+        assert_eq!(statuses, ["connecting", "error", "connecting"]);
         assert_eq!(
             supervising,
             Some(true),
             "a failed connect left nothing to try again, so the machine can only \
              come back if a person notices the red badge"
         );
-        teardown(&state, &id);
     }
 
     /// Registered means wanted: nothing used to connect a remote machine at boot.
