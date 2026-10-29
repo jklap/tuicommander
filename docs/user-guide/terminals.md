@@ -75,7 +75,7 @@ Terminals are **never unmounted** from the DOM. When you switch branches or tabs
 
 ### CLI / Chat view
 
-On desktop, returning from Chat to CLI focuses the terminal input. You can type immediately after using the switch, closing Chat Compose, answering in CLI, or falling back from unavailable Chat. Hidden terminals do not take focus.
+On desktop, returning from Chat to CLI focuses the terminal input. You can type immediately after using the switch, closing Chat Compose, answering in CLI, or falling back from unavailable Chat. Only the active terminal restores focus, and an automatic fallback does not take the caret from an editable field outside that terminal.
 
 Session Chat shows a pulsing **Working…** row after Send and while the terminal reports busy. It disappears when the terminal reports idle or awaits a question or permission answer. Desktop and mobile use the existing session state; Chat does not infer activity from the conversation text.
 

@@ -93,6 +93,7 @@ function addTerminal() {
 		awaitingInput: null,
 	});
 	terminalsStore.update(id, { agentType: "claude", agentSessionId: "uuid" });
+	terminalsStore.setActive(id);
 	return id;
 }
 

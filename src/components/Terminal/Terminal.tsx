@@ -237,7 +237,12 @@ export const Terminal: Component<TerminalProps> = (props) => {
 			chatSearchRef?.close();
 			if (active) setComposeFocusRequest((n) => n + 1);
 			// One return path for the switch, native answers and unavailable Chat.
-			else if (wasActive && isVisible()) canvasTerminalRef()?.focus();
+			else if (wasActive && isVisible() && terminalsStore.state.activeId === props.id) {
+				const focused = document.activeElement;
+				// An asynchronous fallback must not redirect another editor's typing to the PTY.
+				if (focused?.matches("input, textarea, [contenteditable='true']") && !containerRef?.contains(focused)) return;
+				canvasTerminalRef()?.focus();
+			}
 		}),
 	);
 	/** After a send, an unpinned composer is done; a pinned one keeps the caret. */
