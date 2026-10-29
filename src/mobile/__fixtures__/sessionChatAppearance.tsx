@@ -1,5 +1,6 @@
 /** Layout-only session Chat: production transcript, switch and input components.
  * Text is synthetic presentation input, not evidence of an agent transport. */
+import { createSignal, Show } from "solid-js";
 import { render } from "solid-js/web";
 import commander from "../../../src-tauri/src/themes/commander.json";
 import paper from "../../../src-tauri/src/themes/vscode-light.json";
@@ -11,11 +12,37 @@ import reading from "../../components/Terminal/TerminalChatView.module.css";
 import type { AcpTranscriptEntry } from "../../stores/acpTranscript";
 import { terminalsStore } from "../../stores/terminals";
 import { CommandInput } from "../components/CommandInput";
+import { QueuedPrompts } from "../components/QueuedPrompts";
 import { useSessionChatView } from "../components/useSessionChatView";
 
 async function mount() {
 	const params = new URLSearchParams(location.search);
 	const mobile = params.has("mobile");
+	const [queueCount, setQueueCount] = createSignal(params.has("queued") ? 1 : 0);
+	if (params.has("queued")) {
+		// Synthetic layout data for our own queue API, never a live agent claim.
+		const fetch = window.fetch.bind(window);
+		window.fetch = async (input, init) => {
+			if (!String(input).includes("/sessions/appearance-only/queue")) return fetch(input, init);
+			if (init?.method === "DELETE") setQueueCount(0);
+			return new Response(
+				JSON.stringify(
+					init?.method === "DELETE"
+						? true
+						: queueCount()
+							? [
+									{
+										id: 1,
+										kind: "user_command",
+										text: "Review the migration and check backward compatibility before the next release.",
+									},
+								]
+							: [],
+				),
+				{ headers: { "content-type": "application/json" } },
+			);
+		};
+	}
 	if (mobile) await import("../mobile.css");
 	else {
 		await import("../../global.css");
@@ -99,6 +126,9 @@ async function mount() {
 						observeToolDuration={false}
 					/>
 				</div>
+				<Show when={mobile && params.has("queued")}>
+					<QueuedPrompts sessionId="appearance-only" count={queueCount()} revision={0} />
+				</Show>
 				{mobile ? (
 					<CommandInput sessionId="appearance-only" sessionExists={false} />
 				) : (

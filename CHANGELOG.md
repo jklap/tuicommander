@@ -8,6 +8,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- Add temporary, opt-in mobile Send press diagnostics with bounded event timing and viewport metadata mirrored to the host log, without draft text (#2462-5839).
+- Show queued prompt text in mobile terminal CLI and Chat, including prompts queued from CLI or desktop, with Cancel and Clear all actions (#2463-ad1c).
+
 - Show the Archive workspace safety checklist with backend file, commit and open-session counts. Disable Delete on failed checks and keep dirty or unmerged work when Archive is selected (#2453-2ec7).
 
 - Add default-off incoming PR reviews with durable per-head deduplication, stale-result suppression and host-only COMMENT publication pinned to the GitHub SHA; never retry uncertain review writes (#2327-1ca0).
@@ -22,6 +25,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - Normalize redundant leading slashes in native file-tab URLs before storing the path, so Copy Path uses `~/…` for home files (#2466-7f4f).
 
+- Reconcile the first mobile composer edit with an existing terminal draft so dictated text does not silently append to a hidden slash command. Render Claude slash-command user messages as a command chip and arguments instead of raw XML (#2460-5a96).
 - Keep the mobile CLI/Chat header selection visibly aligned with the open view, including session entry and reconnects (#2459-a5af).
 
 - Preserve unchanged sibling worktree monitoring snapshots after Windows Git-directory metadata notifications, without suppressing child index/ref/config changes (#2310-6e76).

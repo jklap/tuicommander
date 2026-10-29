@@ -2,6 +2,7 @@
 
 AI Chat shares the active conversation across desktop and mobile for the configured host workspace. The last saved selection wins; reconnect catches up. Open-tab layout, drafts and the session CLI | Chat switch remain per device.
 
+- **Mobile Chat queue** — Terminal CLI and Chat show pending prompt text and a Queued count above the input, including CLI/desktop additions. Cancel one prompt or clear the queue; delivered entries disappear (#2463-ad1c).
 - **Session Chat working feedback** — Desktop and mobile show **Working…** from Send through existing terminal busy state; native questions and permissions take precedence (#2397-06b6).
 
 AI Chat automatically connects on opening, restores the selected conversation, and keeps its transcript visible when stopped. Retry after a failed initial connection starts connecting without Send (#2407-84f5). Session model changes keep the same conversation; the global default affects new ego runs only (#2404-e946).
@@ -216,6 +217,7 @@ Right-click an HTTP(S) terminal link (including localhost) and choose **Start in
 
 - **Remote replay health** — Stream failure, unreadable frames and initial replay stalls show a persistent error toast. Reconnect success requires a delivered frame; healthy idle terminals have no output-silence deadline.
 
+- **Mobile dictated drafts** — The first local edit replaces any different draft in the current terminal input snapshot, without importing that draft into the mobile composer. The slash quick key inserts `/` only when tapped; it is not a modifier. Claude slash-command messages display their command name and arguments rather than transcript XML.
 - **Mobile Claude CLI / Chat** — Switch in the existing session header; the composer and terminal stream stay mounted. Both desktop and mobile let the backend decide Claude transcript binding and show a notice when unavailable. Returning to CLI follows the latest output. Fresh session snapshots clear stale agent/question controls after exit, including when the output socket pauses; the composer then targets the remaining shell.
 - **CLI / Chat view** — Claude, Grok, Codex and ego terminals switch between the grid and a conversation view with docked Compose input, built from the agent's session file (Grok: its `chat_history.jsonl`, bound only through the exact `active_sessions.json` registry entry; including older prompts, human text/image follow-ups queued while Claude is busy, replies, folded tool cards, image/PDF markers and model-change cards). ego uses the exact live PID-to-lease session binding and the documented `ego export --format transcript --after` contract, not private conversation storage. Completed messages and tool lifecycle updates use the shared ticker; goal continuations and compaction checkpoints are notices. An ego executable with transcript v1 support must be configured. Desktop and mobile support Claude, Grok, Codex and ego Chat. The grid is hidden, never unmounted.
 
@@ -2581,6 +2583,8 @@ partial work, and their child processes may continue.
 - Use to diagnose which agent/terminal is driving high CPU or memory
 
 ### 20.11 Runtime Diagnostics (CPU watchdog + diagnostic mode)
+
+- **Temporary mobile Send traces:** the existing `perfDebug` gate enables one metadata-only `mobile-send` debug summary per terminal-composer press, mirrored to the host log. Event retention is capped at 24 records with a five-second deadline. No draft or DOM text is recorded. See [Temporary Send diagnostics](user-guide/remote-access.md#temporary-send-diagnostics) (#2462-5839).
 
 - **Persistent stall evidence:** selected slow refresh, UI freeze and heartbeat-gap observations use a bounded two-file metadata-only journal. The replay builder creates anonymized count-based inputs, not a reconstruction of the original stall. See [Stall journal](backend/stall-journal.md).
 - **Always-on CPU watchdog** (zero overhead when idle): polls `getrusage(RUSAGE_SELF)` every 5s and logs a full snapshot when TUIC's own CPU stays above 80% for 10+ consecutive seconds. PTY children (cargo, rustc, …) are separate OS processes and don't count toward the measurement

@@ -173,7 +173,7 @@ the shared file opens as an AI Chat draft. iOS Safari currently requires the
 **+ → Attach file** because it does not support Web Share Target.
 The + menu also offers **Queue** in terminals, **Commands (/)** in agent terminals, and **Park draft / Restore parked draft / Swap parked
 draft** in AI Chat. Chat shows **Queue** and **Stop** while a turn is running.
-Terminal long-press on Send still opens Queue. Terminal parking is not offered:
+Terminal long-press on Send still opens Queue. In terminal **CLI** and **Chat**, a **Queued** list above the input shows the pending prompt text, including prompts queued in CLI or on desktop. Entries disappear when delivered. Tap **Cancel** to remove one or **Clear all** to empty the queue. Ordinary **Send** still submits now; switching to Chat does not change that. Terminal parking is not offered:
 the existing parked-draft store belongs to AI Chat. Tap outside the menu or
 press Escape to close it. Desktop AI Chat and Ctrl+S retain their controls.
 
@@ -245,6 +245,26 @@ checks the resumed shell after an animation frame. A missing warning does not
 prove that the document or compositor was healthy. The reported iPhone grey
 screen still needs evidence from the failing device; these diagnostics do not
 claim to fix it.
+
+### Temporary Send diagnostics
+
+While investigating #2462-5839, the terminal composer can record one bounded
+`debug` log per Send press with source `mobile-send`. It uses the existing
+`perfDebug` gate: development builds default to on; release builds default to off.
+To enable it on the affected phone, run
+`localStorage.setItem("tuic.perfDebug", "true")` in that page's Web Inspector,
+then reload. Set the value to `"false"` and reload to stop capture. Enabling it
+on the desktop does not enable it on the phone.
+
+Read the host log with `GET /logs?level=debug&source=mobile-send`. Each summary
+includes ordered pointer/touch/click timings, held/timer flags, whether `send()`
+was called, and active element kind, visual viewport height/offset and Send bounds
+at pointerdown and click. It never includes draft text, DOM text or session names.
+The recorder retains at most 24 events per press, preserving the first and newest
+events and reporting any dropped count. It emits after a 400 ms release/click
+settling window, on the next press or unmount, or after a five-second deadline for
+an abandoned press. This is diagnostic evidence, not a fix for the reported missed
+taps. A deadline or truncated event sequence is not proof that no later click occurred.
 
 ### Mobile Features
 Tap the attachment icon to the left of the session input to choose a photo or file. The
