@@ -930,12 +930,12 @@ This replaced the previous `maybe_reset_tuic_session` approach, which wrote `exp
 
 A debounce (`last_session_conflict_mark`) prevents creating multiple flag files within a short window for the same session.
 
-## Ctrl-U Prefix Handling
+## No Ctrl-U Prefix (Injected Text Is Appended)
 
-Single-key PTY writes that should clear the current input line prepend `\x15` (Ctrl-U) on POSIX shells. The selection is **shell-family aware**, not host-platform aware: the detected shell (`bash`/`zsh`/`fish` → POSIX, `powershell`/`cmd` → Windows) drives the choice. Mixing PowerShell on macOS or a POSIX shell via WSL/MSYS now behaves correctly. Native Windows shells skip the prefix entirely to avoid inserting a literal `^U`.
+TUICommander never sends a Ctrl-U (`\x15`) before injected text — not from the frontend helpers, not from the backend's `write_agent_command_with_boundary` (MCP/HTTP `session submit`, inbox wakes, deferred prompts, queued commands, dictation). Injected text is **appended** to whatever the input line already holds; it never replaces it (user decision, dropped-items #16). Automated submits that must not merge into a half-typed line are refused up front instead (`partial_composer` in `agent_composer_rejection`; dictation's `Draft` hold; the deferred-prompt watchdog's half-typed-line refusal). Main used to clear the line with a Ctrl-U in its own write; never reintroduce one bundled into the text — Claude Code strips a Ctrl-U inside a long chunk as an invisible character and then refuses the Enter. `ShellFamily`/`get_session_shell_family` remain as an informational classification (it only ever decided whether to skip that prefix on cmd/PowerShell).
 
 Frontend input helpers route through `src/utils/sendCommand.ts`:
-- `sendCommand(fn, text)` — full command: `Ctrl-U` (family-gated) + text + `\r`. With an agent attached, Ctrl-U precedes text by 50 ms. Enter follows text by 200 ms for Codex and 50 ms for other known agents. If the type is unknown but a non-shell process owns the foreground, the frontend uses agent framing and the 200 ms gap; a failed foreground probe keeps shell framing and delays Enter. Claude Code strips a Ctrl-U inside a long pasted text; Codex suppresses Enter for 120 ms after a paste burst.
+- `sendCommand(fn, text)` — full command: text + `\r` (the `shellFamily` argument is accepted but no longer changes the bytes). Enter follows text by 200 ms for Codex and 50 ms for other known agents. If the type is unknown but a non-shell process owns the foreground, the frontend uses agent framing and the 200 ms gap; a failed foreground probe keeps shell framing and delays Enter. Codex suppresses Enter for 120 ms after a paste burst.
 - `sendPtyKey(fn, key)` — pass-through single key/escape sequence. No prefix, no trailing CR. Use for `ChoicePrompt` option keys, TUI app navigation, and any raw-stdin interaction.
 
 `agentInputPayload` and Rust's agent submission profile frame Claude text above
@@ -1039,6 +1039,8 @@ TUIC_CAPTURE_CORPUS="$HOME/Library/Application Support/com.tuic.commander/captur
 Captures hold real session content and are not committed; the harness measures them in place. Replay fidelity is bounded by the fixed 41×128 grid it reconstructs — a session recorded at another width wraps differently, which moves chrome detection.
 
 **Safety consumers:** For agents with a verified screen adapter, peer-message injection and Unix auto-standby require confirmed idle (explicit Stop/OSC or stable ready screen). A silence-only idle can update the cosmetic state but cannot type into or `SIGSTOP` a potentially working agent. Agents without an adapter retain the legacy heuristic behavior until their UI is characterized.
+
+**Standby stops two process groups, not one.** `standby_session` SIGSTOPs the terminal's foreground group and, when it differs, the PTY shell's own group (`pty.rs` `standby_groups`). Stopping only the foreground group freezes the agent but not its parent: an interactive job-control shell is told its child stopped, prints `suspended`, and takes the terminal back, so a parked Claude tab shows a bare prompt where the agent was, and a later SIGCONT resumes the agent as a *background* job (it errors out or stops on its next terminal read) — it looks killed. Measured with a throwaway zsh and `cat -u`: foreground-only STOP left `tpgid` at the shell and the CONT made `cat` die with `Interrupted system call`; stopping the shell group first and waking the foreground group first left `cat` the foreground job throughout. So the shell is stopped FIRST (it cannot react) and the foreground group second, with a rollback that continues the shell if the second stop fails; `wake_session` continues the foreground group first and the shell second, and continues the shell even when the first fails. A session whose foreground group is the shell (an idle prompt, or an agent exec'd in place of the shell) has one group and is signalled once, as before. **The checker is `standby_tick(state, now_ms)`**, one pass with the clock injected (`spawn_standby_checker` only runs it every 30 s), so the whole decision — hidden, settled, idle shell, confirmed agent idle, no background work, idle for the full timeout, timeout 0 wakes everything, orphan visibility entries pruned — is covered end to end in `pty/tests.rs` (and once through the real timer loop). Every wake caller is covered too: focus (`apply_session_visibility`), `resume_pty` (`resume_pty_core`), the MCP `send` handler, the orchestrator mail wake and `wake_all_standby`. Regression test: `standby_and_wake_keep_a_foreground_job_in_the_foreground_under_an_interactive_shell` (a real interactive bash; `ForegroundIdentityProbe` cannot show this because its `bash -c` parent never takes the terminal back).
 
 **Task lifecycle is separate from shell activity:** `shell_state=idle` means the
 PTY is quiet; it does not prove that the assigned task finished. An agent's
@@ -1250,7 +1252,7 @@ Queued confirmation waits run per session so a silent agent does not block other
 requires a confirmed-idle managed agent, an empty composer, no confident
 dialog, and an empty shared injection FIFO. It never adds itself to that FIFO.
 The claim marks the session BUSY before any bytes; one PTY writer guard then
-spans Ctrl-U, a 50 ms gap, the text in optional bracketed paste, a second
+spans the text in optional bracketed paste (no Ctrl-U: it is appended), a
 gap (200 ms for Codex or an undetected agent type, 50 ms for known other agents), and CR, so
 neither raw input nor a peer can splice the command. A peer arriving after the
 claim queues; a peer that claims first makes submission reject.

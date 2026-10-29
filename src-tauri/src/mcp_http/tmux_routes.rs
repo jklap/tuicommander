@@ -2152,6 +2152,7 @@ mod tests {
         let created: serde_json::Value = serde_json::from_slice(&body).unwrap();
         let pane_id = created["pane_id"].as_str().unwrap().to_string();
 
+        let started = std::time::Instant::now();
         let materialized = materialize_pane(
             State(state.clone()),
             Path(pane_id),
@@ -2163,6 +2164,7 @@ mod tests {
         )
         .await
         .into_response();
+        let elapsed = started.elapsed();
         assert_eq!(materialized.status(), StatusCode::OK);
         let body = axum::body::to_bytes(materialized.into_body(), usize::MAX)
             .await
@@ -2175,11 +2177,16 @@ mod tests {
             .shell_states
             .get(tuic_session_id)
             .map(|v| v.load(std::sync::atomic::Ordering::Relaxed));
-        assert_eq!(
-            shell_state,
-            Some(crate::pty::SHELL_IDLE),
+        // Idle, or the gate waited out its whole fail-open bound: a loaded
+        // machine (the full suite) can keep a shell in startup that long.
+        // Without the gate, materialize returns at once with the shell not idle.
+        let bound = std::time::Duration::from_millis(
+            crate::mcp_http::mcp_transport::SHELL_READINESS_TIMEOUT_MS,
+        );
+        assert!(
+            shell_state == Some(crate::pty::SHELL_IDLE) || elapsed >= bound,
             "materialize must not return until the spawned shell reaches SHELL_IDLE \
-             (or the gate times out, which a real quick shell here should not hit)"
+             or the gate times out (shell {shell_state:?} after {elapsed:?})"
         );
     }
 

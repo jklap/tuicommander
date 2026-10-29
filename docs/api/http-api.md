@@ -708,7 +708,10 @@ the oldest evicted); `visible: false` drops it at once. `visible: true` also wak
 `wake: false` — the frontend's 30 s keep-alive sends `wake: false`, skips while its document
 is hidden or its window unfocused, sends `visible: false` when the document hides and a waking
 `visible: true` on focus, so a minimised client's session can still reach standby. The desktop
-`set_session_visible` command takes the same optional `wake`.
+`set_session_visible` command takes the same optional `wake`. `:id` must be a **PTY session id**,
+never a frontend terminal-store id: a `visible: true` for an id that names no session is logged as a
+warning and not recorded (teardown only reaps the entries of ids that were real sessions), and the
+standby sweeper prunes any entry whose session no longer exists. The route still answers `ok`.
 
 The `/agents/map`, `/agents/map/data` and `/agents/map/prompt` routes were
 removed on 2026-09-23. The Progress Flow view (`/progress/flow`, see Project
@@ -722,12 +725,13 @@ payload raw (`tauri::ipc::Response`), and `rpcImpl` decides between
 `arrayBuffer()` and `json()` on the content-type alone. An empty body means "no
 such session or range" — a valid empty chunk, not an error.
 
-`shell-family` classifies the session's shell so the client picks the right control
-sequences (Ctrl-U is line-kill under POSIX readline, a literal character on
-`cmd.exe`/PowerShell). It answers the bare value, **not** a `{field}` wrapper,
+`shell-family` classifies the session's shell (`posix`, `windows-native`,
+`unknown`). It is informational: it used to decide whether `sendCommand` skipped
+its Ctrl-U prefix on `cmd.exe`/PowerShell, and TUICommander no longer sends a
+Ctrl-U at all. It answers the bare value, **not** a `{field}` wrapper,
 because `get_session_shell_family` returns `Option<ShellFamily>` bare over IPC and
 `src/utils/sendCommand.ts` reads both transports with the same code. An unknown
-session is `null`, which is the same "fall back to the host default" answer.
+session is `null`.
 
 Read-only PTY/terminal state mirroring the desktop Tauri commands (story 062). The
 `{field}`-wrapped responses are unwrapped by the frontend transport to match the

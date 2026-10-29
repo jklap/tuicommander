@@ -80,6 +80,8 @@ export interface ActiveSessionInfo {
 	/** The name was given by the agent spawn that created the session, and no
 	 *  user rename has replaced it. The agent's own OSC title must not override it. */
 	display_name_from_spawn?: boolean;
+	/** SIGSTOP'd by auto-standby; absent when the session is running. */
+	standby?: boolean;
 	is_remote: boolean;
 	/** Session (or `$TUIC_SESSION`) of the agent that spawned this one. Only the
 	 *  resolved id is sent — never an unregistered caller's placeholder. */
