@@ -6,6 +6,7 @@ import { appLogger } from "../../stores/appLogger";
 import { dictationStore } from "../../stores/dictation";
 import { terminalsStore } from "../../stores/terminals";
 import { toastsStore } from "../../stores/toasts";
+import { nextAnimationFrame } from "../helpers/animationFrame";
 import { mockInvoke } from "../mocks/tauri";
 
 function deferred<T>() {
@@ -87,7 +88,9 @@ describe("dictation delivery target", () => {
 		await dictationStore.saveConfig({ auto_send: false });
 		hook = useDictation({ pty: { write }, dictation: recording, setStatusInfo: status, openSettings: vi.fn() });
 	});
-	afterEach(() => {
+	afterEach(async () => {
+		// Delivery restores PTY focus in a frame after handleDictationStop resolves.
+		await nextAnimationFrame();
 		for (const view of views.splice(0)) view.destroy();
 		document.body.replaceChildren();
 		vi.restoreAllMocks();

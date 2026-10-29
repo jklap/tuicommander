@@ -63,8 +63,10 @@ vi.mock("../../../invoke", () => ({
 
 import { Terminal } from "../../../components/Terminal/Terminal";
 import { acpTranscript } from "../../../stores/acpTranscript";
+import { appLogger } from "../../../stores/appLogger";
 import { chatViewKey, chatViewStore } from "../../../stores/chatView";
 import { terminalsStore } from "../../../stores/terminals";
+import { nextAnimationFrame } from "../../helpers/animationFrame";
 
 afterEach(() => {
 	cleanup();
@@ -74,6 +76,9 @@ afterEach(() => {
 describe("visible terminal view search", () => {
 	// Catches: Cmd+F searches the hidden canvas instead of the visible transcript.
 	it("searches chat text, highlights and scrolls next/previous, and clears on mode switch", async () => {
+		// Waiting for focus also lets normal PTY startup telemetry run; it is outside Find.
+		vi.spyOn(appLogger, "info").mockImplementation(() => {});
+		vi.spyOn(appLogger.diag, "info").mockImplementation(() => {});
 		vi.spyOn(HTMLElement.prototype, "offsetWidth", "get").mockReturnValue(800);
 		vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockReturnValue(600);
 		const id = terminalsStore.add({
@@ -96,6 +101,8 @@ describe("visible terminal view search", () => {
 		]);
 		terminalsStore.get(id)?.ref?.openSearch();
 		const input = await view.findByRole("textbox", { name: "Find in chat" });
+		await nextAnimationFrame();
+		expect(document.activeElement).toBe(input);
 		fireEvent.input(input, { target: { value: "needle" } });
 		const scroll = vi.spyOn(HTMLElement.prototype, "scrollIntoView").mockImplementation(() => {});
 		fireEvent.keyDown(input, { key: "Enter" });
@@ -112,6 +119,8 @@ describe("visible terminal view search", () => {
 		expect(window.getSelection()?.toString()).toBe("");
 		terminalsStore.get(id)?.ref?.openSearch();
 		const cliInput = view.getByPlaceholderText("Find…");
+		await nextAnimationFrame();
+		expect(document.activeElement).toBe(cliInput);
 		fireEvent.input(cliInput, { target: { value: "cli needle" } });
 		await view.findByText("1 of 1");
 		expect(canvas.searchFind).toHaveBeenCalledWith("cli needle", false);
@@ -131,6 +140,8 @@ describe("visible terminal view search", () => {
 		]);
 		terminalsStore.get(id)?.ref?.openSearch();
 		const reopened = view.getByRole("textbox", { name: "Find in chat" });
+		await nextAnimationFrame();
+		expect(document.activeElement).toBe(reopened);
 		fireEvent.input(reopened, { target: { value: "needle" } });
 		fireEvent.keyDown(reopened, { key: "Enter", shiftKey: true });
 		expect(window.getSelection()?.anchorNode?.parentElement?.textContent).toContain("second needle");

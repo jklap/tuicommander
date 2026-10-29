@@ -1,7 +1,12 @@
-import { expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { IFRAME_EXTERNAL_LINK_SCRIPT } from "../../utils/iframeExternalLinks";
 
+afterEach(() => vi.restoreAllMocks());
+
 it("sends a clicked HTTPS link to the preview host and leaves a fragment inside the frame", () => {
+	// A detached happy-dom document opens a new window even for a fragment.
+	// Keep its native default action local while still asserting preventDefault below.
+	vi.spyOn(window, "open").mockReturnValue(null);
 	const doc = document.implementation.createHTMLDocument("Preview");
 	const postMessage = vi.fn();
 	const body = IFRAME_EXTERNAL_LINK_SCRIPT.slice(

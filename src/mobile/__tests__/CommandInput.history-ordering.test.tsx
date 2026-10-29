@@ -1,5 +1,6 @@
 import { cleanup, fireEvent, render, waitFor } from "@solidjs/testing-library";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { appLogger } from "../../stores/appLogger";
 import { rpc } from "../../transport";
 import { SessionDetailScreen } from "../screens/SessionDetailScreen";
 
@@ -28,6 +29,11 @@ vi.mock("../components/OutputView", () => ({
 		return <div>Terminal output</div>;
 	},
 }));
+
+beforeEach(() => {
+	// clearAllMocks preserves implementations; a deferred Up write must not leak into the next test.
+	vi.mocked(rpc).mockReset().mockResolvedValue(undefined);
+});
 
 afterEach(() => {
 	cleanup();
@@ -87,10 +93,14 @@ describe("history response ordering", () => {
 		await waitFor(() => expect(writes()).toEqual(["\x1b[A", "\x7f\x7f\x7fnew", "\r"]));
 	});
 	it("does not arm history after a failed Up write", async () => {
-		vi.mocked(rpc).mockRejectedValueOnce(new Error("write failed"));
+		const error = new Error("write failed");
+		const warning = vi.spyOn(appLogger, "warn").mockImplementation(() => {});
+		vi.mocked(rpc).mockImplementation((command, args) =>
+			command === "write_pty" && args?.data === "\x1b[A" ? Promise.reject(error) : Promise.resolve(undefined),
+		);
 		const view = mountSession();
 		fireEvent.click(view.getByRole("button", { name: "↑" }));
-		await Promise.resolve();
+		await waitFor(() => expect(warning).toHaveBeenCalledWith("network", "Failed to write to PTY", { error }));
 		receiveLine!("Computer, approva tu quelle");
 		expect((view.getByRole("textbox") as HTMLTextAreaElement).value).toBe("");
 	});
