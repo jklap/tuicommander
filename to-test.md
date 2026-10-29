@@ -1,3 +1,8 @@
+## Windows monitoring directory metadata (2310-6e76, round l) — Rust rebuild/restart required
+
+- [ ] Coordinator: confirm complete native Windows-x64 CI success after the directory-metadata repair. The raw-event replay proves the recorded event no longer rejects an unchanged status load; rb is not native Windows GREEN. Keep the original unchanged-sibling and tracked `target/tracked.txt` assertions and 20-second deadlines.
+- [ ] After Boss manually restarts a rebuilt `make dev` or installs `make build`, confirm an unchanged linked checkout retains its sidebar status while sibling Git activity occurs, and a tracked edit inside `target` still updates that checkout. Rust does not hot-reload; the daily app was not restarted.
+
 ## Windows CI repairs (2310-6e76, round g) — Rust rebuild/restart required
 
 - [ ] Coordinator: run the exact owner filter in `reports/2310-windows-ci-round-g.md` on native Windows. It covers all 24 failing owners, unchanged assertions/deadlines, profile decoding, workflow HTTP errors and gitconfig process-exit cleanup. rb RED and Linux Clippy are not native Windows GREEN.

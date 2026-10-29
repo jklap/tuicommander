@@ -152,15 +152,19 @@ impl StatusCache {
             .collect();
         let common = base.join(".git");
         for path in &event.paths {
-            // Windows reports parent-directory metadata changes for Git writes.
-            // Child events carry index/ref/config changes; directory metadata is
-            // not replacement and must not retire unchanged siblings' watches.
-            if path.starts_with(&common)
+            // Existing directory metadata is not a status change: recursive
+            // child events carry file/index/ref/config changes. Keep checkout
+            // roots and unmapped paths conservative for watch identity loss.
+            if !entries.iter().any(|(root, _)| path == root.as_path())
+                && (path.starts_with(&common)
+                    || entries
+                        .iter()
+                        .any(|(root, _)| path.starts_with(root.as_path())))
                 && crate::fs::is_directory_metadata_event(&event.kind, path)
             {
                 #[cfg(test)]
                 self.record(format!(
-                    "event decision=ignore Git directory metadata path={path:?}"
+                    "event decision=ignore directory metadata path={path:?}"
                 ));
                 continue;
             }
@@ -368,8 +372,8 @@ mod tests {
             ],
         );
         let cache = Arc::new(StatusCache::default());
-        // DEFERRED (2026-10-29) — the remaining Windows rescan has no raw-event
-        // attribution yet; keep the next failure's cache decisions and inputs.
+        // DEFERRED (2026-10-29) — native directory metadata is recorded, but its
+        // writer is not attributed; retain diagnostics for any different cause.
         cache.enable_diagnostics();
         let (tx, rx) = std::sync::mpsc::channel();
         let callback_cache = Arc::clone(&cache);
@@ -598,7 +602,101 @@ mod tests {
         assert_eq!(computations(&cache, &sibling), 4);
     }
 
-    /// Catches stale snapshots after tracked/ignored, rename, untracked and index writes.
+    /// Catches recorded Windows directory metadata rejecting an unchanged status load.
+    #[test]
+    fn monitoring_status_directory_metadata_during_load_preserves_snapshot() {
+        let (_guard, repo) = setup_test_repo_with_commit();
+        let repo = repo.canonicalize().unwrap();
+        let holder = tempfile::tempdir().unwrap();
+        let sibling = holder.path().canonicalize().unwrap().join("linked");
+        run_git(
+            &repo,
+            &[
+                "worktree",
+                "add",
+                "-b",
+                "directory-metadata",
+                sibling.to_str().unwrap(),
+            ],
+        );
+        for name in ["target", "source"] {
+            let directory = sibling.join(name);
+            std::fs::create_dir(&directory).unwrap();
+            let cache = StatusCache::default();
+            cache.set_watching(&repo, &repo, true);
+            cache.set_watching(&repo, &sibling, true);
+            // Native Windows run 40787712783: linked/target Modify(Any),
+            // no flags, arrives between initial computation and publication.
+            // Replay that boundary; source also rejects a target-name exception.
+            assert_eq!(
+                cache
+                    .read_with(&sibling, std::time::Instant::now(), || {
+                        changed(&cache, &repo, &directory);
+                    })
+                    .1
+                    .unwrap(),
+                0
+            );
+            assert_cli_status(&cache, &sibling);
+            assert_eq!(
+                computations(&cache, &sibling),
+                1,
+                "{name}: publication rejected"
+            );
+            changed(&cache, &repo, &directory);
+            assert_cli_status(&cache, &sibling);
+            assert_eq!(
+                computations(&cache, &sibling),
+                1,
+                "{name}: warm snapshot lost"
+            );
+        }
+    }
+
+    /// Catches filtering topology events or trusting missing/file paths as directory metadata.
+    #[test]
+    fn monitoring_status_directory_metadata_filter_keeps_mutating_events() {
+        use notify::EventKind;
+        use notify::event::{CreateKind, ModifyKind, RemoveKind, RenameMode};
+        let (_guard, repo) = setup_test_repo_with_commit();
+        let repo = repo.canonicalize().unwrap();
+        let directory = repo.join("directory");
+        std::fs::create_dir(&directory).unwrap();
+        let file = repo.join("file.txt");
+        std::fs::write(&file, "one\n").unwrap();
+        let missing = repo.join("missing");
+        for (path, kind) in [
+            (&directory, EventKind::Create(CreateKind::Folder)),
+            (&directory, EventKind::Remove(RemoveKind::Folder)),
+            (
+                &directory,
+                EventKind::Modify(ModifyKind::Name(RenameMode::Both)),
+            ),
+            (&missing, EventKind::Modify(ModifyKind::Any)),
+            (&file, EventKind::Modify(ModifyKind::Any)),
+        ] {
+            let cache = StatusCache::default();
+            cache.set_watching(&repo, &repo, true);
+            assert_cli_status(&cache, &repo);
+            let event = notify::Event::new(kind).add_path(path.clone());
+            assert!(cache.event(&repo, &event));
+            assert_cli_status(&cache, &repo);
+            assert_eq!(computations(&cache, &repo), 2, "{event:?}");
+        }
+        // An existing but unmapped directory is not authorized by this watcher.
+        let outside = tempfile::tempdir().unwrap();
+        let cache = StatusCache::default();
+        cache.set_watching(&repo, &repo, true);
+        assert_cli_status(&cache, &repo);
+        let event = notify::Event::new(EventKind::Modify(ModifyKind::Any))
+            .add_path(outside.path().canonicalize().unwrap());
+        assert!(!cache.event(&repo, &event));
+        assert_cli_status(&cache, &repo);
+        assert_cli_status(&cache, &repo);
+        assert_eq!(computations(&cache, &repo), 3);
+    }
+
+    /// Catches stale snapshots after tracked/ignored, rename, delete, untracked and index writes.
     #[test]
     fn monitoring_status_raw_events_cover_status_inputs_before_ignore_filtering() {
         let (_guard, repo) = setup_test_repo_with_commit();
@@ -636,6 +734,14 @@ mod tests {
         changed(&cache, &repo, &repo.join("untracked.txt"));
         assert_cli_status(&cache, &repo);
         assert_eq!(computations(&cache, &repo), 5);
+        std::fs::remove_file(repo.join("untracked.txt")).unwrap();
+        cache.event(
+            &repo,
+            &notify::Event::new(notify::EventKind::Remove(notify::event::RemoveKind::File))
+                .add_path(repo.join("untracked.txt")),
+        );
+        assert_cli_status(&cache, &repo);
+        assert_eq!(computations(&cache, &repo), 6);
     }
 
     /// Catches cache reuse after lost watching, replacement, explicit writes or TTL expiry.
