@@ -1,3 +1,7 @@
+## Deleted story project sync (2464-f86e) — Rust rebuild/restart required
+
+- [ ] After Boss manually restarts a rebuilt `make dev` or installs `make build`, confirm deleted project roots no longer produce repeated native-story mdkb warnings. Restored directories must resume syncing. Rust does not hot-reload; the daily app was not restarted.
+
 ## Mobile Sessions state filters (2458-ba9d)
 
 - [x] Worktree Vite and agent-browser at 390×844: toggle Working/Idle/Awaiting, combine states, select zero Awaiting without changing counter bounds, and intersect Working with API search. Five screenshots and browser assertions: `~/Gits/.tmp/results/tuic-2458-evidence/`. No daily app or backend was used.

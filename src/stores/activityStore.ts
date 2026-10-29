@@ -18,8 +18,15 @@ function toPersistedItems(items: ActivityItem[]): PersistedActivityItem[] {
 	return items.map(({ onClick: _, ...rest }) => rest);
 }
 
+let activityLoaded = false;
+let pendingActivitySave = false;
+
 /** Fire-and-forget persist to Rust backend */
 function persistActivityNow(items: ActivityItem[]): void {
+	if (!activityLoaded) {
+		pendingActivitySave = true;
+		return;
+	}
 	activityWriter.save(toPersistedItems(items)).catch((err) => appLogger.error("store", "Failed to save activity", err));
 }
 
@@ -66,6 +73,13 @@ function createActivityStore() {
 						}
 					}),
 				);
+			}
+			activityLoaded = true;
+			if (pendingActivitySave) {
+				pendingActivitySave = false;
+				if (saveActivityTimer) clearTimeout(saveActivityTimer);
+				saveActivityTimer = null;
+				persistActivityNow(state.items);
 			}
 		} catch (err) {
 			appLogger.debug("store", "Failed to hydrate activity", err);

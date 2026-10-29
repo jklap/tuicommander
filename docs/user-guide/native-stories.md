@@ -228,3 +228,5 @@ its story mutation still succeeds. Restoring an older story database can leave
 mdkb with a newer revision: this conflict is logged, not silently overwritten.
 The indexed update time begins at migration for existing stories; it does not
 claim to reconstruct historical transition times.
+
+Story search synchronization retains its durable ledger when a project directory is removed. Missing paths and paths replaced by files are skipped without RPC attempts or repeated warnings. Synchronization resumes automatically when the project directory exists again; other projects continue syncing.
