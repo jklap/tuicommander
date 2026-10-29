@@ -359,7 +359,13 @@ fn saved_run_output_has_no_terminal_escapes() {
         (
             "clean UTF-8 boundary",
             format!("\x1b[32m{}界end\x1b[0m", "a".repeat(262_143)),
-            "a".repeat(262_143),
+            format!("{}界end", "a".repeat(262_138)),
+            true,
+        ),
+        (
+            "tail starts inside UTF-8",
+            format!("x界{}", "a".repeat(262_142)),
+            "a".repeat(262_142),
             true,
         ),
         (

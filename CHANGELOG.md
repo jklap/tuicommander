@@ -23,7 +23,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
-- Save automation run output as plain text without terminal escape codes, and apply its byte limit after cleaning on a UTF-8 boundary (#2467-5cda).
+- Save automation run output as plain text without terminal escape codes, and retain the newest text within its byte limit after cleaning on a UTF-8 boundary (#2467-5cda).
 
 - Normalize redundant leading slashes in native file-tab URLs before storing the path, so Copy Path uses `~/…` for home files (#2466-7f4f).
 
