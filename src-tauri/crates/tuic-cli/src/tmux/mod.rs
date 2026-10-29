@@ -1431,6 +1431,112 @@ mod tests {
         assert_eq!(writes[1].1, "\r");
     }
 
+    /// Builds `new-session` + `split-window` (an eagerly materialized pane),
+    /// stamps what the app reports for that pane's foreground, and runs
+    /// `respawn-pane -k` against it. Returns the writes the backend saw.
+    fn respawn_k_against_split_pane(foreground_is_shell: Option<bool>) -> Vec<String> {
+        let backend = FakeBackend::default();
+        run(
+            &s(&[
+                "new-session",
+                "-d",
+                "-s",
+                "claude-swarm",
+                "-n",
+                "swarm-view",
+                "-P",
+                "-F",
+                "#{pane_id}",
+                "--",
+                "cat",
+            ]),
+            &backend,
+        );
+        let o = run(
+            &s(&[
+                "split-window",
+                "-d",
+                "-t",
+                "%0",
+                "-P",
+                "-F",
+                "#{pane_id}",
+                "--",
+                "cat",
+            ]),
+            &backend,
+        );
+        let teammate_pane = o.stdout[0].clone();
+        if let Some(flag) = foreground_is_shell {
+            for topo in backend.topology.borrow_mut().values_mut() {
+                for session in topo["sessions"].as_array_mut().unwrap() {
+                    for window in session["windows"].as_array_mut().unwrap() {
+                        for pane in window["panes"].as_array_mut().unwrap() {
+                            if pane["id"].as_str() == Some(teammate_pane.as_str()) {
+                                pane["foreground_is_shell"] = json!(flag);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        let o = run(
+            &s(&[
+                "respawn-pane",
+                "-k",
+                "-t",
+                &teammate_pane,
+                "--",
+                "echo",
+                "hi",
+            ]),
+            &backend,
+        );
+        assert_eq!(o.exit, 0);
+        let writes = backend
+            .writes
+            .borrow()
+            .iter()
+            .map(|(_, d)| d.clone())
+            .collect();
+        writes
+    }
+
+    #[test]
+    fn respawn_pane_never_interrupts_a_shell_that_still_owns_the_foreground() {
+        // A split-window pane is a bare shell. The app reports that shell as
+        // the foreground, so there is no job for `-k` to interrupt — and a ^C
+        // aimed at a shell still running its startup (direnv evaluating a slow
+        // `.envrc` from its precmd hook) kills that evaluation, so the agent
+        // launched next starts without the project's env
+        // (`direnv: error signal: killed`).
+        assert_eq!(
+            respawn_k_against_split_pane(Some(true)),
+            vec!["echo hi".to_string(), "\r".to_string()]
+        );
+    }
+
+    #[test]
+    fn respawn_pane_still_interrupts_a_real_foreground_job() {
+        // The app reports a job (not the shell) as the foreground: `-k` is
+        // supposed to interrupt it before the new command is typed.
+        assert_eq!(
+            respawn_k_against_split_pane(Some(false)),
+            vec!["\x03echo hi".to_string(), "\r".to_string()]
+        );
+    }
+
+    #[test]
+    fn respawn_pane_keeps_the_interrupt_when_the_app_cannot_tell() {
+        // An older app (or a lookup that failed) sends no `foreground_is_shell`.
+        // Unknown keeps the historical behavior rather than guessing there is
+        // nothing to interrupt.
+        assert_eq!(
+            respawn_k_against_split_pane(None),
+            vec!["\x03echo hi".to_string(), "\r".to_string()]
+        );
+    }
+
     #[test]
     #[serial_test::serial]
     fn new_session_without_dash_c_falls_back_to_the_real_cwd_not_none() {
