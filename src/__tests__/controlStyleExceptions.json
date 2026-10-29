@@ -32,13 +32,6 @@
     "reason": "Intentional specialized diagram label and expansion affordance; not a form or view-switch control."
   },
   {
-    "file": "src/mobile/components/HeroMetrics.module.css",
-    "rules": [
-      "[[],\".card\",[\"padding: 12px 8px\",\"border-radius: var(--radius-md)\",\"border: 1px solid var(--border)\"]]"
-    ],
-    "reason": "Intentional metric-card geometry shared by noninteractive cards and the Awaiting action; not a form-control size."
-  },
-  {
     "file": "src/mobile/components/CommandInput.module.css",
     "reason": "Native embedded composer layout (data-control-layout=composer), not a standalone form field; preserves content sizing and draft selection.",
     "rules": [

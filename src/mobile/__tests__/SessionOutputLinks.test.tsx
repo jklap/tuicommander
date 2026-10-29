@@ -69,6 +69,7 @@ beforeEach(async () => {
 			if (args?.cwd !== "/repo") return null;
 			return { absolute_path: "/repo/docs/guide.md", is_directory: false };
 		}
+		if (command === "list_queued_agent_commands") return [];
 		if (command === "load_repositories") return { repos: { "/repo": {} } };
 		if (command === "stat_path") return { exists: true, is_dir: false, size: guide.length };
 		if (command === "fs_read_file") {

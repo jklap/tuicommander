@@ -299,6 +299,11 @@ load through the authenticated `/fs/markdown-image` route.
 
 Desktop Markdown list comment actions use a shared gutter outside the outermost list, independent of item depth. Paragraph and heading actions retain their block-relative position.
 
+`QueuedPrompts` reads the host PTY FIFO for both mobile terminal modes. A 404 read
+without a pending count or accepted local enqueue leaves the optional queue view
+hidden, so older hosts do not add an error to every empty session. Other read
+failures, and 404 responses with known pending work, remain visible and retryable.
+
 `FilesScreen` receives the existing mobile session list and the originating session ID from `MobileApp`. Its Markdown review controls prefer the document opener from published desktop metadata, resolve the stable TUIC identity to a live repository agent, and preserve an explicit user choice. Without an opener, the originating mobile session remains the default; an unavailable opener falls back to the first eligible repository agent. The controls call `enqueue_agent_command` over HTTP. Desktop and mobile use `buildMarkdownReviewPrompt` for the same path, checkbox, and tweak-comment contract. Successful sends clear only the acknowledged review state; failed sends remain retryable.
 
 The embedded Progress list clamps long messages to four lines until More is
