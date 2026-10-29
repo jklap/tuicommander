@@ -363,6 +363,117 @@ async fn headless_credential_file_rotation_wins_after_automatic_update() {
     }
 }
 
+// Catches: a false file-source selection suppresses updater token forwarding,
+// losing authentication when the durable vault is gone before relaunch.
+#[cfg(unix)]
+#[tokio::test]
+async fn headless_update_without_credential_file_preserves_token_after_vault_loss() {
+    use sha2::{Digest, Sha256};
+    use std::os::unix::process::CommandExt;
+
+    let _ = rustls::crypto::ring::default_provider().install_default();
+    let env = IsolatedEnv::new();
+    env.seed_named_config_session_token(NAMED_ID, FORCED_VAULT_TOKEN);
+    // Update only this disposable executable, never the shared build artifact.
+    let executable = env._dir.path().join("tuic-remote");
+    fs::copy(env!("CARGO_BIN_EXE_tuic-remote"), &executable).unwrap();
+    let binary = fs::read(&executable).unwrap();
+    let digest = hex::encode(Sha256::digest(&binary));
+    let port = isolated_port();
+    let mut child = Command::new(&executable)
+        .args(["--instance", NAMED_ID, "--no-agent-configs"])
+        .env("TUIC_TEST_USE_FILE_VAULT", "1")
+        .env("HOME", &env.home)
+        .env("XDG_CONFIG_HOME", &env.config)
+        .env("APPDATA", &env.appdata)
+        .env("USERPROFILE", &env.userprofile)
+        .env("TUIC_PORT", port.to_string())
+        .env_remove("TUIC_PAIRING_TOKEN")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .process_group(0)
+        .spawn()
+        .unwrap();
+    let group = i32::try_from(child.id()).unwrap();
+    let result = std::panic::AssertUnwindSafe(async {
+        assert!(matches!(
+            wait_for_ready_or_exit(&mut child, port, READY_SETUP_TIMEOUT, |p| {
+                probe_authenticated_session_once(p, FORCED_VAULT_TOKEN)
+            }),
+            ReadinessOutcome::Ready
+        ));
+        // The daemon, not this test, migrated the plaintext token. A restart
+        // cannot recover it from config or the removed isolated debug vault.
+        let config = fs::read_to_string(env.named_config(NAMED_ID)).unwrap();
+        assert!(!config.contains(FORCED_VAULT_TOKEN));
+        fs::remove_file(env.named_vault(NAMED_ID)).unwrap();
+        let client = reqwest::Client::builder()
+            .timeout(READY_SETUP_TIMEOUT)
+            .build()
+            .unwrap();
+        let base = format!("http://127.0.0.1:{port}");
+        let health: serde_json::Value = client
+            .get(format!("{base}/health"))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        let response = client
+            .post(format!("{base}/remote/update"))
+            .header("Cookie", format!("tui-session={FORCED_VAULT_TOKEN}"))
+            .header("x-tuic-target", health["build"]["target"].as_str().unwrap())
+            .header("x-tuic-sha256", digest)
+            .header("x-tuic-confirmed-sessions", "0")
+            .body(binary)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), reqwest::StatusCode::ACCEPTED);
+        // Probing the unchanged token before the old process exits could pass
+        // against that old process, hiding a broken child environment.
+        let exit_deadline = Instant::now() + READY_SETUP_TIMEOUT;
+        loop {
+            if let Some(status) = child.try_wait().unwrap() {
+                assert!(status.success(), "original daemon failed during update");
+                break;
+            }
+            assert!(
+                Instant::now() < exit_deadline,
+                "original daemon did not exit after update"
+            );
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+        let ready_deadline = Instant::now() + READY_SETUP_TIMEOUT;
+        while !probe_authenticated_session_once(port, FORCED_VAULT_TOKEN) {
+            assert!(
+                Instant::now() < ready_deadline,
+                "automatic relaunch lost the session token without a selected credential file"
+            );
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+    });
+    use futures_util::FutureExt;
+    let outcome = result.catch_unwind().await;
+    // SAFETY: this test created and owns the daemon group, including its child.
+    unsafe {
+        libc::kill(-group, libc::SIGKILL);
+    }
+    let _ = child.wait();
+    if let Err(panic) = outcome {
+        let mut stderr = String::new();
+        child
+            .stderr
+            .take()
+            .unwrap()
+            .read_to_string(&mut stderr)
+            .unwrap();
+        panic!("isolated updater failed: {panic:?}; daemon stderr: {stderr}");
+    }
+}
+
 // Catches bad mounted data silently falling back to a keyring or empty vault.
 #[test]
 fn headless_credential_file_rejects_bad_input_without_secret_diagnostics() {

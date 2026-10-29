@@ -4549,12 +4549,12 @@ fn send_grid_frame_to_consumers(
         None => bytes,
     };
 
-    if !send_desktop {
-        return;
-    }
-
     #[cfg(feature = "desktop")]
     {
+        if !send_desktop {
+            return;
+        }
+
         // A closed gate means the WebView has not painted the frame before this
         // one. The ticker used to stop entirely here, which held the damage on
         // the vt but starved every browser subscriber; they keep receiving now,
