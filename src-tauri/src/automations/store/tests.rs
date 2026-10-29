@@ -279,7 +279,7 @@ fn saved_reports_bound_each_stream_and_keep_definition_snapshot_and_launch_point
     assert_eq!(result.stderr.len(), OUTPUT_LIMIT - 1);
     assert!(result.stdout_truncated && result.stderr_truncated);
     assert_eq!(result.duration_ms, 12);
-    assert_eq!(actual.stdout.text.len(), OUTPUT_LIMIT - 1);
+    assert_eq!(actual.stdout.text, format!("{}日", "a".repeat(262_141)));
     assert!(actual.stdout.truncated && actual.stderr.truncated);
     let precheck = actual.precheck.unwrap();
     assert_eq!(precheck.stdout.text.len(), OUTPUT_LIMIT - 1);
@@ -622,4 +622,49 @@ fn two_pushes_publish_one_review_for_latest_head() {
         );
     }
     assert_eq!(published, vec!["b".repeat(40)]);
+}
+
+// Catches: PTY tail policy changing non-PTY report or precheck prefix retention.
+#[test]
+fn output_budget_keeps_pty_tail_without_reversing_reports_or_prechecks() {
+    let (_dir, owner) = owner();
+    let store = owner.store();
+    let text = format!("start{}final", "x".repeat(400_000));
+    for session_id in [None, Some("owned".to_owned())] {
+        let run = manual(store, 1);
+        let expected = if session_id.is_some() {
+            format!("{}final", "x".repeat(262_139))
+        } else {
+            format!("start{}", "x".repeat(262_139))
+        };
+        let saved = store
+            .transition(
+                &run.id,
+                RunStatus::Completed,
+                RunDetails {
+                    session_id,
+                    stdout: Some(text.clone()),
+                    precheck: Some(SavedPrecheck {
+                        exit_code: Some(0),
+                        timed_out: false,
+                        stdout: SavedOutput {
+                            text: text.clone(),
+                            truncated: false,
+                        },
+                        stderr: SavedOutput::default(),
+                    }),
+                    ..Default::default()
+                },
+                2,
+            )
+            .unwrap();
+        assert_eq!(saved.stdout.text, expected);
+        assert!(saved.stdout.truncated);
+        let precheck = saved.precheck.unwrap();
+        assert_eq!(
+            precheck.stdout.text,
+            format!("start{}", "x".repeat(262_139))
+        );
+        assert!(precheck.stdout.truncated);
+    }
 }

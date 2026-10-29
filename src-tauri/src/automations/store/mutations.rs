@@ -74,7 +74,11 @@ impl RunStore {
             run.workspace_id = Some(value);
         }
         if let Some(value) = details.stdout {
-            run.stdout = SavedOutput::bounded(&value);
+            run.stdout = if run.session_id.is_some() {
+                SavedOutput::bounded_tail(&value)
+            } else {
+                SavedOutput::bounded(&value)
+            };
         }
         if let Some(value) = details.stderr {
             run.stderr = SavedOutput::bounded(&value);

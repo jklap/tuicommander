@@ -104,6 +104,18 @@ pub struct SavedOutput {
 }
 
 impl SavedOutput {
+    /// PTY snapshots retain the latest output, including the final report.
+    pub fn bounded_tail(text: &str) -> Self {
+        let mut start = text.len().saturating_sub(OUTPUT_LIMIT);
+        while !text.is_char_boundary(start) {
+            start += 1;
+        }
+        Self {
+            text: text[start..].into(),
+            truncated: start > 0,
+        }
+    }
+
     pub fn bounded(text: &str) -> Self {
         let mut end = text.len().min(OUTPUT_LIMIT);
         while !text.is_char_boundary(end) {

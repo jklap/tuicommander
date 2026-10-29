@@ -42,7 +42,6 @@ export function DetailHistory(props: { store: AutomationsStore }) {
 									{t("automations.openSession", "Open owning session")}
 								</Button>
 							</Show>
-							{/* DEFERRED (2026-10-10) — live browser screenshot verification timed out; coordinator must verify this run view before landing. */}
 							<Show when={run.stdout.text}>
 								<pre>{run.stdout.text}</pre>
 								<Show when={run.stdout.truncated}>

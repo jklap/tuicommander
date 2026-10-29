@@ -9779,6 +9779,7 @@ dependencies = [
  "tracing",
  "tracing-appender",
  "tracing-subscriber",
+ "tuic-ansi",
  "tuic-core",
  "tuic-dictation",
  "tuic-git",
