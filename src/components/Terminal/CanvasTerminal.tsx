@@ -92,6 +92,7 @@ import {
 	type CellMetrics,
 	type CursorShape,
 	clampRowRangeToViewport,
+	createFrameStarvationWatchdog,
 	createHiddenAckThrottle,
 	createLeadingThrottle,
 	type DecodedFrame,
@@ -191,6 +192,11 @@ export interface CanvasTerminalProps {
 	onResume?: () => void;
 	onResumeDismiss?: () => void;
 	hasPendingResume?: boolean;
+	/** True for an exit-sourced resume banner: click-only, stays until
+	 *  dismissed — keys pass straight through, none of the Space/Enter-accept
+	 *  or any-other-key-dismisses handling below applies. False (or absent)
+	 *  for the restore-time banner, which keeps that existing behavior. */
+	pendingResumeIsClickOnly?: boolean;
 	onCwdChange?: (id: string, cwd: string) => void;
 	onFocus?: () => void;
 	onRef?: (ref: CanvasTerminalRef) => void;
@@ -547,6 +553,51 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 	// The gate must reopen on this ack, not on the ticker deciding the frontend is
 	// stuck. The margin that buys is in HIDDEN_ACK_INTERVAL_MS — do not inline it.
 	const hiddenAck = createHiddenAckThrottle(ackFrame, HIDDEN_ACK_INTERVAL_MS);
+
+	/**
+	 * Rebuild this terminal's grid subscription. Shared by the reattach path
+	 * (`onRef.resubscribe`) and the starvation watchdog below.
+	 */
+	async function resubscribeGrid() {
+		// A pending hidden ack would report the old channel's receipt count
+		// against the fresh gate Rust installs on resubscribe.
+		hiddenAck.cancel();
+		framesReceived = 0;
+		awaitingFullFrame = false;
+		await transport?.resubscribe();
+		// A fresh (re)subscribe only carries new placements from here on —
+		// re-fetch the full set the same way the initial mount does.
+		imageLayer?.hydrate().then(() => {
+			const m = metrics();
+			if (!m) return;
+			switchToSplitCompositingIfNeeded(m);
+			if (currentFrame) repaintImages(currentFrame, m);
+		});
+	}
+
+	// A visible terminal that asked for a frame and got nothing back has a dead
+	// grid channel (Rust sends into a callback the webview no longer has, and
+	// nothing on either side reports it). Rebuild the subscription instead of
+	// sitting on a blank canvas forever. See createFrameStarvationWatchdog.
+	const frameWatchdog = createFrameStarvationWatchdog({
+		getReceived: () => framesReceived,
+		onStarved: () => {
+			if (!alive || hidden) return;
+			appLogger.warn("terminal", "No grid frame after a frame request — resubscribing", {
+				sessionId: props.sessionId,
+			});
+			return resubscribeGrid().catch((e) =>
+				appLogger.error("terminal", "Grid resubscribe after frame starvation failed", {
+					sessionId: props.sessionId,
+					error: String(e),
+				}),
+			);
+		},
+		onGiveUp: () =>
+			appLogger.error("terminal", "Grid channel still silent after resubscribing — giving up", {
+				sessionId: props.sessionId,
+			}),
+	});
 
 	function writePtyNoScroll(data: string) {
 		invokeRef?.("write_pty", { sessionId: props.sessionId, data }).catch((e) => {
@@ -1460,6 +1511,10 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 	let scrollbarMarksContainer: HTMLDivElement | null = null;
 	let lastScrollbarMarksKey = "";
 
+	// Force an immediate scrollbar-marks repaint on toggle — paintScrollbarMarks
+	// is otherwise only invoked from the frame-decode/scroll path. If a future
+	// mark type gets its own setting, it needs tracking here too, alongside its
+	// own branch in paintScrollbarMarks's memo key — the two must stay in sync.
 	createEffect(() => {
 		settingsStore.state.showScrollbarMarks;
 		settingsStore.state.showBlockMarks;
@@ -3193,6 +3248,8 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 					// Tauri publishes visibility before requesting its authoritative frame.
 					// WS has no visibility publication, so this component owns its request.
 					const requestShowFrame = () => {
+						// Either path expects a frame back; a dead grid channel never sends one.
+						frameWatchdog.arm();
 						if (transport?.setVisible) return;
 						noteFrameRequest();
 						invokeRef?.("terminal_request_frame", { sessionId: props.sessionId }).catch(
@@ -3216,6 +3273,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 					cancelSizeRetry = undefined;
 					recordWorkloadVisibility(props.sessionId, true);
 					transport?.setVisible?.(false);
+					frameWatchdog.cancel();
 					stopBlink();
 					// Shrink to free the backing store while hidden.
 					canvasRef.width = 1;
@@ -3398,8 +3456,11 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 				return;
 			}
 
-			// Resume banner: Space/Enter accept, other keys dismiss
-			if (props.hasPendingResume) {
+			// Resume banner: Space/Enter accept, other keys dismiss. Exit-sourced
+			// banners are click-only — this whole branch is skipped for them, so
+			// every key falls through to normal terminal input handling below
+			// while the banner stays up until explicitly clicked/dismissed.
+			if (props.hasPendingResume && !props.pendingResumeIsClickOnly) {
 				if (e.key === " " || e.key === "Enter") {
 					e.preventDefault();
 					props.onResume?.();
@@ -4289,6 +4350,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 				noteFrameRequest();
 				invokeRef?.("terminal_request_frame", { sessionId: props.sessionId }).catch(ipcErr("terminal_request_frame"));
 			}
+			if (!hidden) frameWatchdog.arm();
 			// Hydrate any placements that existed before this listener attached —
 			// the live "image-placement" event only carries new ones from here on.
 			imageLayer?.hydrate().then(() => {
@@ -4388,22 +4450,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 				remeasure();
 				invokeRef?.("terminal_request_frame", { sessionId: props.sessionId }).catch(ipcErr("terminal_request_frame"));
 			},
-			resubscribe: async () => {
-				// A pending hidden ack would report the old channel's receipt count
-				// against the fresh gate Rust installs on resubscribe.
-				hiddenAck.cancel();
-				framesReceived = 0;
-				awaitingFullFrame = false;
-				await transport?.resubscribe();
-				// A fresh (re)subscribe only carries new placements from here on —
-				// re-fetch the full set the same way the initial mount does.
-				imageLayer?.hydrate().then(() => {
-					const m = metrics();
-					if (!m) return;
-					switchToSplitCompositingIfNeeded(m);
-					if (currentFrame) repaintImages(currentFrame, m);
-				});
-			},
+			resubscribe: resubscribeGrid,
 			searchFind: async (query: string, blockScope?: boolean) => {
 				if (!query || !invokeRef) {
 					clearSearchState();
@@ -4505,21 +4552,8 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 		remeasure();
 	});
 
-	// Force an immediate scrollbar-marks repaint on toggle — paintScrollbarMarks
-	// is otherwise only invoked from the frame-decode/scroll path, so without
-	// this, flipping a setting wouldn't take visible effect until the next
-	// unrelated repaint. If a future mark type gets its own setting, it needs
-	// tracking here too, alongside its own placeholder branch in
-	// paintScrollbarMarks's memo key below — the two must stay in sync.
-	createEffect(() => {
-		settingsStore.state.showScrollbarMarks;
-		settingsStore.state.showBlockMarks;
-		settingsStore.state.showPromptMarks;
-		if (!alive || !currentFrame) return;
-		updateScrollbar(currentFrame);
-	});
-
-	// Same reasoning as the scrollbar-marks effect above, for the gutter-overlay
+	// Same reasoning as the scrollbar-marks repaint effect (next to
+	// paintScrollbarMarks), for the gutter-overlay
 	// settings: paintBlockTimestamps/paintFoldChevrons are only invoked from the
 	// frame-decode/scroll path, so toggling the timestamp mode or block folding
 	// on an otherwise-idle terminal wouldn't take visible effect until the next
@@ -4673,6 +4707,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 		}
 		clearSettlePending();
 		hiddenAck.cancel();
+		frameWatchdog.cancel();
 		if (reconcileTimer) clearTimeout(reconcileTimer);
 		clearTimeout(resizeDebounce);
 		cancelSizeRetry?.();

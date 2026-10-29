@@ -374,6 +374,15 @@ than flag:
   (`GridWatchFrame`); when the reader sees a gap it re-serializes the whole grid
   instead of forwarding a delta onto a row map with holes in it. The sequence
   never reaches the wire — the frame format is unchanged.
+- **A dead desktop channel is invisible to Rust.** `Channel::send` does not fail
+  when the JS callback it targets no longer exists in the webview (found
+  2026-10-06: Tauri logged `Couldn't find callback id N` every ~540 ms and one tab
+  stayed blank for good — the ticker kept sending, the gate timed out after 500 ms
+  and was abandoned, repeat). Only the receiver can notice, so
+  `CanvasTerminal`'s frame-starvation watchdog (`createFrameStarvationWatchdog`)
+  resubscribes a visible terminal that got no frame within 2 s of requesting one.
+  A fresh `subscribe_terminal_grid` installs a new gate and channel, which is what
+  heals it.
 - **Hidden terminals** decode each frame (the bell rides in the header) but ack
   on a 400 ms trailing timer, below the ticker's deadline: a background tab drops
   to ~2 frames/s without making the ticker's stuck-frontend warning fire.
@@ -473,6 +482,31 @@ impl Utf8ReadBuffer {
     fn flush(&mut self) -> String                     // Force-flush (lossy conversion)
 }
 ```
+
+#### A hook's OSC 7770 inside a character (`osc_interleave.rs`)
+
+The agent and its `tuic-hook` both write to the same PTY, and the kernel can cut a large agent
+write at any byte. When the hook's `ESC ] 7770 ; … ESC \` lands inside a multi-byte character
+(`E2 | OSC… | 94 80`), the lossy conversion used to turn it into three U+FFFD: one for `E2 ESC`,
+one for each orphan continuation byte. One cell became three, a full-width row overflowed by two,
+the overflow wrapped, and every row below slid down by one. Agents that repaint with relative
+cursor moves (Claude Code) then drew every later frame one row off. It reproduces with no resize at
+all.
+
+`Utf8ReadBuffer::push` now runs its input through `OscInterleaveGuard` first. A complete OSC 7770
+that arrives while a character still owes continuation bytes is held and released right after the
+character, so the converter sees it contiguous. Details worth knowing:
+
+- Only OSC 7770 is reordered — it is the one sequence TUIC injects into a PTY it does not own.
+  Any other sequence after a truncated character keeps its original order (and its U+FFFD).
+- A prefix cut by a read boundary (`ESC ] 77`) is carried to the next read like the OSC itself.
+- If the character never finishes (the next byte is not a continuation byte), or the held bytes
+  pass 16 KiB, or the stream ends, everything is released in its original order: nothing is lost.
+  16 KiB covers the largest write `tuic-hook` can make (ten free-text verbs, each cut at 512 bytes
+  and percent-encoded to up to 1536, about 15.6 KB); a test pins that it stays under the cap.
+- `tuic-hook` already emits all of its sequences in one `write_all`, so there is nothing to change
+  there: the split is inside the agent's write, not the hook's.
+- The raw ring, `.tcap` captures and the pre-conversion byte stream keep the original order.
 
 ### EscapeAwareBuffer
 

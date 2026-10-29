@@ -196,7 +196,26 @@ export interface TerminalData {
 	// because a shell alias hides both the binary and the env that locates the session.
 	agentLaunchCommand: string | null;
 	agentProvider: string | null; // Model provider the agent session runs on (ego: from its session manifest); shown in the tooltip
-	pendingResumeCommand: string | null; // Set at restore time, consumed on first shell idle
+	// Set either at restore time (a saved agent tab being brought back) or when
+	// a hook-instrumented Claude session exits in a live pane — see
+	// `pendingResumeSource` for which. Cleared by clicking the banner
+	// (resumes), clicking its ×, or (exit-sourced only) a new agent session
+	// starting in this pane. NOT auto-consumed on shell idle — despite this
+	// field's name, nothing clears it just because the shell went idle.
+	pendingResumeCommand: string | null;
+	// The resumable session's title, shown on the resume banner alongside the
+	// generic text (e.g. `Resume "file-locations" — click to resume`). `null`
+	// falls back to the banner's plain text.
+	pendingResumeTitle: string | null;
+	// Which flow produced `pendingResumeCommand` — controls the banner's key
+	// handling in CanvasTerminal: "restore" accepts Space/Enter and dismisses
+	// on any other key (existing behavior); "exit" is click-only and stays up
+	// until explicitly dismissed. `null` whenever `pendingResumeCommand` is null.
+	pendingResumeSource: "restore" | "exit" | null;
+	// The `resumable_session.session_id` already evaluated for an exit-sourced
+	// resume offer, so a repeated identical `session-state-changed` push (the
+	// snapshot doesn't change once taken) never re-triggers verification.
+	resumeOfferedFor: string | null;
 	pendingInitCommand: string | null; // Setup/run script to auto-execute on first shell idle
 	usageLimit: { percentage: number; limitType: string } | null; // Claude Code usage limit
 	lastDataAt: number | null; // Timestamp of last PTY output
@@ -211,6 +230,16 @@ export interface TerminalData {
 	isExternallyCreated: boolean; // Created via HTTP/MCP; owns cleanup, tab decoration and completion policy
 	exactAgentSessionId?: string | null; // Live backend hook evidence, never restored from persistence
 	agentSessionId: string | null; // Discovered agent session ID for exact resume (claude, gemini, codex, grok)
+	// True once `agentSessionId` was set from the backend's hook-reported
+	// `SessionState.agent_session_id` (issue #119's residual gap: exact by
+	// construction, tied to this exact pty's own OSC stream) rather than from
+	// disk-discovery's pid-registry/mtime-heuristic scan. While true,
+	// `detectAgentForTerminal` skips discovery entirely for this terminal —
+	// running it anyway risks the heuristic overwriting a known-correct id
+	// with a wrong one, or claiming an id another (non-hook) tab actually
+	// needs. Reset alongside `agentSessionId` wherever that field already
+	// clears on an agent-type transition.
+	agentSessionIdIsAuthoritative: boolean;
 	tuicSession: string | null; // Stable tab UUID — injected as TUIC_SESSION env var, persists across restarts
 	suggestedActions: string[] | null; // Follow-up suggestions from suggest: token
 	suggestDismissed: boolean; // true after user dismissed/selected/typed — resets on shell-state:idle
@@ -252,6 +281,9 @@ type TerminalCreateData = Omit<
 	| "agentLaunchCommand"
 	| "agentProvider"
 	| "pendingResumeCommand"
+	| "pendingResumeTitle"
+	| "pendingResumeSource"
+	| "resumeOfferedFor"
 	| "pendingInitCommand"
 	| "usageLimit"
 	| "lastDataAt"
@@ -266,6 +298,7 @@ type TerminalCreateData = Omit<
 	| "isExternallyCreated"
 	| "agentSessionId"
 	| "exactAgentSessionId"
+	| "agentSessionIdIsAuthoritative"
 	| "tuicSession"
 	| "suggestedActions"
 	| "suggestDismissed"
@@ -607,6 +640,9 @@ function createTerminalsStore() {
 				agentLaunchCommand: null,
 				agentProvider: null,
 				pendingResumeCommand: null,
+				pendingResumeTitle: null,
+				pendingResumeSource: null,
+				resumeOfferedFor: null,
 				pendingInitCommand: null,
 				usageLimit: null,
 				lastDataAt: null,
@@ -620,6 +656,7 @@ function createTerminalsStore() {
 				isRemote: false,
 				isExternallyCreated: false,
 				agentSessionId: null,
+				agentSessionIdIsAuthoritative: false,
 				tuicSession: null,
 				suggestedActions: null,
 				suggestDismissed: false,
@@ -668,6 +705,9 @@ function createTerminalsStore() {
 				agentLaunchCommand: null,
 				agentProvider: null,
 				pendingResumeCommand: null,
+				pendingResumeTitle: null,
+				pendingResumeSource: null,
+				resumeOfferedFor: null,
 				pendingInitCommand: null,
 				usageLimit: null,
 				lastDataAt: null,
@@ -681,6 +721,7 @@ function createTerminalsStore() {
 				isRemote: false,
 				isExternallyCreated: false,
 				agentSessionId: null,
+				agentSessionIdIsAuthoritative: false,
 				tuicSession: null,
 				suggestedActions: null,
 				suggestDismissed: false,
