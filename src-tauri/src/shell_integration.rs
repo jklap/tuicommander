@@ -1484,7 +1484,11 @@ mod tests {
                 .env_remove("TUIC_AGENT_INSTRUCTIONS_DIR")
                 .env_remove("TUIC_ATTACHMENTS_DIR")
                 .env_remove("GEMINI_CLI_TRUSTED_FOLDERS_PATH")
-                .env_remove("TUIC_AGENT_SHIM_DIR");
+                .env_remove("TUIC_AGENT_SHIM_DIR")
+                // A test run from inside a TUIC-spawned agent inherits this, and
+                // the shim then reads `instructions-<agent>-child.*`, which the
+                // fixtures never write: every injection case fails.
+                .env_remove("TUIC_SPAWNED_CHILD");
             for (key, value) in tuic_env {
                 cmd.env(key, value);
             }
