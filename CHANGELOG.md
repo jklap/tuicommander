@@ -8,6 +8,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- Add temporary, opt-in mobile Send press diagnostics with bounded event timing and viewport metadata mirrored to the host log, without draft text (#2462-5839).
 - Show queued prompt text in mobile terminal CLI and Chat, including prompts queued from CLI or desktop, with Cancel and Clear all actions (#2463-ad1c).
 
 - Show the Archive workspace safety checklist with backend file, commit and open-session counts. Disable Delete on failed checks and keep dirty or unmerged work when Archive is selected (#2453-2ec7).

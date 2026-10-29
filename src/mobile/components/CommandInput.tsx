@@ -16,6 +16,7 @@ import { ChoicePromptOverlay } from "./ChoicePromptOverlay";
 import styles from "./CommandInput.module.css";
 import { MobileComposerMenu } from "./MobileComposerMenu";
 import { MobileDictationButton } from "./MobileDictationButton";
+import { createMobileSendTrace } from "./mobileSendTrace";
 import { SlashMenuOverlay } from "./SlashMenuOverlay";
 import { type ComposerInputKey, computeInputDelta, isPostSendGuardActive, isSupersetEcho } from "./syncGuards";
 
@@ -62,6 +63,11 @@ export function CommandInput(props: CommandInputProps) {
 	const [queueMenu, setQueueMenu] = createSignal(false);
 	let pressTimer: ReturnType<typeof setTimeout> | undefined;
 	let held = false;
+	let sendButton: HTMLButtonElement | undefined;
+	const sendTrace = createMobileSendTrace(
+		() => sendButton,
+		() => ({ held, pressTimer: pressTimer !== undefined }),
+	);
 	function cancelPress() {
 		clearTimeout(pressTimer);
 		pressTimer = undefined;
@@ -74,6 +80,7 @@ export function CommandInput(props: CommandInputProps) {
 		pressTimer = setTimeout(() => {
 			held = true;
 			setQueueMenu(true);
+			sendTrace.record("queue-open");
 		}, 500);
 	}
 	async function queueDraft() {
@@ -340,6 +347,7 @@ export function CommandInput(props: CommandInputProps) {
 	}
 
 	async function send() {
+		sendTrace.record("send");
 		const text = (textareaEl?.value ?? value()).trim();
 		if (!text || props.sessionExists === false || submitting()) return;
 		const sessionId = props.sessionId;
@@ -562,15 +570,32 @@ export function CommandInput(props: CommandInputProps) {
 				disabled={props.sessionExists === false || submitting()}
 				aria-haspopup="menu"
 				aria-expanded={queueMenu()}
-				onPointerDown={startPress}
-				onPointerUp={cancelPress}
-				onPointerLeave={cancelPress}
-				onPointerCancel={() => {
+				ref={sendButton}
+				onPointerDown={(event) => {
+					startPress(event);
+					sendTrace.start(event);
+				}}
+				onPointerMove={(event) => sendTrace.record("pointermove", event)}
+				onPointerUp={(event) => {
+					cancelPress();
+					sendTrace.record("pointerup", event);
+				}}
+				onPointerLeave={(event) => {
+					cancelPress();
+					sendTrace.record("pointerleave", event);
+				}}
+				onPointerCancel={(event) => {
 					cancelPress();
 					held = true;
+					sendTrace.record("pointercancel", event);
 				}}
+				onTouchStart={(event) => sendTrace.record("touchstart", event)}
+				onTouchMove={(event) => sendTrace.record("touchmove", event)}
+				onTouchEnd={(event) => sendTrace.record("touchend", event)}
+				onTouchCancel={(event) => sendTrace.record("touchcancel", event)}
 				onContextMenu={(event) => event.preventDefault()}
-				onClick={() => {
+				onClick={(event) => {
+					sendTrace.record("click", event);
 					if (held) {
 						held = false;
 						return;

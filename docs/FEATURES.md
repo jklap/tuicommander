@@ -2583,6 +2583,8 @@ partial work, and their child processes may continue.
 
 ### 20.11 Runtime Diagnostics (CPU watchdog + diagnostic mode)
 
+- **Temporary mobile Send traces:** the existing `perfDebug` gate enables one metadata-only `mobile-send` debug summary per terminal-composer press, mirrored to the host log. Event retention is capped at 24 records with a five-second deadline. No draft or DOM text is recorded. See [Temporary Send diagnostics](user-guide/remote-access.md#temporary-send-diagnostics) (#2462-5839).
+
 - **Persistent stall evidence:** selected slow refresh, UI freeze and heartbeat-gap observations use a bounded two-file metadata-only journal. The replay builder creates anonymized count-based inputs, not a reconstruction of the original stall. See [Stall journal](backend/stall-journal.md).
 - **Always-on CPU watchdog** (zero overhead when idle): polls `getrusage(RUSAGE_SELF)` every 5s and logs a full snapshot when TUIC's own CPU stays above 80% for 10+ consecutive seconds. PTY children (cargo, rustc, …) are separate OS processes and don't count toward the measurement
 - **Sleep/wake aware**: inter-tick gaps over 30s are treated as the machine having been asleep (lid closed) and skipped, so stale tokio-timer ticks after wake don't trigger false spikes or idle cascades
