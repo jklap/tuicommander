@@ -41,6 +41,24 @@ exists in the main checkout** — resolve these paths against
 `/Users/jason.klapste/src/external/tuicommander/plans/`, not a worktree, even
 when you're doing the actual rebase work in a worktree.
 
+The largest effort so far (440 commits replayed one by one onto a `main` whose
+history had been rewritten, 2026-10-16..19) is documented in
+`plans/rebase-2026-10-wip-onto-main/`: start with its `README.md` (summary,
+assessment, lessons), then `post-replay-fixes.md` and `reviews.md`. Its
+`binding-decisions.md` and `rebase-agent-rules.md` are reusable templates for the
+agent files described under Strategy D, and `agent-final-reports/av_extract.py`
+recovers truncated subagent reports from AgentsView (see Strategy D).
+
+The 2026-10-27 re-org (`wip` 524 commits squashed by feature to ~124 on its own base, tree
+byte-identical, before rebasing) is documented in the `reorg-and-rebase-onto-main` skill.
+
+**Before you start: re-org first?** If `<branch>` has hundreds of commits over its merge base,
+or ledger noise dominates (a large share of its commits touch `CHANGELOG.md`/`to-test.md`/
+`docs/FEATURES.md`/`.gitignore`), run the `reorg-and-rebase-onto-main` skill first. It squashes
+the branch by feature on its current base with zero conflicts and an identical tree, collapses
+all ledger edits into one commit, then hands back to this skill (its Phase B) with far fewer
+stops.
+
 **Do all rebase work in a dedicated worktree, never the primary checkout.**
 Use the exact worktree path for every Read/Edit/Write/Bash call once you're in
 one — a stray `cd` back toward the main checkout silently propagates through
@@ -62,6 +80,24 @@ git log --oneline main..<branch> | wc -l     # commits only on <branch>
 git log --oneline <branch>..main | wc -l     # commits only on main
 git status                                    # note every untracked/modified path; don't touch anything you didn't create
 ```
+
+**Do not trust the local `origin/main`.** A failed `git fetch` is "unknown", not
+"nothing new". On the 2026-10 effort the only fetch failed with an access error,
+nobody checked, and the whole replay targeted a 3-day-old tracking ref while the
+remote `main` moved by 1,984 commits and 1,724 files (found only at the end, via
+`git ls-remote`). Before anything else, and again before every landing step and
+whenever a replay runs for more than a day, run
+
+```bash
+git ls-remote origin main        # live remote head, no ref is touched
+git rev-parse origin/main        # what you are about to target
+```
+
+and stop if they differ: re-fetch (confirm it succeeded, including the submodule
+part), re-run the recon against the real head, and tell the user how far `main`
+moved before spending hours on a stale base. Quote `main`'s hash explicitly in
+every verification command you save (`9110058f5..HEAD`, not `origin/main..HEAD`),
+because the tracking ref changes under you the moment someone fetches.
 
 Check for anything that needs special handling before you start:
 - **Submodule pointer drift** (`plugins`). If `<branch>`'s tip has a different
@@ -86,6 +122,31 @@ Check for anything that needs special handling before you start:
   nothing," which is alarming and wrong — `git rerere status`/`git rerere
   diff` (run from inside the worktree; they resolve the shared cache
   correctly) are the reliable way to check, not `ls`-ing a guessed path.
+
+### When `main` was rewritten (no common ancestor)
+
+If `git merge-base <branch> origin/main` prints nothing, `main`'s history was
+rewritten (every hash changed). The merge-base with a *backup* of the old `main`
+is NOT the fork point (it was `3cb194dcf`, which would have hidden about 400 of
+the 453 commits that really needed replaying, on the 2026-10 effort). Find the real one by content:
+
+```bash
+# one patch-id per non-merge commit, both sides (one stream each, fast)
+git log --no-merges -p --format='commit %H' <branch>       | git patch-id --stable > branch.pid
+git log --no-merges -p --format='commit %H' origin/main    | git patch-id --stable > main.pid
+# join on the patch-id column; ignore the all-zero id (empty commits)
+```
+
+The newest `<branch>` commit that has a twin on the rewritten `main` is the fork
+point; its twin is the base to use. Then **look at what the rewrite actually
+changed** with `git diff --stat <old-twin> <new-twin>`: on the 2026-10 effort it
+was 25 files, +25/-578 (a scrub of other products' names from docs, comments,
+README and the website), i.e. almost none of the later conflicts came from the
+rewrite itself. Commits whose subject matches a main commit but whose patch-id
+doesn't (ledger noise, scrub edits) are the "subject twins": treat them as
+already landed, not as work to replay. Check the twin pair also by tree
+(`git rev-parse <a>^{tree} <b>^{tree}` or the stat above), and note that merge
+commits often have a tree equal to one parent: pair on the non-merge twin.
 
 ## Step 1 — Conflict reconnaissance (before touching history)
 
@@ -152,6 +213,9 @@ is easy to miss because it looks like giving up on "doing it properly," but
 it is sometimes strictly the right call, and knowing that *before* sinking
 hours into a rebase attempt is the whole point of this step.
 
+A fourth shape, **Strategy D (pure commit-by-commit replay)**, applies when the user forbids
+merge and squash; it is described just before Step 2.5.
+
 **Ledger-noise-dominated, few real conflicts** (the `please-review-the-new-elegant-widget.md`
 shape — e.g. 6 conflicting files, ~45 more that are pure repeated noise from
 append-only files getting replayed commit-by-commit):
@@ -169,6 +233,9 @@ append-only files getting replayed commit-by-commit):
   into the shared `.git/info/attributes`.) Union merge is line-additive — it
   never conflicts, but it silently interleaves both sides' lines, including
   near-duplicates, and needs a real editorial pass afterward (Step 5).
+  **Alternative for a long branch:** the `reorg-and-rebase-onto-main` skill moves every
+  ledger edit into one ledgers commit before the rebase, so there is a single ledger stop to
+  resolve by hand and no union driver (or its editorial pass) is needed.
 - Disable rerere for the rebase itself: `git -c rerere.enabled=false rebase main`.
   With only a handful of real conflicts left after the union driver, rerere
   buys nothing and can replay a stale/wrong cached resolution from an earlier
@@ -287,6 +354,151 @@ single accumulated resolution doesn't already give you):
 If you're not sure which shape you're in, run Step 1's reconnaissance (and
 1.5's touch-count check) first — it tells you directly.
 
+### Two-stage plan for a large divergence: reconnect first, then catch up
+
+When the branch is far behind `main`, do not start by replaying onto `main`'s
+head. **Stage 1 reconnects at the equivalent of the original branch point**, which
+is cheap and checkable; Stage 2 brings the connected branch to the head.
+
+```bash
+git branch <name>-base <new-twin>                       # new branch at the twin (the user asked for it, so it is allowed)
+git -c submodule.recurse=false merge-tree --write-tree --name-only \
+    --merge-base=<old-base> <branch> <new-twin>          # rc 0 = the whole branch merges with no conflicts: expect that
+git -c submodule.recurse=false -c rerere.enabled=false rebase --onto <name>-base <old-base> <branch>
+git diff --stat <pre-rebase-tip> HEAD                    # must equal the rewrite's delta (the twin diff), nothing else
+```
+
+On the 2026-10 effort Stage 1 replayed 440 commits with zero conflicts and its
+tree differed from the old tip by exactly the 25-file rewrite delta. The trial
+merge against `main`'s *head* (52 conflicting files, 151 more both-touched) made
+the whole job look far worse than the connection step is; Stage 2 is where the
+real cost lives, so size it separately (Step 1) and decide its strategy then.
+
+### Pre-squashing `fixup!` commits (only when the user asks)
+
+`git rebase -i --autosquash <base>` with `GIT_SEQUENCE_EDITOR=true` squashes what
+it can, but moving a fixup far back across hundreds of commits conflicts when its
+hunks touch code that later commits introduced. Dry-run every fixup first, then
+squash the clean ones and leave the rest standalone:
+
+```bash
+# per fixup: apply it onto its target in isolation (needs the target subject in range)
+git merge-tree --write-tree --merge-base="$f^" "$target" "$f" >/dev/null && echo clean || echo CONFLICT
+# a GIT_SEQUENCE_EDITOR script that deletes the `fixup <hash>` line of each CONFLICT fixup and re-inserts it as
+# `pick <hash>` just before the next non-fixup pick of the original order keeps it standalone at its place
+```
+
+A fixup whose target commit does not exist anywhere in history (an orphaned
+`fixup!`) cannot be squashed: keep it. Autosquash reorders ledger files
+(CHANGELOG, to-test) and leaves duplicated blocks: restore both from the pre-squash
+tip in one explicit follow-up commit, then prove `git diff <pre-squash-tip> HEAD`
+is empty. Record the fixup → target map in the effort's `plans/` directory.
+
+The `reorg-and-rebase-onto-main` tool (`scripts/plan.py`) squashes `fixup!` commits with the
+same `git merge-tree` proof, automatically: a fixup joins its target's group and moves back
+only if it and everything after it still merge cleanly, else it stays in place. Ledgers are
+stripped at tree level first, so the autosquash ledger reordering above does not arise.
+
+### Strategy D — pure commit-by-commit replay (the user forbids merge and squash)
+
+Use when the user explicitly wants every commit preserved ("rebase, not merge, not squash").
+First done for `wip` (276 commits) onto a `main` that had restructured the codebase
+(new crates, workspace model, split settings); it worked, but cost many sessions. Shape that held up:
+
+- **Dedicated worktree** (`repo worktree_create` with an explicit `base_ref`), backup ref + raw hash first (Step 3),
+  `git -c submodule.recurse=false -c rerere.enabled=false rebase main` with a `break` after every pick.
+  Back up `git-rebase-todo` before editing it and re-verify the pick count afterwards.
+- **Batches of picks resolved by a subagent** (Opus for resolution), then a **read-only reviewer on a different model**
+  (Sonnet) per batch. Agents get a standing rules file (git flags, forbidden commands, logging format) and a
+  **binding-decisions file**. Ask the user the architectural questions ONCE, early (hook design, policy sections,
+  SSH/nested models, budgets), and record each answer as a USER DECISION that every later agent reads.
+- **Dual-landed features** (both sides built the same thing): adopt MAIN's design, port only wip's genuine delta,
+  and log exactly what was NOT carried over, verified against main's code and tests, not commit subjects.
+  Never silently drop wip work; never resurrect what main deliberately removed.
+- **"Clean" picks break about 1 in 4** (stale tests against a changed store/API, moved functions, headless-build breaks).
+  Spot-compile every pick (`cargo check -p <crate>`, targeted vitest, `tsc`), not just the conflicted ones.
+- **Resolve forward.** Do not skip+requeue, `reset`, `amend` or bulk `checkout --ours`/`restore`: the permission
+  classifier blocks them and variations are worse. Amend only your own new picks. If a command is denied, stop and report.
+- **Fix review findings as NEW fixup commits on top** (each small, red-green tested, citing the review finding), so each is
+  separately reviewable and droppable. Reword messages only once, as the LAST history operation (see Step 11a).
+- **Ledger files:** the union merge driver can garble DELETIONS in CHANGELOG/to-test/todo. After every pick check
+  `git show --numstat` for those files and re-apply the pick's own deletions.
+- **Orchestration shape that worked for 440 picks** (16 batches, ~25 picks each): one worktree means resolvers run
+  strictly one after another (Opus, with RULES.md + BINDING-DECISIONS.md + the log), and each finished batch is
+  reviewed in parallel with the next resolver by a read-only Sonnet reviewer that reads only **commit objects**
+  (`git -C <primary> show/range-diff/grep <hash>`; never `cd` into the busy worktree, never any mutating git command).
+  Pair originals and replays by position and confirm by subject. The cheap, high-yield check is the sorted multiset
+  of `+`/`-` lines of `git show -U0` per pair plus the file lists: identical pairs need no further reading, the few
+  that differ (moved code, deliberate resolutions) are where the findings were. Resolvers must stop at the end of their
+  range even if `rebase --continue` applies further picks cleanly; they report where it stopped and verify those extra
+  picks too. Spot-compile every pick individually: batching clean picks hid breakage twice.
+- **Registry of known intermediate failures.** Replaying one old commit at a time reproduces mid-history states the
+  original tip never had: about 15 failures (a vitest file, Rust fixtures, a doc-sync test, a lockfile not `--locked`
+  buildable) existed only until a LATER original pick fixed them. Keep them in the decisions file ("fails since pick N,
+  the original fixes it in <hash>"), tell resolvers not to fix them mid-replay (unless their own port caused it), and
+  re-verify the whole list with the final gate: a failure still red at the end is a real regression.
+- **Agent reports get truncated.** The result of a long final message reached the orchestrator cut off at ~4-5k
+  characters. Ask every agent for a SHORT report (table first, under ~700 words) and ask for the remainder via
+  SendMessage; do not just carry on. Every subagent is also its own archived session, so the full text is recoverable
+  later: `agentsview session list --project <p> --date-from <d> --include-children --json` (45 sessions listed that
+  way), then `agentsview session messages <session-id> --role assistant --json` and take the last long messages;
+  `plans/rebase-2026-10-wip-onto-main/agent-final-reports/av_extract.py` does it and labels each session from its
+  prompt. (The `agentsview-search-conversations` agent type needs the AgentsView MCP tools registered; if it fails
+  to start, use the CLI.) Digest each review into `plans/` as the batches finish, not at the end.
+- **Product/branding scrub policy.** If `main` was rewritten to scrub names, keep `main`'s neutral wording wherever a
+  conflict shows it, but do NOT scrub content the picks introduce while replaying: it causes later conflicts, and
+  renaming modules, test names or saved ids is a decision, not a port. Record the user's final call in the decisions file.
+- **Hand-written orchestrator artefacts.** Keep, as you go and under `plans/<effort>/`: `README.md` (summary and
+  assessment), `hash-map.txt` (original → replay by position, subjects checked), `rebase-log.md`, `reviews.md`,
+  `post-replay-fixes.md`, `binding-decisions.md`, `rebase-agent-rules.md` and `gate-logs/`. Writing them afterwards
+  from chat history, as was done in 2026-10, loses detail and needs the AgentsView recovery above.
+- **Agents never disable hooks or guards.** One resolver committed a pick with `-c core.hooksPath=/dev/null`; nothing
+  that the hooks cover was in that pick, but it is exactly the slip the rules forbid. Put "never `--no-verify`,
+  never touch `core.hooksPath`, never write to a literal `/tmp`" in the standing rules, and read final reports for
+  admissions of either.
+- Keep a per-commit resolution log (`plans/<name>/rebase-log.md`: conflicted files, resolution kind, rationale,
+  "wip behaviour NOT carried over") and a findings ledger; both feed Step 9.
+
+## Step 2.5 — Pre-flight the environment (before the first pick)
+
+Each of these silently invalidated work on the `wip` replay:
+
+- **Do hooks actually run?** `ls -l .git/hooks/` (or the worktree's hooks path): a dangling symlink to a deleted
+  worktree means pre-commit never ran, and agents' "hook passed" claims were all false. Re-run the repo's installer
+  (`scripts/hooks/install-hooks.sh`) with the user's OK, then prove it with a deliberately failing commit in a scratch repo.
+- **Global git config:** `git config --show-origin -l | grep -E 'merge.ff|submodule.recurse|rerere'`. `merge.ff=only`
+  breaks merges and several tests; `submodule.recurse=true` breaks `git grep <ref>` (use `--no-recurse-submodules`
+  or `:!plugins`) and makes tree commands touch the submodule.
+- **Disk:** a long replay plus cargo builds can hit ENOSPC mid-batch and wedge every Bash call. Check `df -h` first and
+  at each batch; nothing the agent did not create gets deleted to make room (ask).
+  **Clean up regularly, every couple of batches, not at the point of failure.** Measured 2026-10-17/18 on a 440-commit
+  replay: after ~254 picks the worktree's `src-tauri/target/debug/incremental` alone held ~132-161 GB (`debug/deps` another
+  ~114 GB, so ~250 GB total) and scratch export builds held ~36 GB more; the disk hit 100% mid-batch and the batch had to
+  stop with Rust checks unverified. Make this part of the loop:
+  1. Run replay builds with `CARGO_INCREMENTAL=0` (the incremental cache is what grows without bound across hundreds of
+     picks; the compiled dependencies in `debug/deps` are what keep rebuilds fast, so keep those).
+  2. Give scratch `git archive` export builds their OWN `CARGO_TARGET_DIR` under the scratchpad, never the worktree's
+     (a shared target once ran an export-built test binary in the worktree), and delete each export and its target dir as
+     soon as its pick is verified.
+  3. Every two or three batches (and before launching a batch if `df -h` shows under ~100 GB free) report `df -h` and
+     `du -sh` of the worktree `target/debug/incremental`, the scratch exports, and the primary checkout's `target`, then
+     ASK the user before deleting anything. Dirs created by earlier agents in the same session are still not yours to
+     delete unasked; incremental/export caches are regenerable build output, so offer them first.
+  4. Tell every batch agent to stop and report when `df -h` shows under ~20 GB free instead of hammering on with failing
+     builds: ENOSPC mid-build leaves stale-timestamp exports (git archive stamps files with the commit time, so cargo
+     does not rebuild a later pick extracted into an already-built folder) and produces false "verified" claims.
+- **Subagent model aliases:** make sure the requested model name resolves (a Bedrock-style ID in
+  `~/.claude/settings.json` made every Opus subagent fail with `model_not_found`). Test one trivial subagent first.
+- **Orchestration plumbing:** a subagent spawn can fail transiently with `Failed to create teammate pane: tmux: Resource
+  temporarily unavailable (os error 35)`: retry once before changing the plan. Confirm the `agentsview` CLI works (see
+  Strategy D) before you need it.
+- **Sandbox limits are findings, not obstacles.** A sandbox can refuse to unlink tracked files (`rebase --abort`
+  failed on `.claude/agents/*.md` and left the worktree mid-rebase) and a read-only verification command was blocked
+  as "Git Destructive". Do not work around it; leave the scratch worktree as is, report, and let the user restart
+  without the sandbox. Start a NEW scratch worktree/branch name for the retry instead of fighting the stuck one.
+- **Toolchain for the final gate:** list what `make check` needs (e.g. `meson` for tuic-dictation) and tell the user
+  what is missing BEFORE the end, so the install decision is not made at the finish line.
+
 ## Step 3 — Safety net (before rewriting anything)
 
 ```bash
@@ -305,6 +517,13 @@ the ref name.
 
 At every stop, `git diff` before `git add` — never stage blind.
 
+- **`git add -u` stages submodule drift.** A fresh worktree's `plugins` checkout can sit at an OLD pin, and `git add -u`
+  at a hand-resolved stop then silently stages a DOWNGRADE of the gitlink (it happened at pick 2 of 440 and was found
+  only at the end by comparing the pin at the tip). Stage by explicit path, run `git status` and confirm `plugins` is
+  clean first, and after every batch check `git log --format=%h <main>..HEAD -- plugins` is empty (unless the user decided
+  the pin). If it is not: record a backup ref, `git rebase -i` with `edit` on that pick, `git update-index --cacheinfo
+  160000,<main's pin>,plugins`, `git commit --amend --no-edit`, `rebase --continue`, then prove the per-pick trees are
+  identical apart from the gitlink and align the worktree's `plugins` checkout (`git -C plugins checkout --detach <pin>`).
 - **"Keep both" is correct far more often than it looks.** Two disjoint
   additions to the same import block, the same doc section, the same enum —
   don't default to picking one side just because the diff shows a clean
@@ -489,6 +708,13 @@ replay only your branch's entries dated after the purge (or whose subject
 doesn't match one of the removed/refiled items); this needs an actual
 read-through per entry, not a mechanical merge tool.
 
+**If the branch was re-organised first** (`reorg-and-rebase-onto-main`), all ledger edits sit in
+one `docs(ledgers): ...` commit and this step happens at that single stop instead of afterwards.
+That commit's own diff (`git show <ledgers-commit> -- <file>`) is exactly the branch's net entries
+against the old base: take `main`'s file and re-add those entries, applying the CHANGELOG and
+to-test rules above (`--ours`/`--theirs` each lose one side). Take the union for `.gitignore`;
+the personal `.gitignore` lines are not in it, they live in the personal commit at the tip.
+
 ## Step 6 — Full verification recipe
 
 Every one of these has independently caught a real problem in a past rebase
@@ -541,6 +767,11 @@ on this repo — skipping any one has missed something before:
    short of the actually-fixed release) — `cargo update -p <crate> --precise
    <fixed-version>` forces the specific version, after which re-run the
    audit to confirm it's actually clean, not just "a version changed."
+10. **Orchestrator self-checks after a replay, before trusting any agent's "done":** `git rev-list --count <main>..HEAD`
+    and `--merges --count` (0); no `^<<<<<<<`/`>>>>>>>` in `git log -p`; subjects equal pairwise with the originals
+    (`diff <(git log --reverse --format=%s <old-base>..<old-tip>) <(git log --reverse --format=%s <main>..HEAD)`);
+    the gitlink check from Step 4; a sampled per-pick tree comparison after any history rewrite
+    (`git diff --stat <a> <b> -- . ':!plugins'` for picks 3, 50, 150, 300, 440 empty); disk free.
 
 ## Step 7 — Post-rebase semantic audit
 
@@ -601,6 +832,37 @@ submodule reporting zero tests) — `check-gate.sh` calls both out itself. A
 gate step that runs commit-by-commit history checks (item 1/5/6 of Step 6)
 doesn't apply if you landed as a single merge commit — see Step 2.
 
+**When the full gate cannot run on this machine** (a build dependency is missing and the user declines to install it):
+run each step of the `make check` chain individually, redirecting every step to its own log and recording its OWN exit
+code (`cmd > log 2>&1; echo EXIT=$? >> log`; never read a pipeline's status), excluding the unbuildable crate
+explicitly (`--exclude tuic-dictation`). Use a clean env (`env -i`, no `TUIC_*` vars). Re-run every failing test ALONE
+and classify it: environment-only (identity-probe "Killed: 9", socket-path length, stale daemon socket, global git
+config such as `merge.ff=only`) versus real. Treat a test that hangs only when a tool is absent from PATH as a possible
+real bug (this found `tuic alias` falling through to an osascript admin prompt without tmux). State in the final report
+exactly which steps were NOT verified.
+
+**When `main` itself is red** (on 2026-10: `cargo fmt --check` fails on the vendored `patches/bm25`, `cargo audit` fails
+on advisories already in `main`'s `Cargo.lock`), `make check` stops at the first red step and the later steps never run
+(nextest, vitest, audits). Baseline each red step on pristine `main` instead of assuming: `git archive <main>
+src-tauri/patches/bm25` into a scratch dir and run `cargo fmt --check`; `cargo audit -q --file <main's Cargo.lock>`
+and diff the advisory ids; extract and run the single failing test on a main build. Then run the remaining steps
+individually (a small script that records each step's own exit code and log) and compare against that baseline: the
+only failures that count are the ones absent on `main`. Re-run any single failing test alone 3 times before calling
+it a flake; a test that passes alone in ~1 s and fails once under the full parallel run is a load flake.
+
+**Verification blind spots** (each produced a false "verified" or a false failure on the 2026-10 replay):
+- A fresh `git archive` export does not rebuild the workspace member crates (tuic-git, tuic-cli, tuic-streamdock) unless
+  every source file is touched (archive stamps files with the commit time): touch all sources before building an export.
+- `git ls-files`-based guard scripts (home-gits, hardcoded-tmp, process-exec) pass VACUOUSLY in an export (empty index);
+  run guards and the final gate in the real worktree, or `git init && git add` the extract first.
+- `pnpm exec` in an export triggers a `pnpm install`, and a symlinked `node_modules` breaks vitest: clone it and call
+  `node_modules/.bin/{tsc,vitest}`.
+- `cargo fmt` does not format `include!()`-ed files (here main's split `*_tests.rs`): run `rustfmt --edition <ed> --check`
+  on them directly, or they drift unseen. `clippy` as `make check` runs it does not lint test targets: run
+  `cargo clippy -p <crate> --lib --tests` once at the end.
+- The test temp root can be too long for unix sockets (SUN_LEN) and `with-test-tmp.sh` may root `TMPDIR` inside the
+  checkout, so tests that assume a tempdir is outside a repo fail: both are environment, classify them as such.
+
 ## Step 9 (optional, for a large/long-lived rebase) — Full post-rebase branch audit
 
 For a branch that's been diverging and accumulating fix-ups over weeks (not
@@ -619,6 +881,18 @@ than rewriting the original commits again. **Not meaningful if you landed as
 a single merge commit** — there's no per-commit range to review; rely on
 Step 7's file-by-file semantic audit instead.
 
+**Dropped-behaviour audit (do this before landing a large replay).** Replay logs are written by the same agents that
+might have forgotten something, so verify independently: split the original commit range into ~40-commit chunks, one
+read-only Opus auditor per chunk plus one whole-tree sweep (files, Rust fns, routes, COMMAND_TABLE keys, test names,
+i18n/settings keys, docs headings present in the original but absent now). Each finding is classed
+(A) accidentally missing, (B) intentionally dropped (cite log line / USER DECISION), (C) replaced by main (name it, say
+whether wip's extra delta survived). Gotchas: grep with `--no-recurse-submodules`; match replayed commits by subject, not
+hash; subagents cannot write report files, so have them RETURN the text and save it yourself; audit claims are often
+wrong in detail (about 1 in 8 were), so a second pass that verifies each dropped item against code is worth it.
+Consolidate into one list with, per item: original hash, replacement hash, `git show <ref>:<path>` commands, log line
+links, rationale, cost to restore, recommendation. Restore the genuinely accidental ones as small commits; put the
+intentional ones in front of the user to decide before Step 10.
+
 ## Step 10 — Get explicit confirmation on how to land it
 
 Before Step 11, confirm with the user which shape actually happened, even if
@@ -631,6 +905,19 @@ should make, informed by the *real*, empirically-observed cost (Step 2's
 Phase 2 spot-check), not the a priori estimate from Step 1.
 
 ## Step 11 — Land it
+
+**Step 11a — rewording stale commit messages (user-approved, LAST history operation).** After a replay plus fixups,
+some messages no longer match their content. Record `PRE_TREE=$(git rev-parse HEAD^{tree})` and a backup ref
+(`git update-ref refs/backup/<branch>-pre-reword <tip>`; a ref, not a branch). Reword with a non-interactive
+`git rebase -i main` (`GIT_SEQUENCE_EDITOR` flips `pick`→`reword` for the mapped hashes; `GIT_EDITOR` looks up the commit by
+original hash and writes the mapped message). If the pre-commit gate would block a reword (e.g. the agent-state fixture
+gate on a commit that originally skipped it), do NOT bypass: write the new commit with
+`git commit-tree <old>^{tree} -p <old>^ -F msg` (preserve author/committer name, email, dates via env), then
+`git rebase --onto <new> <old>`; picks do not run pre-commit. Verify: tip tree equals `PRE_TREE`; commit count unchanged;
+no merges; for every old/new pair the tree, author, author date and subject match (messages differ only for the mapped
+commits); only the known submodule pointer shows as modified. Save an old→new hash map next to the logs, because every
+hash after the first reworded commit changes and the logs cite the old ones. A `fixup!` commit whose target subject
+changed stops matching `--autosquash`; note it.
 
 **If you completed a full commit-by-commit rebase:**
 
@@ -654,8 +941,23 @@ git reset --hard <new-tip>                         # from the primary checkout
 git push --force-with-lease origin <branch>         # NEVER a bare --force
 ```
 
+**Before landing a replay, tell the user about untracked-binary and submodule side effects:** a commit that untracks a
+committed binary (here the sidecar `src-tauri/binaries/tuic-aarch64-apple-darwin`) makes the reset/checkout delete the
+on-disk file in the primary checkout (regenerate with the repo's build script). Never stage or move the submodule
+pointer unless the user decided the pin. Keep the backup refs until the push is verified, and never touch the original
+branch ref until the user says to land.
+
 Either way:
 
+- **Re-check `main`'s remote head again** (`git ls-remote origin main` against the base you replayed onto, see Step 0)
+  before reporting the work as "on the head of main". If it moved, say by how much (commits, files) and let the user
+  choose between landing the connected branch as is and doing a further catch-up (a second, separately-sized stage).
+- **Save the primary checkout's uncommitted edits before any `git reset --hard` there** (`git diff <path> > <patch>` in
+  the scratchpad): the reset destroys them. On 2026-10 an uncommitted edit to this very skill file sat in the primary
+  checkout while the branch was being landed. Also keep the user's untracked files out of it.
+- **Record who actually moved the ref.** The user may land the branch themselves between your messages (here `wip` was
+  moved to the replayed tip and three more commits were added on top while the orchestrator was still reporting). Read
+  `git reflog` and `git branch -vv` before describing the state, and never act on a stale picture of the branch.
 - **Fetch immediately before pushing** (`git fetch origin <branch>`) and
   confirm `origin/<branch>` still matches what you expect, so
   `--force-with-lease` is actually checking against current reality, not a
