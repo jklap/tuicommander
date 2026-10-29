@@ -10,8 +10,8 @@ import {
 	Suspense,
 	untrack,
 } from "solid-js";
+import { locallyCreatedSessions } from "../../hooks/locallyCreatedSessions";
 import { applySessionStateEvent, detectAgentForTerminal } from "../../hooks/useAgentPolling";
-import { locallyCreatedSessions } from "../../hooks/useAppInit";
 import { usePty } from "../../hooks/usePty";
 import { t } from "../../i18n";
 import { invoke, listen } from "../../invoke";
