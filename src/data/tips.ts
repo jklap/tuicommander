@@ -263,7 +263,7 @@ export const TIPS: Tip[] = [
 	{
 		feature: "Mobile prompt queue",
 		description:
-			"Hold Send and select Queue to submit your current agent draft at its next ready window. Tap Send to submit now.",
+			"Hold Send and select Queue to submit your current agent draft at its next ready window. Chat shows pending text above the input, with Cancel and Clear all. Tap Send to submit now.",
 		shortcut: null,
 	},
 	{
