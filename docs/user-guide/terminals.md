@@ -491,3 +491,9 @@ On mobile, scroll back in CLI or Chat to show the floating down-arrow at the bot
 Desktop sidebar session rows and mobile session cards mark a parentless plain shell as **Abandoned** after one idle hour and show its idle age. The five-second backend sweep requires a fresh OS process inventory: the PTY child must be an interactive shell with no child processes. An unknown inventory, script, foreground command, background child, detached TUIC job, managed identity, live child session, pending input or keep-open hold prevents closure. Unsupported or incomplete OS process observations fail closed.
 
 Settings → Agents → Idle agent hibernation (Expert Mode) includes **Close abandoned shells after (hours)** (`agents.abandoned_shell_hours`). The machine-owned value defaults to **0 (off)**; whole hours from 1 to 65535 enable closure. Idle age is measured from the most recent input, output or semantic activity, including elapsed time while the machine sleeps. Closure rechecks the process inventory and activity at the destructive boundary, and uses the normal session close/tombstone path. The sweep can lag the threshold by one five-second tick. A remote daemon applies its own setting, not the desktop host's value.
+
+### Mobile dictation and command messages
+
+Mobile dictation edits the visible composer. On its first edit, the composer reconciles an existing terminal input snapshot instead of appending to an unseen desktop draft. Later dictation takes continue the visible draft. The blue `/` quick key is an insertion action, not a selected modifier. Tap it to insert a slash; choose a command explicitly to use autocomplete.
+
+In session Chat, a Claude slash-command user message shows its command name and arguments. Complete command envelopes are presentation metadata; quoted or incomplete XML remains literal text. The Copy action retains the original transcript text.

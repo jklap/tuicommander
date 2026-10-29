@@ -20,6 +20,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Reconcile the first mobile composer edit with an existing terminal draft so dictated text does not silently append to a hidden slash command. Render Claude slash-command user messages as a command chip and arguments instead of raw XML (#2460-5a96).
+
 - Preserve unchanged sibling worktree monitoring snapshots after Windows Git-directory metadata notifications, without suppressing child index/ref/config changes (#2310-6e76).
 - Preserve quoted Windows profile paths when resuming agents, retain per-repository worktree-storage overrides across native path spellings, and report cross-project workflow requests as client errors (#2310-6e76).
 - Stop external speech command descendants on timeout or cancellation, so shell-wrapped engines and test sleepers do not remain running (#2455-f617).

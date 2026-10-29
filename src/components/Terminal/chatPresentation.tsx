@@ -70,26 +70,45 @@ export const TerminalUserText: Component<{ text: string; prose: (text: string) =
 	props,
 ) => {
 	const [expanded, setExpanded] = createSignal(false);
+	// Claude stores human slash commands in a complete envelope. Match only the
+	// whole message so quoted XML and incomplete examples remain ordinary prose.
+	const command = createMemo(() =>
+		/^\s*(?:<command-message>[^<]*<\/command-message>\s*)?<command-name>(\/[^<>\s]+)<\/command-name>\s*(?:<command-args>([\s\S]*)<\/command-args>\s*)?$/.exec(
+			props.text,
+		),
+	);
 	const start = createMemo(() => pasteStart(props.text));
 	const lines = createMemo(() => props.text.slice(start()).split("\n"));
 	const extra = () => Math.max(0, lines().length - 2);
 	return (
-		<Show when={start() >= 0} fallback={props.prose(props.text)}>
-			{props.prose(props.text.slice(0, start()))}
-			<div class={s.paste}>
-				<pre>{(expanded() ? lines() : lines().slice(0, 2)).join("\n")}</pre>
-				<Show when={extra() > 0}>
-					<Button
-						variant="ghost"
-						type="button"
-						aria-expanded={expanded()}
-						aria-label={expanded() ? "Collapse pasted output" : `Show ${extra()} more lines`}
-						onClick={() => setExpanded(!expanded())}
-					>
-						{expanded() ? "Show less" : `+ ${extra()} lines`}
-					</Button>
+		<Show
+			when={command()}
+			fallback={
+				<Show when={start() >= 0} fallback={props.prose(props.text)}>
+					{props.prose(props.text.slice(0, start()))}
+					<div class={s.paste}>
+						<pre>{(expanded() ? lines() : lines().slice(0, 2)).join("\n")}</pre>
+						<Show when={extra() > 0}>
+							<Button
+								variant="ghost"
+								type="button"
+								aria-expanded={expanded()}
+								aria-label={expanded() ? "Collapse pasted output" : `Show ${extra()} more lines`}
+								onClick={() => setExpanded(!expanded())}
+							>
+								{expanded() ? "Show less" : `+ ${extra()} lines`}
+							</Button>
+						</Show>
+					</div>
 				</Show>
-			</div>
+			}
+		>
+			{(match) => (
+				<>
+					<code class={s.command}>{match()[1]}</code>
+					<Show when={match()[2]}> {props.prose(match()[2])}</Show>
+				</>
+			)}
 		</Show>
 	);
 };

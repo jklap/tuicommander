@@ -3274,3 +3274,5 @@ Isolated Chrome screenshot capture timed out after 35 seconds; visual rendering 
 - [ ] After a manual backend restart, opt in only on an authorized disposable GitHub repository and verify the latest pushed head gets one pinned COMMENT review; older in-flight output remains superseded and no branch push or new PR occurs. No live GitHub write was performed during implementation. Rust changes require `make dev` restart or a new release build; Vite hot reload cannot load them.
 
 - [ ] After an authorized rebuild, verify on Windows that a main-only commit or adding a worktree does not rescan unchanged sibling dirty/diff status; editing and staging in that sibling must still update its badges (#2310-6e76, round j).
+
+- [ ] Mobile dictation after opening a session with an existing desktop slash-command draft: confirm the spoken sentence replaces the unseen prefix and submits as plain text. Browser fixture verifies the composer path with synthetic Web Speech callbacks, not iPhone audio or native Claude keystroke handling (#2460-5a96).
