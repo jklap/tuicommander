@@ -3,6 +3,7 @@ import { t } from "../../i18n";
 import { settingsStore } from "../../stores/settings";
 import { uiStore } from "../../stores/ui";
 import { cx } from "../../utils";
+import { Button } from "../ui/Button";
 import s from "./DiffOptionsMenu.module.css";
 
 /**
@@ -50,10 +51,12 @@ export const DiffOptionsMenu: Component<{ class?: string }> = (props) => {
 
 	return (
 		<div class={cx(s.root, props.class)} ref={(el) => (rootRef = el)}>
-			<button
-				type="button"
+			<Button
+				shape="icon"
+				variant="ghost"
 				class={cx(s.trigger, anyOptionActive() && s.triggerActive)}
 				title={t("diffOptions.title", "Diff options")}
+				aria-label={t("diffOptions.title", "Diff options")}
 				aria-expanded={open()}
 				data-testid="diff-options-trigger"
 				onClick={() => setOpen((v) => !v)}
@@ -61,7 +64,7 @@ export const DiffOptionsMenu: Component<{ class?: string }> = (props) => {
 				<svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
 					<path d="M1 3h6v1H1V3zm10 0h4v1h-4V3zM8 2a1.5 1.5 0 1 1 0 3 1.5 1.5 0 0 1 0-3zM1 7h3v1H1V7zm7 0h7v1H7v-1zm-1-1a1.5 1.5 0 1 1 0 3 1.5 1.5 0 0 1 0-3zM1 11h6v1H1v-1zm10 0h4v1h-4v-1zm-2-1a1.5 1.5 0 1 1 0 3 1.5 1.5 0 0 1 0-3z" />
 				</svg>
-			</button>
+			</Button>
 			<Show when={open()}>
 				<div class={s.panel} role="menu" data-testid="diff-options-panel">
 					<label class={s.row}>

@@ -21,7 +21,17 @@ describe("createRepositoryRefreshCoordinator", () => {
 		repositoriesStore._testCancelPendingSave();
 	});
 
-	const makeCoordinator = (worktreePaths: Record<string, { path: string; branch: string; kind: "worktree" }>) =>
+	const makeCoordinator = (
+		worktreePaths: Record<
+			string,
+			{
+				path: string;
+				branch: string;
+				kind: "worktree";
+				warm_artifacts?: import("../../hooks/git/warmStateSeed").WarmArtifactsStatus;
+			}
+		>,
+	) =>
 		createRepositoryRefreshCoordinator({
 			repo: {
 				getInfo: async () => ({ branch: "main", is_git_repo: true }),
@@ -117,6 +127,83 @@ describe("createRepositoryRefreshCoordinator", () => {
 
 			expect(repositoriesStore.get("/Gits/beta")?.workspaces.main?.terminals).toEqual([id]);
 			expect(terminalsStore.get(id)?.repoPath).toBe("/Gits/beta");
+		});
+	});
+
+	// Dropped-items-review #2: after a reload mid-warm the `worktree-warm-*`
+	// events are not replayed, so the badge came back only on the next event.
+	// The worktree list already carries the backend's warm status; a refresh
+	// seeds the badge from it until an event takes over.
+	describe("warm badge from the worktree list", () => {
+		const warming = { status: "pending", phase: "warming", copied: 3, total: 10 };
+		const setup = () => {
+			repositoriesStore.add({ path: "/Gits/gamma", displayName: "gamma" });
+			repositoriesStore.setWorkspace("/Gits/gamma", "main", { worktreePath: "/Gits/gamma" });
+		};
+
+		it("seeds the badge for a worktree whose warm copy is still running", async () => {
+			await testInScopeAsync(async () => {
+				setup();
+				const { refreshAllBranchStats } = makeCoordinator({
+					feat: { path: "/Gits/gamma__wt/feat", branch: "feat", kind: "worktree", warm_artifacts: warming },
+				});
+				await refreshAllBranchStats("/Gits/gamma");
+
+				expect(repositoriesStore.get("/Gits/gamma")?.workspaces.feat?.warmState).toEqual({
+					status: "warming",
+					copied: 3,
+					total: 10,
+				});
+			});
+		});
+
+		it("clears a stale badge once the list says the warm is over, including the later setup phase", async () => {
+			await testInScopeAsync(async () => {
+				setup();
+				const stale = { status: "warming" as const, copied: 1, total: 4 };
+				repositoriesStore.setWorkspace("/Gits/gamma", "done", {
+					worktreePath: "/Gits/gamma__wt/done",
+					warmState: stale,
+				});
+				repositoriesStore.setWorkspace("/Gits/gamma", "sync", {
+					worktreePath: "/Gits/gamma__wt/sync",
+					warmState: stale,
+				});
+				const { refreshAllBranchStats } = makeCoordinator({
+					done: { path: "/Gits/gamma__wt/done", branch: "done", kind: "worktree", warm_artifacts: { status: "done" } },
+					sync: {
+						path: "/Gits/gamma__wt/sync",
+						branch: "sync",
+						kind: "worktree",
+						warm_artifacts: { status: "pending", phase: "file_sync_and_setup_script" },
+					},
+				});
+				await refreshAllBranchStats("/Gits/gamma");
+
+				const workspaces = repositoriesStore.get("/Gits/gamma")?.workspaces;
+				expect(workspaces?.done?.warmState).toBeNull();
+				expect(workspaces?.sync?.warmState).toBeNull();
+			});
+		});
+
+		it("leaves the badge to the events once one has arrived for that worktree", async () => {
+			await testInScopeAsync(async () => {
+				setup();
+				const { noteWarmEvent } = await import("../../hooks/git/warmStateSeed");
+				const live = { status: "warming" as const, copied: 9, total: 10 };
+				repositoriesStore.setWorkspace("/Gits/gamma", "feat", {
+					worktreePath: "/Gits/gamma__wt/feat",
+					warmState: live,
+				});
+				noteWarmEvent("/Gits/gamma__wt/feat/");
+				// A cached list snapshot older than the event must not move it backwards.
+				const { refreshAllBranchStats } = makeCoordinator({
+					feat: { path: "/Gits/gamma__wt/feat", branch: "feat", kind: "worktree", warm_artifacts: warming },
+				});
+				await refreshAllBranchStats("/Gits/gamma");
+
+				expect(repositoriesStore.get("/Gits/gamma")?.workspaces.feat?.warmState).toEqual(live);
+			});
 		});
 	});
 });

@@ -33,14 +33,9 @@
   align-items: center;
   justify-content: center;
   gap: 4px;
-  height: 22px;
-  padding: 0 8px;
   background: none;
-  border: 1px solid transparent;
-  border-radius: var(--radius-sm);
   color: var(--fg-muted);
   font-size: var(--font-xs);
-  cursor: pointer;
   white-space: nowrap;
 }
 
@@ -52,7 +47,6 @@
 .modeBtnActive {
   color: var(--accent);
   background: var(--bg-highlight);
-  border-color: var(--accent);
 }
 
 .checkboxLabel {
@@ -69,13 +63,8 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 20px;
-  height: 20px;
   background: none;
-  border: 1px solid transparent;
-  border-radius: var(--radius-sm);
   color: var(--fg-muted);
-  cursor: pointer;
   flex-shrink: 0;
 }
 
@@ -86,11 +75,8 @@
 
 .linkBtn {
   background: none;
-  border: none;
   color: var(--accent);
   font-size: var(--font-xs);
-  cursor: pointer;
-  padding: 0;
 }
 
 .linkBtn:hover {
@@ -102,9 +88,6 @@
   align-items: center;
   justify-content: center;
   background: none;
-  border: none;
-  padding: 0;
-  cursor: pointer;
   flex-shrink: 0;
 }
 
@@ -145,14 +128,9 @@
 .pillBtn {
   display: flex;
   align-items: center;
-  height: 20px;
-  padding: 0 10px;
-  border-radius: 10px;
-  border: 1px solid var(--accent);
   background: var(--bg-primary);
   color: var(--accent);
   font-size: var(--font-xs);
-  cursor: pointer;
 }
 
 .pillBtn:hover {
@@ -179,14 +157,9 @@
   display: flex;
   align-items: center;
   gap: 6px;
-  height: 22px;
-  padding: 0 8px;
   background: var(--bg-highlight);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
   color: var(--fg-primary);
   font-size: var(--font-xs);
-  cursor: pointer;
   max-width: 320px;
 }
 
@@ -213,12 +186,10 @@
 }
 
 .badgeLink {
-  cursor: pointer;
   font-family: inherit;
 }
 
-.badgeLink:hover {
-  background: var(--bg-highlight);
+.badgeLink:hover .badge {
   color: var(--fg-secondary);
   border-color: var(--accent);
 }
@@ -330,7 +301,7 @@
   box-shadow: var(--shadow-md, 0 4px 12px rgba(0, 0, 0, 0.2));
 }
 
-.turnPickerItem {
+button[data-control-layout="row"].turnPickerItem {
   display: flex;
   align-items: center;
   gap: 8px;
@@ -344,11 +315,11 @@
   cursor: pointer;
 }
 
-.turnPickerItem:last-child {
+button[data-control-layout="row"].turnPickerItem:last-child {
   border-bottom: none;
 }
 
-.turnPickerItem:hover {
+button[data-control-layout="row"].turnPickerItem:hover {
   background: var(--bg-highlight);
 }
 

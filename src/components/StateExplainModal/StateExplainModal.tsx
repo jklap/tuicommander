@@ -4,6 +4,7 @@ import { appLogger } from "../../stores/appLogger";
 import { registerModal } from "../../stores/modalStack";
 import { effectiveActivityState } from "../../utils/activitySnapshot";
 import { writeClipboard } from "../../utils/clipboard";
+import { Button } from "../ui/Button";
 import s from "./StateExplainModal.module.css";
 
 interface RankedSource {
@@ -243,12 +244,12 @@ export const StateExplainModal: Component<{
 						<path d="M8 1a7 7 0 1 0 0 14A7 7 0 0 0 8 1Zm0 1.5a5.5 5.5 0 1 1 0 11 5.5 5.5 0 0 1 0-11ZM7.25 7h1.5v5h-1.5V7Zm0-2.5h1.5V6h-1.5V4.5Z" />
 					</svg>
 					<span class={s.title}>Explain state — {props.sessionId.slice(0, 8)}</span>
-					<button type="button" class={s.copyBtn} onClick={handleCopy} disabled={!explain()}>
+					<Button size="compact" class={s.copyBtn} onClick={handleCopy} disabled={!explain()}>
 						{copied() ? "Copied" : "Copy as JSON"}
-					</button>
-					<button type="button" class={s.close} onClick={props.onClose} title="Close">
+					</Button>
+					<Button shape="icon" variant="ghost" class={s.close} onClick={props.onClose} title="Close" aria-label="Close">
 						&times;
-					</button>
+					</Button>
 				</div>
 
 				<div class={s.body}>

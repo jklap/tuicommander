@@ -72,6 +72,41 @@ describe("PaneTree", () => {
 		));
 	}
 
+	describe("sub-tab Close Tab", () => {
+		it("closes the right-clicked tab by id, not the group's active tab", () => {
+			const { termA, termB } = seedTwoTabGroup();
+			expect(paneLayoutStore.state.groups.g1.activeTabId).toBe(termA);
+			const target = termB;
+			const onCloseTab = vi.fn();
+			const node = paneLayoutStore.getRoot()!;
+			const { container } = render(() => (
+				<PaneNodeView node={node} onCloseTab={onCloseTab} onOpenFilePath={vi.fn()} onTerminalFocus={vi.fn()} />
+			));
+			const tab = container.querySelectorAll(".pane-tab-bar .pane-tab")[1]!;
+			vi.spyOn(tab, "getBoundingClientRect").mockReturnValue({
+				left: 0,
+				bottom: 0,
+				top: 0,
+				right: 0,
+				width: 0,
+				height: 0,
+				x: 0,
+				y: 0,
+				toJSON: () => {},
+			} as DOMRect);
+			fireEvent.contextMenu(tab);
+
+			const menus = container.querySelectorAll(".menu");
+			const closeItem = Array.from(Array.from(menus).at(-1)!.querySelectorAll(".label")).find(
+				(l) => l.textContent === "Close Tab",
+			);
+			expect(closeItem).toBeDefined();
+			fireEvent.click(closeItem!);
+
+			expect(onCloseTab).toHaveBeenCalledExactlyOnceWith(target);
+		});
+	});
+
 	describe("globe badge", () => {
 		it("shows on a promoted tab when the manual Global Workspace isn't the active view", () => {
 			const { termA } = seedTwoTabGroup();

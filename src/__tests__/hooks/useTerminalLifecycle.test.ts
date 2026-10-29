@@ -240,6 +240,50 @@ describe("useTerminalLifecycle", () => {
 			expect(terminalsStore.get(id!)?.cwd).toBe("/some/path");
 		});
 
+		describe("pane docking", () => {
+			const userSplit = () => {
+				const g = paneLayoutStore.createGroup();
+				paneLayoutStore.addTab(g, { id: "pane-term", type: "terminal" });
+				paneLayoutStore.setRoot({ type: "leaf", id: g });
+				paneLayoutStore.setActiveGroup(g);
+				paneLayoutStore.split(g, "vertical");
+			};
+			const view = (id: string) => {
+				terminalsStore.add({ sessionId: null, fontSize: 14, name: id, cwd: null, awaitingInput: null });
+				const real = terminalsStore.getIds().at(-1)!;
+				terminalsStore.setActive(real);
+				return real;
+			};
+
+			it("docks into the user's split when the viewed terminal is in a pane", async () => {
+				userSplit();
+				const viewed = view("viewed");
+				paneLayoutStore.addTab(paneLayoutStore.state.activeGroupId!, { id: viewed, type: "terminal" });
+
+				const id = await lifecycle.createNewTerminal();
+
+				expect(paneLayoutStore.getGroupForTab(id!)).toBeTruthy();
+			});
+
+			it("stays out of the split when the viewed terminal is an orphan overlaying it", async () => {
+				userSplit();
+				view("orphan");
+
+				const id = await lifecycle.createNewTerminal();
+
+				expect(paneLayoutStore.getGroupForTab(id!)).toBeNull();
+				expect(terminalsStore.state.activeId).toBe(id);
+			});
+
+			it("stays out of a tmux-shim split", async () => {
+				paneLayoutStore.arrangeSessionsAsLayout(["s1", "s2"], "tiled");
+
+				const id = await lifecycle.createNewTerminal();
+
+				expect(paneLayoutStore.getGroupForTab(id!)).toBeNull();
+			});
+		});
+
 		it("sets status info when max sessions reached", async () => {
 			mockPty.canSpawn.mockResolvedValue(false);
 

@@ -6,7 +6,7 @@
   overflow-y: auto;
 }
 
-.row {
+button[data-control-layout="row"].row {
   display: flex;
   align-items: center;
   gap: 10px;
@@ -20,11 +20,11 @@
   cursor: pointer;
 }
 
-.row:hover {
+button[data-control-layout="row"].row:hover {
   background: var(--bg-highlight);
 }
 
-.active {
+button[data-control-layout="row"].active {
   border-color: var(--accent);
 }
 

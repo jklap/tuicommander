@@ -11,6 +11,7 @@ import type { EditStep } from "../../types/sessionDiff";
 import { cx } from "../../utils";
 import { onClickKeyDown } from "../../utils/a11y";
 import fl from "../shared/diffFileList.module.css";
+import { Button } from "../ui/Button";
 import { DiffViewer } from "../ui/DiffViewer";
 import s from "./SessionDiffTab.module.css";
 
@@ -125,8 +126,10 @@ export const StepCard: Component<StepCardProps> = (props) => {
 					<span class={s.stepPath}>{props.step.rel_path ?? props.step.abs_path}</span>
 					<Show when={props.onJumpPrev}>
 						{(onJumpPrev) => (
-							<button
-								type="button"
+							<Button
+								shape="icon"
+								variant="ghost"
+								aria-label="Jump to the earlier change to this file"
 								class={s.iconBtn}
 								onClick={(e) => {
 									e.stopPropagation();
@@ -137,13 +140,15 @@ export const StepCard: Component<StepCardProps> = (props) => {
 								<svg width="11" height="11" viewBox="0 0 16 16" fill="currentColor">
 									<path d="M8 4l-5 6h10z" />
 								</svg>
-							</button>
+							</Button>
 						)}
 					</Show>
 					<Show when={props.onJumpNext}>
 						{(onJumpNext) => (
-							<button
-								type="button"
+							<Button
+								shape="icon"
+								variant="ghost"
+								aria-label="Jump to the later change to this file"
 								class={s.iconBtn}
 								onClick={(e) => {
 									e.stopPropagation();
@@ -154,7 +159,7 @@ export const StepCard: Component<StepCardProps> = (props) => {
 								<svg width="11" height="11" viewBox="0 0 16 16" fill="currentColor">
 									<path d="M8 12l5-6H3z" />
 								</svg>
-							</button>
+							</Button>
 						)}
 					</Show>
 				</Show>
@@ -172,17 +177,18 @@ export const StepCard: Component<StepCardProps> = (props) => {
 								}
 							>
 								{(onJumpToAgent) => (
-									<button
-										type="button"
-										class={cx(s.badge, s.badgeLink)}
+									<Button
+										variant="ghost"
+										size="compact"
+										class={s.badgeLink}
 										title={`Jump to ${displayName() ?? "this agent"}'s tab`}
 										onClick={(e) => {
 											e.stopPropagation();
 											onJumpToAgent()();
 										}}
 									>
-										{label()}
-									</button>
+										<span class={s.badge}>{label()}</span>
+									</Button>
 								)}
 							</Show>
 						);
@@ -200,8 +206,10 @@ export const StepCard: Component<StepCardProps> = (props) => {
 					</Show>
 				</span>
 				<div class={s.stepActions}>
-					<button
-						type="button"
+					<Button
+						shape="icon"
+						variant="ghost"
+						aria-label="Copy this step's diff"
 						class={s.iconBtn}
 						onClick={(e) => {
 							e.stopPropagation();
@@ -212,9 +220,11 @@ export const StepCard: Component<StepCardProps> = (props) => {
 						<svg width="11" height="11" viewBox="0 0 16 16" fill="currentColor">
 							<path d="M4 2a2 2 0 0 0-2 2v7h1.5V4a.5.5 0 0 1 .5-.5h7V2H4zm3 3a2 2 0 0 0-2 2v7a2 2 0 0 0 2 2h5a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2H7z" />
 						</svg>
-					</button>
-					<button
-						type="button"
+					</Button>
+					<Button
+						shape="icon"
+						variant="ghost"
+						aria-label="Revert just this step"
 						class={s.iconBtn}
 						onClick={(e) => {
 							e.stopPropagation();
@@ -225,9 +235,11 @@ export const StepCard: Component<StepCardProps> = (props) => {
 						<svg width="11" height="11" viewBox="0 0 16 16" fill="currentColor">
 							<path d="M2 8a6 6 0 1 1 12 0A6 6 0 0 1 2 8zm6-4a4 4 0 1 0 0 8 4 4 0 0 0 0-8zM6.5 7.5l3-2v4l-3-2z" />
 						</svg>
-					</button>
-					<button
-						type="button"
+					</Button>
+					<Button
+						shape="icon"
+						variant="ghost"
+						aria-label="Open file at this change"
 						class={s.iconBtn}
 						onClick={(e) => {
 							e.stopPropagation();
@@ -238,7 +250,7 @@ export const StepCard: Component<StepCardProps> = (props) => {
 						<svg width="11" height="11" viewBox="0 0 16 16" fill="currentColor">
 							<path d="M12.1 1.3a1.5 1.5 0 0 1 2.1 0l.5.5a1.5 1.5 0 0 1 0 2.1L5.8 12.8l-3.5.9.9-3.5L12.1 1.3zM11 3.4 4.1 10.3l-.5 1.9 1.9-.5L12.4 4.8 11 3.4z" />
 						</svg>
-					</button>
+					</Button>
 				</div>
 			</div>
 			<Show when={!props.collapsed}>
@@ -268,11 +280,12 @@ export const StepCard: Component<StepCardProps> = (props) => {
 								onCancel={() => setCommentVisible(false)}
 							/>
 						</Show>
-						<button type="button" class={s.linkBtn} onClick={() => setCommentVisible(true)}>
+						<Button variant="ghost" size="compact" class={s.linkBtn} onClick={() => setCommentVisible(true)}>
 							Comment on {selectedCount()} line{selectedCount() > 1 ? "s" : ""}
-						</button>
-						<button
-							type="button"
+						</Button>
+						<Button
+							variant="ghost"
+							size="compact"
 							class={s.linkBtn}
 							onClick={() => {
 								lineSelection.clear();
@@ -280,7 +293,7 @@ export const StepCard: Component<StepCardProps> = (props) => {
 							}}
 						>
 							Clear
-						</button>
+						</Button>
 					</div>
 				</Show>
 			</Show>

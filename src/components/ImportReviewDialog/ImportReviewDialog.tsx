@@ -1,6 +1,7 @@
 import { createMemo, createSignal, For, Show } from "solid-js";
 import { registerModal } from "../../stores/modalStack";
 import d from "../shared/dialog.module.css";
+import { Button } from "../ui/Button";
 import s from "./ImportReviewDialog.module.css";
 
 export type ImportReviewStatus = "new" | "conflict";
@@ -95,15 +96,15 @@ export function ImportReviewDialog<T>(props: ImportReviewDialogProps<T>) {
 					</Show>
 
 					<div class={s.bulkRow}>
-						<button type="button" class={s.bulkBtn} onClick={selectAll}>
+						<Button size="compact" onClick={selectAll}>
 							All
-						</button>
-						<button type="button" class={s.bulkBtn} onClick={selectNone}>
+						</Button>
+						<Button size="compact" onClick={selectNone}>
 							None
-						</button>
-						<button type="button" class={s.bulkBtn} onClick={selectNewOnly}>
+						</Button>
+						<Button size="compact" onClick={selectNewOnly}>
 							New only
-						</button>
+						</Button>
 					</div>
 
 					<ul class={s.list}>

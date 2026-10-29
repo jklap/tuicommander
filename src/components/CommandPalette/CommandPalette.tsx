@@ -15,6 +15,7 @@ import { pathBasename } from "../../utils/pathUtils";
 import { FileIcon } from "../FileBrowserPanel/FileIcon";
 import shared from "../shared/dialog.module.css";
 import { Input } from "../ui/Input";
+import { SegmentedControl, type SegmentOption } from "../ui/SegmentedControl";
 import s from "./CommandPalette.module.css";
 
 export interface CommandPaletteProps {
@@ -123,13 +124,13 @@ export function isBrowserCommandPaletteAction(action: ActionEntry): boolean {
 }
 
 /** Scope chips, in the order Tab cycles through them. */
-const SCOPE_TABS: Array<{ value: PaletteScope; label: string }> = [
-	{ value: "all", label: "All" },
-	{ value: "actions", label: "Actions" },
-	{ value: "prompts", label: "Prompts" },
-	{ value: "files", label: "Files" },
-	{ value: "content", label: "Content" },
-	{ value: "terminals", label: "Terminals" },
+const SCOPE_TABS: SegmentOption<PaletteScope>[] = [
+	{ id: "all", label: "All" },
+	{ id: "actions", label: "Actions" },
+	{ id: "prompts", label: "Prompts" },
+	{ id: "files", label: "Files" },
+	{ id: "content", label: "Content" },
+	{ id: "terminals", label: "Terminals" },
 ];
 
 /**
@@ -444,23 +445,16 @@ export const CommandPalette: Component<CommandPaletteProps> = (props) => {
 						/>
 					</div>
 
-					<div class={s.scopeBar} role="tablist" aria-label="Filter by type">
-						<For each={SCOPE_TABS}>
-							{(tab) => (
-								<button
-									type="button"
-									role="tab"
-									aria-selected={scope() === tab.value}
-									class={`${s.scopeChip} ${scope() === tab.value ? s.scopeChipActive : ""}`}
-									onClick={() => {
-										commandPaletteStore.setScope(tab.value);
-										inputRef?.focus();
-									}}
-								>
-									{tab.label}
-								</button>
-							)}
-						</For>
+					<div class={s.scopeBar}>
+						<SegmentedControl
+							aria-label="Filter by type"
+							options={SCOPE_TABS}
+							value={scope()}
+							onChange={(value) => {
+								commandPaletteStore.setScope(value);
+								inputRef?.focus();
+							}}
+						/>
 					</div>
 
 					<div class={s.list} ref={listRef}>

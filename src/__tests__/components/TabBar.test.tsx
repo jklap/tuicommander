@@ -992,6 +992,44 @@ describe("TabBar", () => {
 		expect(globalWorkspaceStore.isPromoted(id)).toBe(false);
 	});
 
+	it("Close Tab in a tab's own context menu closes that tab, not the active one", () => {
+		const active = addTerminal({ name: "Active Term" });
+		const other = addTerminal({ name: "Other Term" });
+		terminalsStore.setActive(active);
+		const onTabClose = vi.fn();
+		const { container } = render(() => (
+			<TabBar
+				onTabSelect={() => {}}
+				onTabClose={onTabClose}
+				onCloseOthers={() => {}}
+				onCloseToRight={() => {}}
+				onNewTab={() => {}}
+			/>
+		));
+		const tab = container.querySelector(`[data-tab-id="${other}"]`)!;
+		vi.spyOn(tab, "getBoundingClientRect").mockReturnValue({
+			left: 0,
+			bottom: 0,
+			top: 0,
+			right: 0,
+			width: 0,
+			height: 0,
+			x: 0,
+			y: 0,
+			toJSON: () => {},
+		} as DOMRect);
+
+		fireEvent.contextMenu(tab);
+		const menus = container.querySelectorAll(".menu");
+		const closeItem = Array.from(Array.from(menus).at(-1)!.querySelectorAll(".label")).find(
+			(l) => l.textContent === "Close Tab",
+		);
+		expect(closeItem).toBeDefined();
+		fireEvent.click(closeItem!);
+
+		expect(onTabClose).toHaveBeenCalledExactlyOnceWith(other);
+	});
+
 	it("with activeRepoPath but no activeBranch, falls back to all terminals", () => {
 		const repoPath = "/test/repo";
 		repositoriesStore.add({ path: repoPath, displayName: "Test Repo" });

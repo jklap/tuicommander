@@ -4,16 +4,18 @@ import { globalWorkspaceStore } from "../../stores/globalWorkspace";
 import { paneLayoutStore } from "../../stores/paneLayout";
 import { repoSettingsStore } from "../../stores/repoSettings";
 import { repositoriesStore } from "../../stores/repositories";
-import { paneLayoutKey, savedPaneLayouts } from "../../stores/savedPaneLayouts";
+import { paneLayoutKey } from "../../stores/savedPaneLayouts";
 import { settingsStore } from "../../stores/settings";
 import { reconcileTerminalOwnership } from "../../stores/terminalOwnership";
 import { terminalsStore } from "../../stores/terminals";
 import { savedTerminalsFor } from "../../stores/workspaceIdentity";
 import type { SavedTerminal } from "../../types";
 import { resolveAgentResume, verifyAndBuildResumeCommand } from "../../utils/agentSession";
+import { resolvePaneLayoutForBranch, savePaneLayoutForBranch } from "../../utils/branchPaneLayout";
 import { assignTabToActiveGroup } from "../../utils/paneTabAssign";
 import { markPerf } from "../../utils/perfTrace";
 import { randomId } from "../../utils/randomId";
+import { sameDir } from "../../utils/repoOwnership";
 import { filterValidTerminals } from "../../utils/terminalFilter";
 import { disarmEagerResume, isEagerResumeArmed } from "../../utils/updateRestart";
 import { syncScopeForActiveRepo } from "../useWorktreeConsolidation";
@@ -27,54 +29,6 @@ interface BranchSelectionCoordinatorDeps {
 	};
 	setStatusInfo: (message: string) => void;
 	getDefaultFontSize: () => number;
-}
-
-/** Saves the OUTGOING repo+branch's pane layout (if split) so it can be restored later,
- *  mirroring `handleBranchSelectInner`'s own save-on-leave step. Shared so any path that
- *  flips the active repo/branch — not just a full branch select — leaves the layout it's
- *  abandoning in a state the next branch select can find. */
-function savePaneLayoutForBranch(repoPath: string, workspaceId: string): void {
-	if (paneLayoutStore.isSplit()) {
-		savedPaneLayouts.set(paneLayoutKey(repoPath, workspaceId), paneLayoutStore.serialize());
-	} else {
-		// Clear any stale layout if the user unsplit while on this branch.
-		savedPaneLayouts.delete(paneLayoutKey(repoPath, workspaceId));
-	}
-}
-
-/** Resolves `paneLayoutStore` to whatever repo+branch's own saved/disk layout implies —
- *  restoring it if every terminal it references is still valid, otherwise resetting to a
- *  flat single pane. Any path that flips the active repo/branch must call this before
- *  touching pane tabs, or the OUTGOING branch's split tree stays live under the INCOMING
- *  branch's terminals. */
-function resolvePaneLayoutForBranch(repoPath: string, workspaceId: string, validTerminals: string[]): void {
-	const layoutKey = paneLayoutKey(repoPath, workspaceId);
-	const savedLayout = savedPaneLayouts.get(layoutKey);
-	if (savedLayout) {
-		const validSet = new Set(validTerminals);
-		const layoutTerminals = Object.values(savedLayout.groups).flatMap((g) =>
-			g.tabs.filter((t) => t.type === "terminal").map((t) => t.id),
-		);
-		const allValid = layoutTerminals.length > 0 && layoutTerminals.every((tid) => validSet.has(tid));
-		if (allValid) {
-			paneLayoutStore.restore(savedLayout);
-		} else {
-			savedPaneLayouts.delete(layoutKey);
-			paneLayoutStore.reset();
-		}
-	} else if (paneLayoutStore.consumeRestoredFromDisk()) {
-		// Layout was loaded from disk at startup — keep it if terminal IDs are still valid.
-		const currentLayout = paneLayoutStore.serialize();
-		const validSet = new Set(validTerminals);
-		const layoutTerminals = Object.values(currentLayout.groups).flatMap((g) =>
-			g.tabs.filter((t) => t.type === "terminal").map((t) => t.id),
-		);
-		if (!(layoutTerminals.length > 0 && layoutTerminals.every((tid) => validSet.has(tid)))) {
-			paneLayoutStore.reset();
-		}
-	} else {
-		paneLayoutStore.reset();
-	}
 }
 
 /** Owns terminal creation and serialized branch activation. */
@@ -106,6 +60,22 @@ export function createBranchSelectionCoordinator(deps: BranchSelectionCoordinato
 				known: Object.keys(repositoriesStore.get(repoPath)?.workspaces ?? {}),
 			});
 		}
+		// A row with no checkout of its own would spawn in the repo root, which is a
+		// DIFFERENT branch's directory whenever another row already sits there — the
+		// shell would be on the wrong branch and the cwd tracker would re-home the tab
+		// under the row that really owns that directory.
+		if (branch && !branch.worktreePath && !cwdOverride) {
+			const repoRoot = repositoriesStore.get(repoPath)?.workspaces ?? {};
+			const rootOwner = Object.entries(repoRoot).find(
+				([id, other]) => id !== workspaceId && !!other.worktreePath && sameDir(other.worktreePath, repoPath),
+			);
+			if (rootOwner) {
+				deps.setStatusInfo(
+					`"${branch.branchName}" has no checkout of its own — check it out, or create a worktree for it, before opening a terminal`,
+				);
+				return;
+			}
+		}
 		const termCount = branch?.terminals.length || 0;
 
 		const branchName = branch?.branchName ?? workspaceId;
@@ -115,6 +85,7 @@ export function createBranchSelectionCoordinator(deps: BranchSelectionCoordinato
 		// frontend key change separate); see the same note at `remove_branch_label`.
 		const label = repoSettingsStore.getEffective(repoPath)?.branchLabels?.[branchName];
 		const tabName = label ?? `${branchName.split(/[\\/]/).pop()} ${termCount + 1}`;
+		const previousActiveId = terminalsStore.state.activeId;
 		const id = terminalsStore.add({
 			sessionId: null,
 			fontSize: deps.getDefaultFontSize(),
@@ -148,6 +119,17 @@ export function createBranchSelectionCoordinator(deps: BranchSelectionCoordinato
 				// behind, with the new terminal rendered as an orphan on top of it. Save the
 				// outgoing branch's layout and resolve the incoming one, same as a real branch
 				// select does, before docking the new tab.
+				//
+				// Leave the manual Global Workspace first, exactly like handleBranchSelectInner:
+				// while it is showing, paneLayoutStore holds the WORKSPACE's layout, and saving
+				// that under the outgoing branch's key overwrote (or deleted) the branch's real
+				// split that `globalWorkspaceStore.activate` stashed. `deactivate` restores the
+				// stashed layout, so the save below records what the branch really had.
+				if (globalWorkspaceStore.isManualWorkspaceActive()) {
+					globalWorkspaceStore.deactivate(
+						activeRepo?.activeWorkspaceId ? paneLayoutKey(activeRepo.path, activeRepo.activeWorkspaceId) : undefined,
+					);
+				}
 				if (activeRepo?.activeWorkspaceId) {
 					savePaneLayoutForBranch(activeRepo.path, activeRepo.activeWorkspaceId);
 				}
@@ -171,7 +153,7 @@ export function createBranchSelectionCoordinator(deps: BranchSelectionCoordinato
 			// Safe unconditionally now — paneLayoutStore reflects the target branch's own
 			// layout by this point either way (untouched when !needsSwitch, resolved above
 			// when needsSwitch), so docking never lands the new tab in a stale split.
-			assignTabToActiveGroup(id, "terminal");
+			assignTabToActiveGroup(id, "terminal", true, { displayedId: needsSwitch ? null : previousActiveId });
 		});
 		// Focus the new terminal after SolidJS renders and mounts the component
 		// (onMount sets ref, which happens in the next frame).

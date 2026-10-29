@@ -19,6 +19,8 @@ export const IconSwatchGrid: Component<IconSwatchGridProps> = (props) => (
 		<For each={ICON_IDS}>
 			{(iconId) => (
 				<button
+					type="button"
+					data-control-layout="card"
 					class={s.swatch}
 					classList={{ [s.active]: iconId === props.currentIconId }}
 					onClick={() => props.onSelect(iconId)}

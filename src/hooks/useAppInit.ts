@@ -46,6 +46,7 @@ import { applyAppTheme, listenForThemeChanges, loadThemes } from "../themes";
 import { isTauri, rpc, subscribeEvents } from "../transport";
 import { getSessionConnection } from "../transportRuntime";
 import type { RepoChangeKind, SavedTerminal } from "../types";
+import { arrangeSwarmLayout } from "../utils/arrangeTmuxLayout";
 import { classifyFile, isImageFile } from "../utils/filePreview";
 import { navigateToTerminal } from "../utils/navigateToTerminal";
 import { assignTabToActiveGroup } from "../utils/paneTabAssign";
@@ -55,6 +56,7 @@ import { sameDir, unregisteredRepoRootFor } from "../utils/repoOwnership";
 import { adoptSuspendedSession, type SuspendedSession } from "../utils/suspendedSessions";
 import { isSuspendingOrSuspended } from "../utils/suspendTerminal";
 import { parseTuicFilePath } from "../utils/tuicFilePath";
+import { noteWarmEvent } from "./git/warmStateSeed";
 import { createRevisionCoalescer } from "./revisionCoalescer";
 
 /** PTY sessions created by THIS client (desktop or browser). Since B.4 removed
@@ -818,6 +820,8 @@ export async function initApp(deps: AppInitDeps) {
 	// otherwise fabricate one if a warm event outran `worktree-created`, whose
 	// handler is the one that builds the row with real data.
 	const updateWarmState = (repoPath: string, worktreePath: string, warmState: WorkspaceState["warmState"]) => {
+		// From now on the events own this row's badge, not the (cached) worktree list.
+		noteWarmEvent(worktreePath);
 		const workspaces = repositoriesStore.get(repoPath)?.workspaces;
 		if (!workspaces) return;
 		const row = Object.values(workspaces).find((w) => w.worktreePath != null && sameDir(w.worktreePath, worktreePath));
@@ -1099,7 +1103,7 @@ export async function initApp(deps: AppInitDeps) {
 					paneLayoutStore.setActiveGroup(leafIds[0]);
 				}
 			}
-			assignTabToActiveGroup(id, "terminal", false);
+			assignTabToActiveGroup(id, "terminal", false, { agent: true });
 			// Only steal focus when the app had no terminals at all.
 			if (hadNoTerminals) {
 				terminalsStore.setActive(id);
@@ -1168,7 +1172,7 @@ export async function initApp(deps: AppInitDeps) {
 			.map((sessionId) => terminalsStore.getTerminalForSession(sessionId))
 			.filter((id): id is string => id !== null);
 		if (termIds.length === 0) return;
-		paneLayoutStore.arrangeSessionsAsLayout(termIds, layout);
+		arrangeSwarmLayout(termIds, layout);
 	}).catch((err) => appLogger.error("app", "Failed to register tmux-window-layout-requested listener", err));
 
 	// A hardware controller (StreamDock macropad, etc.) asking the UI to

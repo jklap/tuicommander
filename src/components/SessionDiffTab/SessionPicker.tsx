@@ -1,6 +1,7 @@
 import { type Component, createMemo, createSignal, Show } from "solid-js";
 import type { SessionSummary } from "../../types/sessionDiff";
 import { formatRelativeTime } from "../../utils/formatRelativeTime";
+import { Button } from "../ui/Button";
 import { Dropdown, type DropdownItem } from "../ui/Dropdown";
 import s from "./SessionDiffTab.module.css";
 
@@ -43,8 +44,8 @@ export const SessionPicker: Component<SessionPickerProps> = (props) => {
 
 	return (
 		<div class={s.sessionPicker}>
-			<button
-				type="button"
+			<Button
+				size="compact"
 				class={s.sessionPickerTrigger}
 				onClick={() => setOpen((v) => !v)}
 				title="Choose which Claude Code session to review"
@@ -53,7 +54,7 @@ export const SessionPicker: Component<SessionPickerProps> = (props) => {
 				<svg width="10" height="10" viewBox="0 0 16 16" fill="currentColor">
 					<path d="M4 6l4 4 4-4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
 				</svg>
-			</button>
+			</Button>
 			<Show when={props.sessions.length > 0}>
 				<Dropdown
 					items={items()}
@@ -66,11 +67,18 @@ export const SessionPicker: Component<SessionPickerProps> = (props) => {
 					onClose={() => setOpen(false)}
 				/>
 			</Show>
-			<button type="button" class={s.iconBtn} onClick={props.onRefresh} title="Refresh session list">
+			<Button
+				shape="icon"
+				variant="ghost"
+				aria-label="Refresh session list"
+				class={s.iconBtn}
+				onClick={props.onRefresh}
+				title="Refresh session list"
+			>
 				<svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor">
 					<path d="M13.65 2.35A6 6 0 0 0 3 6h1.5A4.5 4.5 0 1 1 5.4 10.1L4 8.5v4h4l-1.65-1.65A6 6 0 1 0 13.65 2.35z" />
 				</svg>
-			</button>
+			</Button>
 		</div>
 	);
 };

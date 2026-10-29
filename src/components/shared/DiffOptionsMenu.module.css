@@ -3,25 +3,6 @@
 	display: inline-flex;
 }
 
-.trigger {
-	display: flex;
-	align-items: center;
-	justify-content: center;
-	width: 24px;
-	height: 24px;
-	padding: 0;
-	border: none;
-	border-radius: 4px;
-	background: transparent;
-	color: var(--text-secondary, currentColor);
-	cursor: pointer;
-}
-
-.trigger:hover {
-	background: var(--hover-bg, rgba(128, 128, 128, 0.15));
-	color: var(--text-primary, currentColor);
-}
-
 .triggerActive {
 	color: var(--accent, currentColor);
 }

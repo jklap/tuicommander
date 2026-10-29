@@ -9,6 +9,7 @@ import { openFileAction } from "../../utils/filePreview";
 import s from "../PrDiffTab/PrDiffTab.module.css";
 import { DiffFileList, fileRowKeys, sectionToRawDiff } from "../shared/DiffFileList";
 import type { DiffListNavHandle } from "../shared/diffListNav";
+import { Button } from "../ui/Button";
 import { type DiffFileSection, parseDiffFiles } from "../ui/DiffViewer";
 
 export interface BranchDiffScrollViewProps {
@@ -236,14 +237,14 @@ export const BranchDiffScrollView: Component<BranchDiffScrollViewProps> = (props
 			<Show when={hasNewFilesBelow() || pendingHiddenCount() > 0}>
 				<div class={s.liveUpdateBar}>
 					<Show when={hasNewFilesBelow()}>
-						<button type="button" class={s.pillBtn} onClick={jumpToNewContentBelow}>
+						<Button size="compact" class={s.pillBtn} onClick={jumpToNewContentBelow}>
 							{t("diffScroll.newContentBelow", "New content below")}
-						</button>
+						</Button>
 					</Show>
 					<Show when={pendingHiddenCount() > 0}>
-						<button type="button" class={s.pillBtn} onClick={applyPendingHiddenUpdates}>
+						<Button size="compact" class={s.pillBtn} onClick={applyPendingHiddenUpdates}>
 							{t("diffScroll.refreshCount", "Refresh ({count})", { count: String(pendingHiddenCount()) })}
-						</button>
+						</Button>
 					</Show>
 				</div>
 			</Show>

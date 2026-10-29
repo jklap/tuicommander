@@ -13,6 +13,7 @@ import { settingsStore } from "../../stores/settings";
 import { SettingToggle } from "../SettingsPanel/SettingFields";
 import { PrStateBadge } from "../Sidebar/PrStateBadge";
 import { BranchIcon, type BranchIconProps, UnmergedMarker } from "../Sidebar/RepoSection";
+import { Button } from "../ui/Button";
 import s from "./UiLegend.module.css";
 
 // ---------------------------------------------------------------------------
@@ -236,6 +237,8 @@ export const UiLegend: Component<{ editable?: boolean }> = (props) => {
 		<Show when={props.editable && p.id && getIndicator(p.id) ? p.id : undefined} fallback={p.children}>
 			{(id) => (
 				<button
+					type="button"
+					data-control-layout="card"
 					class={s.previewBtn}
 					onClick={() => setEditingId(id())}
 					title={t("uiLegend.btn.customize", "Customize")}
@@ -250,13 +253,16 @@ export const UiLegend: Component<{ editable?: boolean }> = (props) => {
 	const ResetButton: Component<{ id?: string }> = (p) => (
 		<Show when={props.editable && p.id && hasOverride(p.id) ? p.id : undefined}>
 			{(id) => (
-				<button
+				<Button
+					shape="icon"
+					variant="ghost"
 					class={s.resetSwatch}
 					onClick={() => settingsStore.clearIndicatorOverride(id())}
 					title={t("uiLegend.btn.resetOverride", "Reset to default")}
+					aria-label={t("uiLegend.btn.resetOverride", "Reset to default")}
 				>
 					&times;
-				</button>
+				</Button>
 			)}
 		</Show>
 	);
@@ -373,9 +379,9 @@ export const UiLegend: Component<{ editable?: boolean }> = (props) => {
 			</Group>
 
 			<Show when={props.editable}>
-				<button class={s.resetAllBtn} onClick={() => settingsStore.resetAllIndicators()}>
+				<Button size="compact" class={s.resetAllBtn} onClick={() => settingsStore.resetAllIndicators()}>
 					{t("uiLegend.btn.resetAll", "Reset all indicators")}
-				</button>
+				</Button>
 				<IndicatorEditorDialog indicatorId={editingId()} onClose={() => setEditingId(null)} />
 			</Show>
 		</div>

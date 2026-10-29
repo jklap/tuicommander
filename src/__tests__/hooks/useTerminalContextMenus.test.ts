@@ -115,6 +115,15 @@ describe("useTerminalContextMenus", () => {
 		expect(items.find((item) => item.label === "Split Right")?.disabled).toBe(true);
 	});
 
+	it("Close Terminal runs the shared close-tab-or-pane handler, not a direct tab close", () => {
+		const options = createOptions();
+		const items = useTerminalContextMenus(options as never).getContextMenuItems();
+
+		items.find((item) => item.label === "Close Terminal")?.action();
+
+		expect(options.closeActiveTabOrPane).toHaveBeenCalledOnce();
+	});
+
 	it("copies only the last command block output", async () => {
 		mockTerminals.state.activeId = "term-1";
 		mockTerminals.get.mockReturnValue({
