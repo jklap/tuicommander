@@ -8124,6 +8124,62 @@ mod tests {
         ));
     }
 
+    // Catches: status and non-force removal both overlooking skip-worktree local edits.
+    #[test]
+    fn archive_retention_keeps_local_edits_hidden_by_skip_worktree() {
+        let repo = setup_test_repo();
+        let checkout =
+            crate::test_fixtures::worktree_with(repo.path(), "retention-hidden-edits", false);
+        git_cmd(&checkout)
+            .args(["update-index", "--skip-worktree", "README.md"])
+            .run()
+            .unwrap();
+        fs::write(checkout.join("README.md"), "precious local configuration").unwrap();
+        let archived = PathBuf::from(
+            archive_worktree_at(repo.path(), "retention-hidden-edits", None, || Ok(100)).unwrap(),
+        );
+
+        let report = sweep_archived_worktrees(repo.path(), 1, 86500, |_| true).unwrap();
+
+        assert!(
+            report.deleted.is_empty(),
+            "locally modified checkout was deleted: {report:?}"
+        );
+        assert_eq!(
+            fs::read_to_string(archived.join("README.md")).unwrap(),
+            "precious local configuration"
+        );
+    }
+
+    // Catches: a retained parent archive ref preventing archival of a later nested branch.
+    #[test]
+    fn archive_worktree_accepts_branch_nested_under_a_previous_archive_ref() {
+        let repo = setup_test_repo();
+        crate::test_fixtures::worktree_with(repo.path(), "retention-parent", false);
+        let previous = PathBuf::from(
+            archive_worktree_at(repo.path(), "retention-parent", None, || Ok(100)).unwrap(),
+        );
+        git_cmd(&previous)
+            .args(["switch", "--detach"])
+            .run()
+            .unwrap();
+        git_cmd(repo.path())
+            .args(["branch", "-D", "retention-parent"])
+            .run()
+            .unwrap();
+        let child =
+            crate::test_fixtures::worktree_with(repo.path(), "retention-parent/child", true);
+        let tip = rev_at(&child, "HEAD").unwrap();
+
+        let result = archive_worktree_at(repo.path(), "retention-parent/child", None, || Ok(200));
+
+        assert!(
+            result.is_ok(),
+            "previous parent archive blocks child archival: {result:?}"
+        );
+        assert_eq!(rev_at(Path::new(&result.unwrap()), "HEAD").unwrap(), tip);
+    }
+
     // Catches: early expiry, mtime-based age, losing archive refs, and dirty-file loss.
     #[test]
     fn archive_retention_honors_age_and_keeps_unrecoverable_dirty_files() {
