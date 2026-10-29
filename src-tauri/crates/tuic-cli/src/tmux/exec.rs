@@ -898,11 +898,22 @@ pub(crate) fn execute(
             // e.g. one `split-window` eagerly materialised. Only in that case
             // is there an actual foreground process for `-k` to interrupt.
             let was_already_materialized = pane["tuic_session_id"].as_str().is_some();
+            // `Some(true)`: the shell itself owns the foreground, so there is
+            // no job for `-k` to interrupt — and a ^C would land on the
+            // shell's own startup instead (a slow `.zshrc.d`, or direnv
+            // evaluating a slow `.envrc` from its precmd hook, which the
+            // ^C kills: `direnv: error signal: killed`, leaving the launched
+            // agent with none of the project's env). `None` means the app
+            // could not tell (an older app, or no foreground process
+            // visible): keep the historical behavior rather than guess.
+            let foreground_is_shell = pane["foreground_is_shell"].as_bool();
 
-            // `-k` interrupts whatever is running (real tmux's respawn-pane
+            // `-k` interrupts whatever job is running (real tmux's respawn-pane
             // always kills the pane's process first) before delivering the
-            // command — never through `translate_keys`, since the command
-            // line may itself contain a token spelled `Enter`/`Space`/`Tab`.
+            // command — but only a real foreground job, never the bare shell
+            // (see `foreground_is_shell` above). The command line is never
+            // sent through `translate_keys`, since it may itself contain a
+            // token spelled `Enter`/`Space`/`Tab`.
             //
             // The command text and the submitting Enter are sent as TWO
             // separate writes with a gap between them, matching
@@ -937,7 +948,11 @@ pub(crate) fn execute(
                     Err(e) => return Outcome::err(e),
                 };
                 let mut payload = String::new();
-                if kill && was_already_materialized && attempt == 0 {
+                if kill
+                    && was_already_materialized
+                    && attempt == 0
+                    && foreground_is_shell != Some(true)
+                {
                     payload.push('\x03');
                 }
                 payload.push_str(&command.join(" "));
