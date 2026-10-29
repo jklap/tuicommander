@@ -1,3 +1,7 @@
+## Worktree journal and empty-start archive (2475-ab3a) — Rust rebuild/restart required
+
+- [ ] After Boss manually restarts a rebuilt `make dev` or installs `make build`, confirm an agent worktree with only an empty start commit remains available with Auto-archive merged enabled and no live session. Parallel archive journal integrity and backend classification are covered by automated regression tests. Rust does not hot-reload; the daily app was not restarted.
+
 ## Deleted story project sync (2464-f86e) — Rust rebuild/restart required
 
 - [ ] After Boss manually restarts a rebuilt `make dev` or installs `make build`, confirm deleted project roots no longer produce repeated native-story mdkb warnings. Restored directories must resume syncing. Rust does not hot-reload; the daily app was not restarted.
