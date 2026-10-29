@@ -290,5 +290,18 @@
       "Git handling is more reliable with non-origin default branches, merge.ff=only merges, and no phantom HEAD branch."
     ],
     "date": "2026-10-28"
+  },
+  "2.0.0-beta.5": {
+    "highlights": [
+      "Archived worktrees can be kept for a configurable number of days, globally or per repository, with recoverable commit refs.",
+      "Mobile CLI and Chat show queued prompt text from mobile, desktop and CLI, with Cancel and Clear all actions.",
+      "Archive workspace shows file, commit and session safety checks; Delete is available only for safe, integrated checkouts.",
+      "Opt-in GitHub issue triage, labelled-issue intake and incoming PR reviews retain decisions and publication results across restarts.",
+      "Temporary task secrets have an expiry and are masked from terminal output, history and captures.",
+      "The CLI | Chat switch stays on the Context header, and returning to CLI restores terminal keyboard focus.",
+      "Claude enterprise and spend-based usage shows unavailable values instead of false zeroes.",
+      "File tree refresh, parallel worktree renames, relay pairing and Windows agent resume paths are more reliable."
+    ],
+    "date": "2026-10-29"
   }
 }
