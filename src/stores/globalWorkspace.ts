@@ -105,7 +105,11 @@ function removeTerminalFromLayout(current: PaneLayoutState, termId: string): Pan
  * real store. Selecting a terminal would deactivate that pane.
  * Otherwise the active tab if it is a promoted terminal, else the first member.
  */
-function reconcileTerminalFocus(layout: PaneLayoutState | null, members: Set<string>): void {
+function reconcileTerminalFocus(
+	layout: PaneLayoutState | null,
+	members: Set<string>,
+	opts: { clearWhenNoMember?: boolean } = {},
+): void {
 	const activeGroup = layout?.activeGroupId ? layout.groups[layout.activeGroupId] : undefined;
 	const activeTab = activeGroup?.activeTabId;
 	if (activeTab && !members.has(activeTab)) {
@@ -114,6 +118,9 @@ function reconcileTerminalFocus(layout: PaneLayoutState | null, members: Set<str
 	}
 	const target = activeTab && members.has(activeTab) ? activeTab : [...members][0];
 	if (target) terminalsStore.setActive(target);
+	// No member to focus: clear rather than keep pointing at the PREVIOUS
+	// scope's terminal, whose content would otherwise stay on screen.
+	else if (opts.clearWhenNoMember) terminalsStore.setActive(null);
 }
 
 function createGlobalWorkspaceStore() {
@@ -439,7 +446,7 @@ function createGlobalWorkspaceStore() {
 			// inactive on purpose.
 			if (isActive()) {
 				const current = workspace().layout;
-				reconcileTerminalFocus(current, workspace().promoted);
+				reconcileTerminalFocus(current, workspace().promoted, { clearWhenNoMember: true });
 			}
 		},
 

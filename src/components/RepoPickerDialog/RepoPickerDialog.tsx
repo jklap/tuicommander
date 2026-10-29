@@ -53,7 +53,12 @@ export const RepoPickerDialog: Component<RepoPickerDialogProps> = (props) => {
 							<div class={s.repoList}>
 								<For each={props.repos}>
 									{(repo) => (
-										<button type="button" class={s.repoButton} onClick={() => props.onChooseRepo(repo.path)}>
+										<button
+											data-control-layout="row"
+											type="button"
+											class={s.repoButton}
+											onClick={() => props.onChooseRepo(repo.path)}
+										>
 											<span>{repo.displayName}</span>
 										</button>
 									)}
@@ -61,10 +66,10 @@ export const RepoPickerDialog: Component<RepoPickerDialogProps> = (props) => {
 							</div>
 						</Show>
 						<div class={s.escapeHatches}>
-							<button type="button" class={s.escapeHatchButton} onClick={props.onRegister}>
+							<button data-control-layout="row" type="button" class={s.escapeHatchButton} onClick={props.onRegister}>
 								Add this folder as a repository
 							</button>
-							<button type="button" class={s.escapeHatchButton} onClick={props.onUnattached}>
+							<button data-control-layout="row" type="button" class={s.escapeHatchButton} onClick={props.onUnattached}>
 								Open unattached terminal
 							</button>
 						</div>

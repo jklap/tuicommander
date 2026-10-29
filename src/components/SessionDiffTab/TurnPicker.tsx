@@ -2,6 +2,7 @@ import { type Component, createEffect, createMemo, createSignal, For, onCleanup,
 import type { EditStep, TurnSummary } from "../../types/sessionDiff";
 import { cx } from "../../utils";
 import { formatRelativeTime } from "../../utils/formatRelativeTime";
+import { Button } from "../ui/Button";
 import s from "./SessionDiffTab.module.css";
 
 export interface TurnPickerProps {
@@ -73,20 +74,22 @@ export const TurnPicker: Component<TurnPickerProps> = (props) => {
 
 	return (
 		<div class={s.turnPicker} ref={panelRef}>
-			<button
-				type="button"
+			<Button
+				variant="ghost"
+				size="compact"
 				class={s.modeBtn}
 				onClick={() => setOpen((v) => !v)}
 				title="Jump to a turn"
 				disabled={props.turns.length === 0}
 			>
 				Turns ({props.turns.length})
-			</button>
+			</Button>
 			<Show when={open()}>
 				<div class={s.turnPickerPanel} data-testid="turn-picker-panel">
 					<For each={rows()}>
 						{(row) => (
 							<button
+								data-control-layout="row"
 								type="button"
 								class={s.turnPickerItem}
 								title={row.tooltip}

@@ -2434,7 +2434,7 @@ describe("PluginHost — Tier 3k pickFile capability gating", () => {
 	});
 
 	it("external plugin with ui:file-picker resolves the dialog's chosen path", async () => {
-		const { open } = await import("@tauri-apps/plugin-dialog");
+		const { openDialog: open } = await import("../../utils/nativeDialog");
 		vi.mocked(open).mockResolvedValueOnce("/home/u/board.md");
 		let host: PluginHost | null = null;
 		await pluginRegistry.register(
@@ -2452,10 +2452,13 @@ describe("PluginHost — Tier 3k pickFile capability gating", () => {
 				filters: [{ name: "Markdown", extensions: ["md"] }],
 			}),
 		);
+		// The picker goes through utils/nativeDialog's `openDialog` (asserted above), never the
+		// crash-prone plugin-dialog `open` (see that module's header). Not asserted on the
+		// plugin-dialog mock itself: an earlier test's `vi.doUnmock` swaps it for the real module.
 	});
 
 	it("resolves null when the dialog is cancelled", async () => {
-		const { open } = await import("@tauri-apps/plugin-dialog");
+		const { openDialog: open } = await import("../../utils/nativeDialog");
 		vi.mocked(open).mockResolvedValueOnce(null);
 		let host: PluginHost | null = null;
 		await pluginRegistry.register(
@@ -2468,7 +2471,7 @@ describe("PluginHost — Tier 3k pickFile capability gating", () => {
 	});
 
 	it("resolves null in browser mode without importing the dialog plugin", async () => {
-		const { open } = await import("@tauri-apps/plugin-dialog");
+		const { openDialog: open } = await import("../../utils/nativeDialog");
 		vi.mocked(open).mockClear();
 		setTauriMode(false);
 		let host: PluginHost | null = null;

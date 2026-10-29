@@ -24,6 +24,8 @@ const KEPT_REINSPECT_MS = 10 * 60_000;
 const keptRecently = (record: WorkspaceCleanupRecord | undefined): boolean =>
 	record !== undefined && !record.decision.eligible && Date.now() - record.proof.inspectedAt < KEPT_REINSPECT_MS;
 
+import { warmStateFromList } from "./warmStateSeed";
+
 /** The backend's removal verdict for one detached checkout. `live_sessions` lists the sessions
  *  still working inside it; a checkout with any is never `safe`. */
 export interface OrphanAssessment {
@@ -495,6 +497,10 @@ export function createRepositoryRefreshCoordinator(deps: RepositoryRefreshCoordi
 							// `?? null`, not undefined: setWorkspace drops undefined fields.
 							gitOp: inProgressOps.get(wt.path) ?? null,
 						};
+						// The sidebar's warm badge after a reload: the backend's own warm
+						// status seeds it until a worktree-warm-* event takes over.
+						const warmState = warmStateFromList(wt.path, wt.warm_artifacts);
+						if (warmState !== undefined) update.warmState = warmState;
 						repositoriesStore.setWorkspace(repoPath, workspaceId, update);
 					}
 					for (const [source, target] of replacements) {

@@ -141,8 +141,8 @@ describe("PromptEditor (Edit/New Prompt dialog)", () => {
 		fireEvent.click(editButtonFor(container, "Sizing check"));
 
 		const contentTextarea = fieldByPlaceholder(container, "Enter your prompt text here...") as HTMLTextAreaElement;
+		// rows alone sizes it: main's control-geometry guard forbids a feature-CSS min-height.
 		expect(contentTextarea.getAttribute("rows")).toBe("10");
-		expect(contentTextarea.className).toContain("editorContentTextarea");
 	});
 
 	describe("staying interactive while a Compose panel is open (regression)", () => {

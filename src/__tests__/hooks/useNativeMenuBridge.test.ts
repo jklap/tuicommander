@@ -82,6 +82,7 @@ function createOptions() {
 	};
 	const terminalLifecycle = {
 		reopenClosedTab: vi.fn(),
+		closeTerminal: vi.fn(),
 		copyFromTerminal: vi.fn(),
 		clearTerminal: vi.fn(),
 		clearScrollback: vi.fn(),
@@ -94,7 +95,7 @@ function createOptions() {
 		handleTerminalSelect: vi.fn(),
 	};
 	const gitOps = { handleNewTab: vi.fn(), handleRunCommand: vi.fn() };
-	const splitPanes = { handleSplit: vi.fn(), toggleZoomPane: vi.fn() };
+	const splitPanes = { handleSplit: vi.fn(), toggleZoomPane: vi.fn(), closeActivePane: vi.fn() };
 	return {
 		shortcutHandlers,
 		terminalLifecycle,
@@ -184,6 +185,21 @@ describe("native menu bridge", () => {
 		dispatchNativeMenuAction("diff-scroll", options as never);
 
 		expect(options.shortcutHandlers.toggleDiffScroll).toHaveBeenCalledOnce();
+	});
+
+	it("routes the native Close Tab menu item through the shared close-tab-or-pane handler only", async () => {
+		const options = createOptions();
+		createRoot((rootDispose) => {
+			dispose = rootDispose;
+			useNativeMenuBridge(options as never);
+		});
+		await Promise.resolve();
+
+		handlers.get("menu-action")?.({ payload: "close-tab" });
+
+		expect(options.closeActiveTabOrPane).toHaveBeenCalledOnce();
+		expect(options.terminalLifecycle.closeTerminal).not.toHaveBeenCalled();
+		expect(options.splitPanes.closeActivePane).not.toHaveBeenCalled();
 	});
 
 	it("listens for native menu and ctrl-tab events and cleans both up", async () => {
