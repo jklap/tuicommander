@@ -132,6 +132,43 @@ describe("appLogger", () => {
 		expect(appLogger.getEntries().filter((entry) => entry.message === message)).toHaveLength(1);
 	});
 
+	// Catches: debug-only phone traces stay local and cannot be read from the host log ring.
+	it("mirrors only enabled mobile Send press summaries to the backend", async () => {
+		const previous = isPerfDebug();
+		vi.spyOn(console, "debug").mockImplementation(() => {});
+		try {
+			setPerfDebug(true);
+			appLogger.debug("mobile-send", "Mobile Send press: 1/1", { sendCalled: false, events: [] });
+			appLogger.debug("mobile-send", "unrelated debug", { ignored: true });
+			appLogger.debug("terminal", "Mobile Send press: 1/2", { ignored: true });
+			await Promise.resolve();
+			const pushes = mockRpc.mock.calls.filter(([command]) => command === "push_log");
+			expect(pushes).toHaveLength(1);
+			expect(pushes[0][1]).toMatchObject({
+				level: "debug",
+				source: "mobile-send",
+				message: "Mobile Send press: 1/1",
+				audience: "diagnostic",
+			});
+			expect(JSON.parse(pushes[0][1].dataJson)).toEqual({ sendCalled: false, events: [] });
+		} finally {
+			setPerfDebug(previous);
+		}
+	});
+
+	// Catches: the backend debug allowlist bypasses the production diagnostic gate.
+	it("does not mirror mobile Send debug summaries with perfDebug disabled", async () => {
+		const previous = isPerfDebug();
+		try {
+			setPerfDebug(false);
+			appLogger.debug("mobile-send", "Mobile Send press: 2/1", { events: [] });
+			await Promise.resolve();
+			expect(mockRpc.mock.calls.filter(([command]) => command === "push_log")).toHaveLength(0);
+		} finally {
+			setPerfDebug(previous);
+		}
+	});
+
 	// ---- Data field ----
 
 	it("preserves optional data field", () => {

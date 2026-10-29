@@ -7,6 +7,7 @@ vi.mock("../../transport", () => ({
 	HttpRpcError: class extends Error {},
 }));
 vi.mock("../../stores/toasts", () => ({ toastsStore: { add: vi.fn() } }));
+vi.mock("../../stores/appLogger", () => ({ appLogger: { debug: vi.fn(), warn: vi.fn(), error: vi.fn() } }));
 
 import { toastsStore } from "../../stores/toasts";
 import { rpc } from "../../transport";

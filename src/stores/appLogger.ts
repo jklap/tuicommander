@@ -8,7 +8,7 @@
  * objects so Web Inspector does not retain them as script arguments.
  *
  * The local JS ring buffer serves as a fast reactive cache for the UI.
- * Info/warn/error and bounded dictation lifecycle debug records are also mirrored
+ * Info/warn/error and bounded dictation/mobile Send debug records are also mirrored
  * to the Rust backend ring buffer via `push_log`, surviving webview reloads.
  * Other debug records remain local.
  *
@@ -50,6 +50,7 @@ export type AppLogSource =
 	| "github"
 	| "ci-heal"
 	| "dictation"
+	| "mobile-send"
 	| "store"
 	| "config"
 	| "settings"
@@ -322,9 +323,13 @@ function createAppLogger() {
 		}
 
 		// Mirror info/warn/error to Rust backend for MCP and cross-reload durability.
-		// Debug stays local except bounded dictation lifecycle records (six per take),
-		// needed to reconstruct a phone incident from the owner's existing log ring.
-		if (level !== "debug" || (source === "dictation" && message.startsWith("Browser dictation lifecycle:"))) {
+		// Debug stays local except bounded phone diagnostics: dictation lifecycle
+		// records (six per take) and opt-in mobile Send summaries (one per press).
+		if (
+			level !== "debug" ||
+			(source === "dictation" && message.startsWith("Browser dictation lifecycle:")) ||
+			(source === "mobile-send" && isPerfDebug() && message.startsWith("Mobile Send press:"))
+		) {
 			const dataJson = data !== undefined ? JSON.stringify(data, logDataReplacer) : undefined;
 			pushToRust(level, source, message, dataJson, audience);
 		}
