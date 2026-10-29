@@ -13,6 +13,7 @@ import s from "./KeyComboCapture.module.css";
 const BARE_MODIFIERS = new Set(["Meta", "Control", "Alt", "Shift"]);
 
 export interface KeyComboCaptureProps {
+	id?: string;
 	settingId?: SettingId;
 	/** Current key combo value (e.g. "Cmd+Shift+D") */
 	value: string;
@@ -130,6 +131,7 @@ export const KeyComboCapture: Component<KeyComboCaptureProps> = (props) => {
 				when={capturing()}
 				fallback={
 					<Button
+						id={props.id}
 						data-setting-id={props.settingId}
 						class={s.display}
 						onClick={startCapture}
@@ -140,6 +142,7 @@ export const KeyComboCapture: Component<KeyComboCaptureProps> = (props) => {
 				}
 			>
 				<Input
+					id={props.id}
 					data-setting-id={props.settingId}
 					class={s.input}
 					placeholder={props.placeholder ?? "Press a key combination..."}

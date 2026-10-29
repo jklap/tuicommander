@@ -44,6 +44,8 @@ export function SettingPageHeader(props: {
 
 export function SectionCard(props: {
 	title: string;
+	/** Fixed label column and compact form tokens for dense structured editors. */
+	layout?: "aligned";
 	description?: string;
 	help?: JSX.Element;
 	headingActions?: JSX.Element;
@@ -52,7 +54,7 @@ export function SectionCard(props: {
 }) {
 	const id = createUniqueId();
 	return (
-		<section class={s.card} aria-labelledby={id}>
+		<section class={s.card} classList={{ [fieldStyles.alignedRows]: props.layout === "aligned" }} aria-labelledby={id}>
 			<div class={s.cardHeading}>
 				<h3 id={id}>{props.title}</h3>
 				{props.help}

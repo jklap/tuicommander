@@ -977,7 +977,7 @@ button[data-control-layout="row"].searchResult:hover {
 .settingRowText label { font-size: 13px; font-weight: 600; color: var(--fg-primary); }
 .settingRowText .hint { color: var(--fg-secondary); margin-bottom: 0; }
 .settingRowControl { flex: 0 1 260px; min-width: 0; max-width: 48%; display: flex; flex-direction: column; align-items: flex-end; gap: 8px; }
-.settingRowControl > div:not(.settingRowValue) { width: 100%; display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: 8px; }
+.settingRowControl > div:not([class]) { width: 100%; display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: 8px; }
 .settingRowControl > div > [data-form-control]:not(button):not([data-form-control="switch"]):not([data-form-control="color"]):not([data-form-control="swatch"]) { width: 100%; }
 .settingRowControl > div > .hint { margin: 0; text-align: right; }
 .settingRowControl > [data-form-control]:not(button):not([data-form-control="switch"]):not([data-form-control="color"]):not([data-form-control="swatch"]) { width: 100%; }
@@ -1072,4 +1072,29 @@ button[data-control-layout="row"].searchResult:hover {
 
 @media (max-width: 600px) {
  button[data-control-layout="row"].navItem, button[data-control-layout="row"].searchResult { min-height: 44px; }
+}
+
+/* Dense structured editors opt in; named child layouts retain their own display. */
+.alignedRows {
+  --control-height: 28px;
+  --control-icon-height: 28px;
+  --control-font-size: var(--font-sm);
+  --control-radius: var(--radius-sm);
+}
+.alignedRows .settingRow {
+  display: grid;
+  grid-template-columns: 120px minmax(0, 1fr);
+  gap: 12px;
+  align-items: start;
+}
+.alignedRows .settingRowText { padding-top: 6px; }
+.alignedRows .settingRowControl {
+  width: 100%;
+  max-width: none;
+  align-items: stretch;
+}
+.alignedRows .settingRowControl > div:not([class]) { justify-content: flex-start; }
+.alignedRows .settingRowWithActions { flex-direction: row; align-items: center; }
+@media (max-width: 600px) {
+  .alignedRows .settingRow { grid-template-columns: minmax(0, 1fr); gap: 8px; }
 }
