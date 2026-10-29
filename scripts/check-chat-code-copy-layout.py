@@ -9,6 +9,7 @@ import json
 import os
 from pathlib import Path
 import re
+import shutil
 import signal
 import subprocess
 import time
@@ -16,7 +17,8 @@ import urllib.request
 import uuid
 
 ROOT = Path(__file__).resolve().parents[1]
-WRAPPER = Path.home() / 'Gits/personal/brainstorming/tools/browser-stealth/ab-stealth.sh'
+# The browser-stealth wrapper: TUIC_BROWSER_WRAPPER, else ab-stealth.sh on PATH.
+WRAPPER = os.environ.get('TUIC_BROWSER_WRAPPER') or shutil.which('ab-stealth.sh') or 'ab-stealth.sh'
 MEASURE = """JSON.stringify([...document.querySelectorAll('pre[data-raw-code]')].map(pre => {
  const button = pre.querySelector('[data-copy-code]');
  const rect = element => { const r=element.getBoundingClientRect();return {left:r.left,right:r.right,top:r.top,bottom:r.bottom,height:r.height}; };

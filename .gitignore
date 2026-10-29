@@ -68,6 +68,8 @@ scripts/*
 !scripts/check-mobile-session-chat-layout.mjs
 !scripts/check-mobile-jump-layout.mjs
 !scripts/check-chat-code-copy-layout.py
+!scripts/browser-wrapper.mjs
+!scripts/browser-wrapper.test.mjs
 !scripts/fixtures/
 scripts/fixtures/*
 !scripts/fixtures/mobile-session-chat-layout.html

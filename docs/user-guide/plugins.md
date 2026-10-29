@@ -98,7 +98,7 @@ private response bodies. The outer result deadline is 450 seconds.
 
 Append `--preflight-only` to check plugin load, sandbox configuration and Tasks
 mounting before login. A preflight success is **not** authenticated E2E evidence.
-The socket must be below `~/Gits/.tmp/tuic-at/`; there is no default-app target.
+The socket must be a `make agent-test` socket (`…/tuic-at/<hash prefix>/tuic-mcp-<hash>.sock`); there is no default-app target.
 Stop the selected instance with the matching `make agent-test-stop` variables.
 
 ### Provider closure prerequisites

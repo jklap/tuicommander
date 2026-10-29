@@ -15,10 +15,30 @@ import signal
 import stat
 import subprocess
 import sys
+import tempfile
 import threading
 
 ROOT = Path(__file__).resolve().parent.parent
 BINARY = "tuicommander-agent-test"
+
+
+def runtime_root() -> Path:
+    """Where each instance's socket, pid file and stop FIFO live.
+
+    The host temp dir (the one scripts/with-test-tmp.sh records before it
+    points TMPDIR at a long per-run test root), so the socket path stays under
+    the macOS Unix socket limit. TUIC_AGENT_TEST_ROOT overrides it.
+    """
+    override = os.environ.get("TUIC_AGENT_TEST_ROOT")
+    if override:
+        return Path(override)
+    return Path(os.environ.get("TUIC_TEST_HOST_TMPDIR") or tempfile.gettempdir()) / "tuic-at"
+
+
+def build_runner() -> list[str]:
+    """Optional build admission wrapper (e.g. a build-slot scheduler), named by TUIC_BUILD_SLOT."""
+    slot = os.environ.get("TUIC_BUILD_SLOT")
+    return [slot] if slot and Path(slot).is_file() else []
 
 
 def plan(instance: str, port: str, speech_output: bool = False) -> dict:
@@ -30,12 +50,14 @@ def plan(instance: str, port: str, speech_output: bool = False) -> dict:
         raise ValueError("speech output requires an agent-test-<name> instance")
     if os.environ.get("CARGO_TARGET_DIR"):
         raise ValueError("unset CARGO_TARGET_DIR; mbx owns the target directory")
-    # Short, instance-specific runtime files stay under Gits, not the OS temp dir.
+    # Short, instance-specific runtime files. The directory takes 8 hex digits
+    # of the instance hash: with the full 16 a 49-byte macOS host temp dir puts
+    # the socket at exactly the 104-byte SUN_LEN limit.
     digest = hashlib.sha256(instance.encode()).hexdigest()[:16]
-    runtime = Path.home() / "Gits/.tmp/tuic-at" / digest
+    runtime = runtime_root() / digest[:8]
     socket = runtime / f"tuic-mcp-{digest}.sock"
     if len(os.fsencode(socket)) >= 104:
-        raise ValueError("runtime socket path exceeds the macOS Unix socket limit")
+        raise ValueError("runtime socket path exceeds the macOS Unix socket limit; set TUIC_AGENT_TEST_ROOT to a shorter directory")
     executable = ROOT / ".tmp/agent-test" / instance / BINARY
     # Tao's launch activation hack makes every initially visible window key,
     # even with focus=false. Agent-test presents it without a key only at Ready.
@@ -104,13 +126,13 @@ def start(launch: dict) -> int:
         if shutil.which("cargo", path=env["PATH"]) != str(shim):
             raise RuntimeError("cargo must resolve to the mbx shim")
         subprocess.run(["mbx", "doctor"], env=env, cwd=ROOT, check=True)
-        slot = Path.home() / "Gits/personal/orchestrator/tools/build/build-slot.sh"
-        runner = [str(slot)] if slot.is_file() else []
+        runner = build_runner()
         subprocess.run([*runner, *launch["frontend"]], env=env, cwd=ROOT, check=True)
         # Embedded assets, separate application identity, no dev server or bundle writes.
         env["TAURI_CONFIG"] = launch["build_environment"]["TAURI_CONFIG"]
-        freeze = Path.home() / "Gits/.tmp/BUILD_FREEZE"
-        if freeze.exists() and "feat-2086" not in freeze.read_text():
+        # An optional shared build freeze file, named by TUIC_BUILD_FREEZE.
+        freeze = Path(os.environ.get("TUIC_BUILD_FREEZE") or os.devnull)
+        if freeze.is_file() and "feat-2086" not in freeze.read_text():
             raise RuntimeError("BUILD_FREEZE does not allow feat-2086")
         artifacts = {}
         with subprocess.Popen([*runner, *launch["cargo"]], cwd=ROOT, env=env, stdout=subprocess.PIPE, text=True) as build:

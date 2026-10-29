@@ -3,6 +3,7 @@
 import { spawn, spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { createWriteStream, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createServer } from "vite";
@@ -10,7 +11,7 @@ import solid from "vite-plugin-solid";
 
 const root = fileURLToPath(new URL("../..", import.meta.url));
 process.chdir(root);
-const evidence = resolve(process.argv[2] ?? `${process.env.HOME}/Gits/.tmp/stall-workload-${Date.now()}`);
+const evidence = resolve(process.argv[2] ?? resolve(tmpdir(), `stall-workload-${Date.now()}`));
 if (existsSync(evidence)) throw new Error(`Evidence directory already exists: ${evidence}`);
 mkdirSync(evidence, { recursive: true });
 const home = resolve(evidence, "home");
