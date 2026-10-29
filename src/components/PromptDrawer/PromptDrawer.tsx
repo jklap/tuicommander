@@ -868,7 +868,6 @@ const PromptEditor: Component<PromptEditorProps> = (props) => {
 					<label>Content *</label>
 					<Textarea
 						ref={textareaRef}
-						class={s.editorContentTextarea}
 						value={content()}
 						onInput={(e) => setContent(e.currentTarget.value)}
 						placeholder="Enter your prompt text here..."
@@ -921,7 +920,7 @@ const PromptEditor: Component<PromptEditorProps> = (props) => {
 					<Show when={executionMode() === "inject"}>
 						<div class={s.editorField}>
 							<label>Target</label>
-							<select
+							<Select
 								value={injectTarget()}
 								onChange={(e) => {
 									const val = e.currentTarget.value;
@@ -931,7 +930,7 @@ const PromptEditor: Component<PromptEditorProps> = (props) => {
 								<option value="auto">Auto — Compose if open, else Terminal</option>
 								<option value="compose">Compose box (review)</option>
 								<option value="terminal">Terminal (send to agent)</option>
-							</select>
+							</Select>
 						</div>
 					</Show>
 

@@ -15,7 +15,7 @@
 	overflow-y: auto;
 }
 
-.repoButton {
+button[data-control-layout="row"].repoButton {
 	display: flex;
 	align-items: center;
 	gap: 8px;
@@ -30,13 +30,13 @@
 	overflow: hidden;
 }
 
-.repoButton span {
+button[data-control-layout="row"].repoButton span {
 	overflow: hidden;
 	text-overflow: ellipsis;
 	white-space: nowrap;
 }
 
-.repoButton:hover {
+button[data-control-layout="row"].repoButton:hover {
 	background: var(--bg-highlight);
 	border-color: var(--accent);
 }
@@ -53,7 +53,7 @@
 	gap: 6px;
 }
 
-.escapeHatchButton {
+button[data-control-layout="row"].escapeHatchButton {
 	padding: 8px 10px;
 	background: var(--bg-tertiary);
 	border: 1px dashed var(--border);
@@ -64,7 +64,7 @@
 	cursor: pointer;
 }
 
-.escapeHatchButton:hover {
+button[data-control-layout="row"].escapeHatchButton:hover {
 	background: var(--bg-highlight);
 	color: var(--fg-primary);
 }

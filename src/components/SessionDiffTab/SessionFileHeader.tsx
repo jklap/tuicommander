@@ -3,6 +3,7 @@ import type { FileReview } from "../../types/sessionDiff";
 import { cx } from "../../utils";
 import { onClickKeyDown } from "../../utils/a11y";
 import fl from "../shared/diffFileList.module.css";
+import { Button } from "../ui/Button";
 import s from "./SessionDiffTab.module.css";
 
 export interface SessionFileHeaderProps {
@@ -36,8 +37,11 @@ export const SessionFileHeader: Component<SessionFileHeaderProps> = (props) => {
 			onClick={props.onToggleExpanded}
 			onKeyDown={onClickKeyDown(props.onToggleExpanded)}
 		>
-			<button
-				type="button"
+			<Button
+				shape="icon"
+				variant="ghost"
+				aria-label={props.expanded ? "Collapse file" : "Expand file"}
+				aria-expanded={props.expanded}
 				class={s.chevronBtn}
 				onClick={(e) => {
 					e.stopPropagation();
@@ -57,7 +61,7 @@ export const SessionFileHeader: Component<SessionFileHeaderProps> = (props) => {
 				>
 					<path d="M4 6l4 4 4-4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
 				</svg>
-			</button>
+			</Button>
 			<span
 				class={fl.filePath}
 				onClick={(e) => {
@@ -91,8 +95,10 @@ export const SessionFileHeader: Component<SessionFileHeaderProps> = (props) => {
 				</Show>
 			</span>
 			<div class={s.fileActions}>
-				<button
-					type="button"
+				<Button
+					shape="icon"
+					variant="ghost"
+					aria-label="Copy this file's diff"
 					class={s.iconBtn}
 					onClick={(e) => {
 						e.stopPropagation();
@@ -103,10 +109,12 @@ export const SessionFileHeader: Component<SessionFileHeaderProps> = (props) => {
 					<svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor">
 						<path d="M4 2a2 2 0 0 0-2 2v7h1.5V4a.5.5 0 0 1 .5-.5h7V2H4zm3 3a2 2 0 0 0-2 2v7a2 2 0 0 0 2 2h5a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2H7z" />
 					</svg>
-				</button>
+				</Button>
 				<Show when={props.group.base_source !== "unknown"}>
-					<button
-						type="button"
+					<Button
+						shape="icon"
+						variant="ghost"
+						aria-label="Revert this file to its session-start content"
 						class={s.iconBtn}
 						onClick={(e) => {
 							e.stopPropagation();
@@ -117,11 +125,12 @@ export const SessionFileHeader: Component<SessionFileHeaderProps> = (props) => {
 						<svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor">
 							<path d="M2 8a6 6 0 1 1 12 0A6 6 0 0 1 2 8zm6-4a4 4 0 1 0 0 8 4 4 0 0 0 0-8zM6.5 7.5l3-2v4l-3-2z" />
 						</svg>
-					</button>
+					</Button>
 				</Show>
 				<Show when={props.stepCount > 1}>
-					<button
-						type="button"
+					<Button
+						variant="ghost"
+						size="compact"
 						class={s.linkBtn}
 						onClick={(e) => {
 							e.stopPropagation();
@@ -129,7 +138,7 @@ export const SessionFileHeader: Component<SessionFileHeaderProps> = (props) => {
 						}}
 					>
 						{props.stepsOpen ? "Hide" : "Show"} {props.stepCount} edits
-					</button>
+					</Button>
 				</Show>
 			</div>
 		</div>
