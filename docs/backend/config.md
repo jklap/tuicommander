@@ -983,8 +983,9 @@ switched away from looks identical on that one axis.
    to exist. Permission and other I/O errors preserve the row because they do
    not prove absence.
 2. The path falls under a recognized temp root (`recognized_temp_roots()`:
-   `std::env::temp_dir()`, `/tmp`, `/private/tmp`, `/var/folders`,
-   `/private/var/folders`, `$HOME/Gits/.tmp`).
+   `std::env::temp_dir()`, `TMPDIR`/`TMP`/`TEMP`, `/tmp`, `/private/tmp`,
+   `/var/folders`, `/private/var/folders`). `$HOME/Gits/.tmp` was dropped in
+   2026-10: rows left there are no longer classified as stale-temp.
 3. `isGitRepo` is explicitly `false` (never merely absent or `true`).
 4. Exactly one workspace, and it is shell-only: no live or saved terminals, no
    last-active terminal, no diffstat/commit/merge state, no parent, no run

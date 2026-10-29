@@ -14,7 +14,7 @@ describe("tauri.conf.json assetProtocol scope", () => {
 	});
 
 	// Real glob matching (~/Gits/.tmp served, other dot paths denied) is covered by
-	// src-tauri/tests/asset_scope_glob.rs.
+	// src-tauri/tests/cases/asset_scope_glob.rs.
 
 	// Catches: a broad dot-directory allow slipping in next to the .tmp one.
 	it("names no other dot-directory (so $HOME/.ssh stays out of scope)", () => {
