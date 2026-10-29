@@ -542,10 +542,15 @@ cat "$EGO_HOME/report.json""#,
 
         let pair = native_pty_system().openpty(PtySize::default()).unwrap();
         // A real foreground process with an ego argv0 and isolated initial env.
-        // exec -a avoids writing or compiling a second native test executable.
+        // The process must not be an Apple platform binary: macOS returns no
+        // environment for those through KERN_PROCARGS2, so EGO_HOME would be
+        // invisible. The identity probe blocks on stdin like `read`.
+        let probe =
+            tuic_test_support::install_identity_probe(&dir.path().join("probe"), "ego-probe");
         let mut command = CommandBuilder::new("/bin/bash");
-        command.args(["-c", "exec -a \"$1\" /bin/sh -c 'read -r input'", "probe"]);
+        command.args(["-c", "exec -a \"$1\" \"$2\"", "probe"]);
         command.arg(&binary);
+        command.arg(&probe);
         command.env("EGO_HOME", dir.path());
         let mut child = pair.slave.spawn_command(command).unwrap();
         let pid = child.process_id().unwrap();
