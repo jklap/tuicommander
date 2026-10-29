@@ -83,14 +83,16 @@ describe("RepoScriptsTab", () => {
 		expect(setupTextarea.placeholder).toBe("Inheriting: npm ci");
 	});
 
-	it("falls back to a canned example placeholder when null AND no global default is set", () => {
+	// Main's placeholder says what an empty inherit resolves to; the canned example
+	// is only for an explicit (non-null) override left empty.
+	it("says it inherits no global script when null AND no global default is set", () => {
 		const settings = makeSettings({ setupScript: null });
 		const emptyDefaults: RepoDefaults = { ...defaults, setupScript: "" };
 		const { container } = render(() => (
 			<RepoScriptsTab settings={settings} defaults={emptyDefaults} onUpdate={onUpdate} />
 		));
 		const setupTextarea = container.querySelectorAll("textarea")[0] as HTMLTextAreaElement;
-		expect(setupTextarea.placeholder).toBe("#!/bin/bash\nnpm install");
+		expect(setupTextarea.placeholder).toBe("Inheriting: no global script");
 	});
 
 	it("calls onUpdate with the field key and value when the setup script changes", () => {

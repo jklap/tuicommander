@@ -710,12 +710,7 @@ export const SmartPromptsTab: Component = () => {
 					hint="Default agent for headless prompts. Individual prompts can override this in their settings."
 				>
 					{(id, descriptionId) => (
-						<HeadlessAgentSelect
-							agentTypes={headlessAgents()}
-							data-setting-id="agents.headless_agent"
-							id={id}
-							aria-describedby={descriptionId()}
-						/>
+						<HeadlessAgentSelect agentTypes={headlessAgents()} id={id} aria-describedby={descriptionId()} />
 					)}
 				</SettingRow>
 				<Show when={detection.loading()}>

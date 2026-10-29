@@ -72,10 +72,11 @@ const UNINDEXABLE: Record<string, { dynamic: number; orphans: number }> = {
 	"keyboard-shortcuts": { dynamic: 1, orphans: 0 },
 	dictation: { dynamic: 0, orphans: 0 },
 	github: { dynamic: 0, orphans: 0 },
-	// UpstreamMcpPanel: the "Discovered tools ({count})" label, whose rendered
-	// text includes a runtime count, and each server row's `ConnectionStatusBadge
-	// label={…}` (a runtime status, not a setting).
-	mcp: { dynamic: 2, orphans: 0 },
+	// LocalMcpPanel: each capability switch's `SettingRow label={capability.title}`
+	// (one row per runtime capability). UpstreamMcpPanel: the "Discovered tools
+	// ({count})" label, whose rendered text includes a runtime count, and each
+	// server row's `ConnectionStatusBadge label={…}` (a runtime status, not a setting).
+	mcp: { dynamic: 3, orphans: 0 },
 	"remote-access": { dynamic: 0, orphans: 0 },
 	// RemoteServersTab's merged editor: the "Named instance"/"Manual port" radio
 	// labels wrap a nested input; the connection rows' `ConnectionStatusBadge
@@ -245,6 +246,14 @@ describe("searchSettings", () => {
 		expect(hits).toEqual([
 			expect.objectContaining({ tab: "remote-access", section: "Cloud Relay", label: "Relay Server URL" }),
 		]);
+	});
+
+	// Audit C9: main restyled these read-only rows as <span>s, which the
+	// extractor cannot see, so search stopped finding them.
+	it.each(["Status", "Fingerprint"])("finds the self-signed certificate %s row", (label) => {
+		expect(searchSettings(`self-signed ${label}`, ALL_TABS, "desktop")).toContainEqual(
+			expect.objectContaining({ tab: "remote-access", section: "Self-Signed HTTPS", label }),
+		);
 	});
 
 	it.each(["Permissions", "Filesystem sandbox"])("does not lose the ego %s control from Settings search", (label) => {

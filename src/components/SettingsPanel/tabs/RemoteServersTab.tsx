@@ -4,6 +4,7 @@ import type { DiscoveredSshHost, RemoteConnection } from "../../../stores/remote
 import { type TunnelProfile, tunnelsStore } from "../../../stores/tunnels";
 import { DirectCertConfirmDialog } from "../../shared/DirectCertConfirmDialog";
 import { ProvisionConfirmDialog } from "../../shared/ProvisionConfirmDialog";
+import { Button } from "../../ui/Button";
 import s from "../Settings.module.css";
 import { RemoteMachinesTab } from "./RemoteMachinesTab";
 import { SshTunnelsSection } from "./SshTunnelsSection";
@@ -62,9 +63,9 @@ export const RemoteServersTab: Component = () => {
 
 				<div class={s.group} style={{ display: "flex", "justify-content": "flex-end" }}>
 					<Show when={!editorTarget()}>
-						<button class={s.testBtn} onClick={openAdd}>
+						<Button data-non-setting="Opens the connection editor; Save writes the new connection" onClick={openAdd}>
 							Add Connection
-						</button>
+						</Button>
 					</Show>
 				</div>
 

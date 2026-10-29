@@ -58,33 +58,32 @@ describe("AgentRow per-agent tri-state overrides", () => {
 		return { ...result, store };
 	}
 
-	function triGroup(container: HTMLElement, label: string): HTMLElement {
-		return container.querySelector(`[role="checkbox"][aria-label="${label}"]`) as HTMLElement;
+	// Main's "Use global default" select replaces wip's cycling TriStateToggle
+	// (rebase decision 6); the select carries the same three states.
+	function overrideSelect(container: HTMLElement, settingId: string): HTMLSelectElement {
+		return container.querySelector(`select[data-setting-id="agents.agents.{key}.${settingId}"]`) as HTMLSelectElement;
 	}
 
 	it("renders both rows defaulted to 'use global' when the agent has no override", async () => {
 		const { container } = await renderExpandedRow();
-		expect(triGroup(container, "Track agent intent").getAttribute("aria-checked")).toBe("mixed");
-		expect(triGroup(container, "Show suggested follow-ups").getAttribute("aria-checked")).toBe("mixed");
+		expect(overrideSelect(container, "intent_tab_title").value).toBe("inherit");
+		expect(overrideSelect(container, "suggest_followups").value).toBe("inherit");
+		expect(overrideSelect(container, "intent_tab_title").options[0].textContent).toMatch(/^Use global default/);
 	});
 
 	it("selecting On/Off for intent_tab_title persists a concrete boolean, not undefined", async () => {
 		const { container, store } = await renderExpandedRow();
-		// Cycle order is Global -> On -> Off -> Global; two clicks from Global reaches Off.
-		const el = triGroup(container, "Track agent intent");
-		fireEvent.click(el);
-		fireEvent.click(el);
+		fireEvent.change(overrideSelect(container, "intent_tab_title"), { target: { value: "false" } });
 		expect(store.getIntentTabTitle("claude")).toBe(false);
 	});
 
-	it("selecting 'Global' resets the override back to undefined (inherit)", async () => {
+	it("selecting 'Use global default' resets the override back to undefined (inherit)", async () => {
 		const { container, store } = await renderExpandedRow();
-		const el = triGroup(container, "Show suggested follow-ups");
-		fireEvent.click(el);
+		const select = overrideSelect(container, "suggest_followups");
+		fireEvent.change(select, { target: { value: "true" } });
 		expect(store.getSuggestFollowups("claude")).toBe(true);
 
-		fireEvent.click(el);
-		fireEvent.click(el);
+		fireEvent.change(select, { target: { value: "inherit" } });
 		expect(store.getSuggestFollowups("claude")).toBeUndefined();
 	});
 });
