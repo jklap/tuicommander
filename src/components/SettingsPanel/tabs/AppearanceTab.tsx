@@ -251,6 +251,7 @@ export const AppearanceTab: Component = () => {
 			</SectionCard>
 			<SectionCard title={t("appearance.heading.bell", "Bell")}>
 				<SettingSelect
+					settingId="app.bell_style"
 					label={t("appearance.label.bellStyle", "Bell Style")}
 					value={settingsStore.state.bellStyle}
 					onChange={(v) => {

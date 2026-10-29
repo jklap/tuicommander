@@ -83,91 +83,65 @@ vi.mock("../../../themes", () => ({
 }));
 
 import { AppearanceTab } from "../../../components/SettingsPanel/tabs/AppearanceTab";
-
-/** Find a SettingToggle's checkbox by the visible label text next to it
- *  (SettingFields.tsx renders `<input type="checkbox"/><span>{label}</span>`
- *  as siblings under one `.group` div) — not by position, which breaks
- *  silently whenever a control is inserted ahead of the one under test. */
-function toggleByLabel(container: HTMLElement, label: string): HTMLInputElement {
-	const span = Array.from(container.querySelectorAll("span")).find((el) => el.textContent === label);
-	const checkbox = span?.parentElement?.querySelector('input[type="checkbox"]');
-	if (!checkbox) throw new Error(`No toggle found for label "${label}"`);
-	return checkbox as HTMLInputElement;
-}
-
-/** Find a SettingSlider's range input by its `<label>` text (SettingFields.tsx
- *  renders `<label>{label}</label>` as a sibling of `.slider > input[type=range]`). */
-function sliderByLabel(container: HTMLElement, label: string): HTMLInputElement {
-	const labelEl = Array.from(container.querySelectorAll("label")).find((el) => el.textContent === label);
-	const slider = labelEl?.parentElement?.querySelector('input[type="range"]');
-	if (!slider) throw new Error(`No slider found for label "${label}"`);
-	return slider as HTMLInputElement;
-}
-
-/** Find a SettingSelect's <select> by its <label> text. */
-function selectByLabel(container: HTMLElement, label: string): HTMLSelectElement {
-	const labelEl = Array.from(container.querySelectorAll("label")).find((el) => el.textContent === label);
-	const select = labelEl?.parentElement?.querySelector("select");
-	if (!select) throw new Error(`No select found for label "${label}"`);
-	return select as HTMLSelectElement;
-}
+import { settingControl } from "../../helpers/settingControl";
 
 describe("AppearanceTab", () => {
 	beforeEach(() => {
 		vi.clearAllMocks();
 	});
 
-	it("renders the Tabs, Repository Groups, Layout, Bell, and UI Legend headings in order", () => {
+	it("renders the Tabs, Chat, Repository Groups, Layout, Bell, and UI Legend headings in order", () => {
 		const { container } = render(() => <AppearanceTab />);
 		const headings = Array.from(container.querySelectorAll("h3")).map((h) => h.textContent);
-		// The terminal theme select lives in the Terminal tab (main moved it there), not here.
-		expect(headings).toEqual(["Tabs", "Repository Groups", "Layout", "Bell", "UI Legend"]);
+		// The terminal theme select lives in the Terminal tab (main moved it there), not
+		// here; main's Chat section (new-text indicator, muted intermediate text) follows Tabs.
+		expect(headings).toEqual(["Tabs", "Chat", "Repository Groups", "Layout", "Bell", "UI Legend"]);
 	});
 
 	it("calls setSplitTabMode when the split-tab-mode select changes", () => {
 		const { container } = render(() => <AppearanceTab />);
-		const select = selectByLabel(container, "Split Tab Mode");
+		const select = settingControl<HTMLSelectElement>(container, "app.split_tab_mode");
 		fireEvent.change(select, { target: { value: "unified" } });
 		expect(mockSetSplitTabMode).toHaveBeenCalledWith("unified");
 	});
 
 	it("calls setTabOrderingMode when the tab-ordering select changes", () => {
 		const { container } = render(() => <AppearanceTab />);
-		const select = selectByLabel(container, "Tab Ordering");
+		const select = settingControl<HTMLSelectElement>(container, "app.tab_ordering_mode");
 		fireEvent.change(select, { target: { value: "free" } });
 		expect(mockSetTabOrderingMode).toHaveBeenCalledWith("free");
 	});
 
 	it("calls setTabCyclingAllTypes when its toggle changes", () => {
 		const { container } = render(() => <AppearanceTab />);
-		const checkbox = toggleByLabel(container, "Cycle All Tab Types");
+		const checkbox = settingControl<HTMLInputElement>(container, "app.tab_cycling_all_types");
 		fireEvent.change(checkbox, { target: { checked: true } });
 		expect(mockSetTabCyclingAllTypes).toHaveBeenCalledWith(true);
 	});
 
 	it("calls setTabTreeEnabled when its toggle changes", () => {
 		const { container } = render(() => <AppearanceTab />);
-		const checkbox = toggleByLabel(container, "Nested Terminal Tabs");
+		const checkbox = settingControl<HTMLInputElement>(container, "app.tab_tree_enabled");
 		fireEvent.change(checkbox, { target: { checked: false } });
 		expect(mockSetTabTreeEnabled).toHaveBeenCalledWith(false);
 	});
 
 	it("calls setMaxTabNameLength when the slider changes", () => {
 		const { container } = render(() => <AppearanceTab />);
-		const slider = sliderByLabel(container, "Max Tab Name Length");
+		const slider = settingControl<HTMLInputElement>(container, "app.max_tab_name_length");
 		fireEvent.input(slider, { target: { value: "45" } });
 		expect(mockSetMaxTabNameLength).toHaveBeenCalledWith(45);
 	});
 
 	it("shows the bell style select with the current value", () => {
 		const { container } = render(() => <AppearanceTab />);
-		const select = selectByLabel(container, "Bell Style");
+		const select = settingControl<HTMLSelectElement>(container, "app.bell_style");
 		expect(select.value).toBe("visual");
 	});
 
 	it("calls setBellStyle when the bell style select changes", () => {
 		const { container } = render(() => <AppearanceTab />);
-		const select = selectByLabel(container, "Bell Style");
+		const select = settingControl<HTMLSelectElement>(container, "app.bell_style");
 		fireEvent.change(select, { target: { value: "both" } });
 		expect(mockSetBellStyle).toHaveBeenCalledWith("both");
 	});
