@@ -69,6 +69,7 @@ vi.mock("../../../stores/notifications", () => ({
 }));
 
 import { NotificationsTab } from "../../../components/SettingsPanel/tabs/NotificationsTab";
+import { settingControl } from "../../helpers/settingControl";
 
 describe("NotificationsTab", () => {
 	beforeEach(() => {
@@ -82,8 +83,10 @@ describe("NotificationsTab", () => {
 		for (const label of soundLabels) {
 			expect(getByText(label)).toBeTruthy();
 		}
-		// Master toggle + 6 per-event toggles + orchestration toggle + bell toggle + PR OS-notification toggle = 10
-		expect(container.querySelectorAll('input[type="checkbox"]')).toHaveLength(10);
+		// One enable switch per event, bound to that event's catalogue id.
+		for (const key of ["question", "error", "completion", "warning", "info", "attention"]) {
+			expect(settingControl(container, `notifications.sounds.${key}`).type).toBe("checkbox");
+		}
 	});
 
 	it("calls setEnabled when the master toggle changes", () => {
@@ -109,17 +112,15 @@ describe("NotificationsTab", () => {
 	});
 
 	it("calls setSilenceRemoteCompletions when the orchestration toggle changes", () => {
-		const { getByText } = render(() => <NotificationsTab />);
-		const label = getByText("Silence completions from MCP sessions");
-		const checkbox = label.closest("div")?.querySelector('input[type="checkbox"]') as HTMLInputElement;
+		const { container } = render(() => <NotificationsTab />);
+		const checkbox = settingControl(container, "notifications.silence_remote_completions");
 		fireEvent.change(checkbox, { target: { checked: true } });
 		expect(mockSetSilenceRemoteCompletions).toHaveBeenCalledWith(true);
 	});
 
 	it("calls setToastsInBell when the bell toggle changes, and renders it outside the audio-availability gate", () => {
-		const { getByText } = render(() => <NotificationsTab />);
-		const label = getByText("Keep toasts in the bell");
-		const checkbox = label.closest("div")?.querySelector('input[type="checkbox"]') as HTMLInputElement;
+		const { container } = render(() => <NotificationsTab />);
+		const checkbox = settingControl(container, "notifications.toasts_in_bell");
 		fireEvent.change(checkbox, { target: { checked: false } });
 		expect(mockSetToastsInBell).toHaveBeenCalledWith(false);
 	});

@@ -54,7 +54,6 @@ import {
 	type ProfileChip,
 	splitRawArgs,
 } from "../../../utils/runConfigArgs";
-import { TriStateToggle } from "../../shared/TriStateToggle";
 import { AgentIcon } from "../../ui/AgentIcon";
 import { Button } from "../../ui/Button";
 import { Input } from "../../ui/Input";
@@ -124,6 +123,20 @@ interface McpStatus {
 // ---------------------------------------------------------------------------
 
 /** Key-value row for env var editing */
+/** Per-agent boolean that inherits the global setting: main's "Use global
+ * default" select (as RepoWorktreeTab's `BooleanOverride`), `inherit` = null. */
+const OVERRIDE_INHERIT = "inherit";
+const overrideValue = (value: boolean | null | undefined) =>
+	value === null || value === undefined ? OVERRIDE_INHERIT : String(value);
+const parseOverride = (value: string): boolean | null => (value === OVERRIDE_INHERIT ? null : value === "true");
+const overrideOptions = (fallback: boolean) => (
+	<>
+		<option value={OVERRIDE_INHERIT}>Use global default ({fallback ? "On" : "Off"})</option>
+		<option value="true">On</option>
+		<option value="false">Off</option>
+	</>
+);
+
 const EnvVarRow: Component<{
 	key: string;
 	value: string;
@@ -985,11 +998,11 @@ export const AgentRow: Component<{
 
 	/**
 	 * Three real states (ask / wrap / leave alone), not two — a plain
-	 * checkbox has no way back to "ask", so this is a `<select>` rather than
-	 * the toggle-row pattern above (see `SettingsPanel/AGENTS.md`'s
-	 * "Tri-State Inheritable Settings" section: `TriStateToggle` is
-	 * specifically for a global-default-to-inherit-from shape, which this
-	 * setting doesn't have — it's a genuine three-choice preference, not an
+	 * checkbox has no way back to "ask", so this is a select rather than a
+	 * switch (see `SettingsPanel/AGENTS.md`'s "Tri-State Inheritable
+	 * Settings" section: the "Use global default" select is specifically for
+	 * a global-default-to-inherit-from shape, which this setting doesn't
+	 * have — it's a genuine three-choice preference, not an
 	 * override-vs-inherit one).
 	 */
 	const handleWrapUserFunctionChange = async (value: "ask" | "wrap" | "leave") => {
@@ -1260,7 +1273,9 @@ export const AgentRow: Component<{
 							<div class={a.expandedSection}>
 								<label class={a.toggleRow} onClick={(e) => e.stopPropagation()}>
 									<span>If your shell already defines its own {props.agentType} function</span>
-									<select
+									<Select
+										data-setting-id="agents.agents.{key}.wrap_user_function"
+										compact
 										value={
 											configStore.getWrapUserFunction(props.agentType) === null
 												? "ask"
@@ -1275,7 +1290,7 @@ export const AgentRow: Component<{
 										<option value="ask">Ask when detected</option>
 										<option value="wrap">Wrap my function</option>
 										<option value="leave">Leave my function alone</option>
-									</select>
+									</Select>
 								</label>
 								<p class={s.hint}>
 									zsh only. Applies to new terminals. TUIC only wraps a function you approved in the prompt; if the
@@ -1322,12 +1337,20 @@ export const AgentRow: Component<{
 							value={configStore.state.agents[props.agentType]?.intent_tab_title ?? null}
 						>
 							<div class={a.expandedSection} onClick={(e) => e.stopPropagation()}>
-								<TriStateToggle
-									value={configStore.getIntentTabTitle(props.agentType) ?? null}
-									onChange={(v) => configStore.setIntentTabTitle(props.agentType, v ?? undefined)}
-									label="Track agent intent"
-									inherited={true}
-								/>
+								<div class={a.toggleRow}>
+									<label for={`${props.agentType}-intent-tab-title`}>Track agent intent</label>
+									<Select
+										id={`${props.agentType}-intent-tab-title`}
+										data-setting-id="agents.agents.{key}.intent_tab_title"
+										compact
+										value={overrideValue(configStore.getIntentTabTitle(props.agentType))}
+										onChange={(e) =>
+											configStore.setIntentTabTitle(props.agentType, parseOverride(e.currentTarget.value) ?? undefined)
+										}
+									>
+										{overrideOptions(settingsStore.state.intentTabTitle)}
+									</Select>
+								</div>
 								<p class={s.hint}>
 									Ask the model to emit <code>intent:</code> markers at task start and phase changes. The current intent
 									appears in the terminal Context bar and may update the tab name. Turn off if parsing misbehaves on
@@ -1366,12 +1389,23 @@ export const AgentRow: Component<{
 							value={configStore.state.agents[props.agentType]?.suggest_followups ?? null}
 						>
 							<div class={a.expandedSection} onClick={(e) => e.stopPropagation()}>
-								<TriStateToggle
-									value={configStore.getSuggestFollowups(props.agentType) ?? null}
-									onChange={(v) => configStore.setSuggestFollowups(props.agentType, v ?? undefined)}
-									label="Show suggested follow-ups"
-									inherited={settingsStore.state.suggestFollowups}
-								/>
+								<div class={a.toggleRow}>
+									<label for={`${props.agentType}-suggest-followups`}>Show suggested follow-ups</label>
+									<Select
+										id={`${props.agentType}-suggest-followups`}
+										data-setting-id="agents.agents.{key}.suggest_followups"
+										compact
+										value={overrideValue(configStore.getSuggestFollowups(props.agentType))}
+										onChange={(e) =>
+											configStore.setSuggestFollowups(
+												props.agentType,
+												parseOverride(e.currentTarget.value) ?? undefined,
+											)
+										}
+									>
+										{overrideOptions(settingsStore.state.suggestFollowups)}
+									</Select>
+								</div>
 								<p class={s.hint}>
 									Emit <code>suggest:</code> markers for clickable follow-up actions
 								</p>
@@ -1380,8 +1414,9 @@ export const AgentRow: Component<{
 
 						<div class={a.expandedSection}>
 							<label class={a.toggleRow} onClick={(e) => e.stopPropagation()}>
-								<input
-									type="checkbox"
+								<Switch
+									role="checkbox"
+									data-setting-id="agents.agents.{key}.prefer_tuic_spawning"
 									disabled={agentMcpToolDisabled()}
 									checked={
 										agentMcpToolDisabled() ? false : (configStore.getPreferTuicSpawning(props.agentType) ?? true)
@@ -1405,8 +1440,9 @@ export const AgentRow: Component<{
 
 						<div class={a.expandedSection}>
 							<label class={a.toggleRow} onClick={(e) => e.stopPropagation()}>
-								<input
-									type="checkbox"
+								<Switch
+									role="checkbox"
+									data-setting-id="agents.agents.{key}.prefer_tuic_messaging"
 									disabled={agentMcpToolDisabled()}
 									checked={
 										agentMcpToolDisabled() ? false : (configStore.getPreferTuicMessaging(props.agentType) ?? true)

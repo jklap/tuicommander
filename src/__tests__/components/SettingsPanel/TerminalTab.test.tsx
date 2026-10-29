@@ -1,6 +1,7 @@
 import { cleanup, fireEvent, render } from "@solidjs/testing-library";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resetPlatformCache } from "../../../platform";
+import { settingControl } from "../../helpers/settingControl";
 
 // Story 858: Shell, the terminal theme/font/cursor fields and the terminal
 // display/power-management toggles moved off GeneralTab/AppearanceTab onto a
@@ -152,7 +153,8 @@ describe("TerminalTab placement", () => {
 		const { container } = render(() => <TerminalTab />);
 		const modeSelect = timestampModeSelect(container);
 		expect(modeSelect.value).toBe("off");
-		expect(Array.from(modeSelect.options).map((o) => o.value)).toEqual(["off", "modifier", "always"]);
+		// SettingSelect lists an enum setting's options in its catalogue schema order.
+		expect(Array.from(modeSelect.options).map((o) => o.value)).toEqual(["off", "always", "modifier"]);
 	});
 
 	it("persists a block timestamp mode change under block_timestamp_mode", async () => {
@@ -265,13 +267,6 @@ describe("TerminalTab placement", () => {
 		expect(savedConfigs().at(-1)?.osc1337_focus_attention).toBe(true);
 	});
 
-	function selectByLabel(container: HTMLElement, label: string): HTMLSelectElement {
-		const el = Array.from(container.querySelectorAll("label")).find((l) => l.textContent === label);
-		const select = el?.parentElement?.querySelector("select");
-		if (!select) throw new Error(`select "${label}" not found`);
-		return select as HTMLSelectElement;
-	}
-
 	// Dropped-items-review #51: wip's mock-based "calls setX when its control
 	// changes" tests, re-done in this file's real-store style — change the
 	// control, then assert the persisted config key.
@@ -280,7 +275,7 @@ describe("TerminalTab placement", () => {
 		mockInvoke.mockImplementation(invokeImpl({ copy_on_select: false }));
 		await settingsStore.hydrate();
 		const { container } = render(() => <TerminalTab />);
-		const toggle = toggleByLabel(container, "Copy on select");
+		const toggle = settingControl(container, "app.copy_on_select");
 		expect(toggle.checked).toBe(false);
 		mockInvoke.mockClear();
 
@@ -296,7 +291,7 @@ describe("TerminalTab placement", () => {
 		mockInvoke.mockImplementation(invokeImpl({ osc52_clipboard: false }));
 		await settingsStore.hydrate();
 		const { container } = render(() => <TerminalTab />);
-		const toggle = toggleByLabel(container, "Allow OSC 52 clipboard writes");
+		const toggle = settingControl(container, "app.osc52_clipboard");
 		expect(toggle.checked).toBe(false);
 		mockInvoke.mockClear();
 
@@ -323,7 +318,7 @@ describe("TerminalTab placement", () => {
 		await loadThemes();
 		await settingsStore.hydrate();
 		const { container } = render(() => <TerminalTab />);
-		const select = selectByLabel(container, "Terminal Theme");
+		const select = settingControl<HTMLSelectElement>(container, "app.theme");
 		const other = Array.from(select.options).find((o) => o.value !== select.value)?.value;
 		if (!other) throw new Error("Terminal Theme select offers a single theme");
 		mockInvoke.mockClear();
@@ -340,7 +335,7 @@ describe("TerminalTab placement", () => {
 		mockInvoke.mockImplementation(invokeImpl({ cursor_style: "bar" }));
 		await settingsStore.hydrate();
 		const { container } = render(() => <TerminalTab />);
-		const select = selectByLabel(container, "Cursor Style");
+		const select = settingControl<HTMLSelectElement>(container, "app.cursor_style");
 		expect(select.value).toBe("bar");
 		mockInvoke.mockClear();
 

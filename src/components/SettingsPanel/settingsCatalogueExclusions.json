@@ -31,5 +31,6 @@
   "github_bindings.bindings.{key}.owner": "Canonical repository owner comes from the registered repository binding workflow, not an independent free-text owner patch.",
   "github_bindings.bindings.{key}.repo": "Canonical repository name comes from the registered repository binding workflow, not an independent free-text repo patch.",
   "github_accounts.accounts.{id}.host.host": "GitHubTab Enterprise host entry belongs to the verified account creation workflow; the account owner intentionally has no raw file-store transaction adapter.",
-  "github_bindings.bindings.{key}.remote_name": "GitHubTab binding selector uses the typed repository-binding owner workflow, not a raw field transaction."
+  "github_bindings.bindings.{key}.remote_name": "GitHubTab binding selector uses the typed repository-binding owner workflow, not a raw field transaction.",
+  "app.indicator_overrides": "Structured per-indicator overrides are edited in the Help panel's UI Legend (IndicatorEditorDialog), which owns validation against the frontend indicator registry; not an opaque Settings field."
 }

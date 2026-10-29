@@ -23,6 +23,9 @@ import type {
 	SmartSelectionRule,
 	WordSelectionMode,
 } from "../../Terminal/smartSelectionTypes";
+import { Button } from "../../ui/Button";
+import { Input } from "../../ui/Input";
+import { Select } from "../../ui/Select";
 import { SettingInput, SettingSelect } from "../SettingFields";
 import s from "../Settings.module.css";
 
@@ -108,6 +111,7 @@ const RuleRow: Component<{
 			>
 				<label class={s.ruleHeaderEnabled} onClick={(e) => e.stopPropagation()} onKeyDown={(e) => e.stopPropagation()}>
 					<input
+						data-setting-id="app.smart_selection_rules"
 						type="checkbox"
 						checked={props.rule.enabled}
 						onChange={(e) => props.onUpdate({ enabled: e.currentTarget.checked })}
@@ -129,8 +133,8 @@ const RuleRow: Component<{
 				<div class={s.ruleBody}>
 					<div class={s.ruleField}>
 						<label class={s.ruleFieldLabel}>Name</label>
-						<input
-							type="text"
+						<Input
+							data-setting-id="app.smart_selection_rules"
 							class={s.ruleName}
 							value={props.rule.name}
 							placeholder="Name"
@@ -140,8 +144,8 @@ const RuleRow: Component<{
 
 					<div class={s.ruleField}>
 						<label class={s.ruleFieldLabel}>Pattern</label>
-						<input
-							type="text"
+						<Input
+							data-setting-id="app.smart_selection_rules"
 							class={s.ruleRegex}
 							value={props.rule.regex}
 							placeholder="Regular expression"
@@ -154,13 +158,14 @@ const RuleRow: Component<{
 
 					<div class={s.ruleField}>
 						<label class={s.ruleFieldLabel}>Precision</label>
-						<select
+						<Select
+							data-setting-id="app.smart_selection_rules"
 							class={s.rulePrecision}
 							value={props.rule.precision}
 							onChange={(e) => props.onUpdate({ precision: e.currentTarget.value as SmartSelectionPrecision })}
 						>
 							<For each={PRECISION_OPTIONS}>{(opt) => <option value={opt.value}>{opt.label}</option>}</For>
-						</select>
+						</Select>
 					</div>
 
 					<Show when={props.rule.actions.length > 0}>
@@ -173,7 +178,8 @@ const RuleRow: Component<{
 							<Index each={props.rule.actions}>
 								{(action, index) => (
 									<>
-										<select
+										<Select
+											data-setting-id="app.smart_selection_rules"
 											value={action().kind}
 											data-testid="smart-action-kind"
 											onChange={(e) =>
@@ -181,15 +187,15 @@ const RuleRow: Component<{
 											}
 										>
 											<For each={ACTION_KIND_OPTIONS}>{(opt) => <option value={opt.value}>{opt.label}</option>}</For>
-										</select>
-										<input
-											type="text"
+										</Select>
+										<Input
+											data-setting-id="app.smart_selection_rules"
 											value={action().title}
 											placeholder="Menu label"
 											onInput={(e) => props.onUpdateAction(index, { title: e.currentTarget.value })}
 										/>
-										<input
-											type="text"
+										<Input
+											data-setting-id="app.smart_selection_rules"
 											class={s.actionParameter}
 											value={action().parameter}
 											placeholder="\0"
@@ -197,6 +203,7 @@ const RuleRow: Component<{
 										/>
 										<label class={s.actionDefault}>
 											<input
+												data-setting-id="app.smart_selection_rules"
 												type="radio"
 												name={`default-action-${props.rule.id}`}
 												checked={action().isDefault}
@@ -204,13 +211,13 @@ const RuleRow: Component<{
 											/>
 											Default
 										</label>
-										<button
-											class={s.testBtn}
+										<Button
+											data-setting-id="app.smart_selection_rules"
 											data-testid="smart-action-remove"
 											onClick={() => props.onRemoveAction(index)}
 										>
 											Remove
-										</button>
+										</Button>
 									</>
 								)}
 							</Index>
@@ -218,12 +225,16 @@ const RuleRow: Component<{
 					</Show>
 
 					<div style={{ display: "flex", gap: "8px" }}>
-						<button class={s.testBtn} onClick={props.onAddAction}>
+						<Button data-setting-id="app.smart_selection_rules" onClick={props.onAddAction}>
 							Add action
-						</button>
-						<button class={s.testBtn} data-testid="smart-rule-remove" onClick={props.onRemove}>
+						</Button>
+						<Button
+							data-setting-id="app.smart_selection_rules"
+							data-testid="smart-rule-remove"
+							onClick={props.onRemove}
+						>
 							Remove rule
-						</button>
+						</Button>
 					</div>
 				</div>
 			</Show>
@@ -359,6 +370,7 @@ export const SelectionTab: Component = () => {
 			<h3>Behavior</h3>
 
 			<SettingSelect
+				settingId="app.double_click_action"
 				label="Double-click performs"
 				value={settingsStore.state.doubleClickAction}
 				onChange={(v) => settingsStore.setDoubleClickAction(v as "word" | "smart")}
@@ -372,6 +384,7 @@ export const SelectionTab: Component = () => {
 			<h3>Word Boundaries</h3>
 
 			<SettingSelect
+				settingId="app.word_selection_mode"
 				label="Word boundaries"
 				value={settingsStore.state.wordSelectionMode}
 				onChange={(v) => settingsStore.setWordSelectionMode(v as WordSelectionMode)}
@@ -384,18 +397,23 @@ export const SelectionTab: Component = () => {
 
 			<Show when={settingsStore.state.wordSelectionMode === "characters"}>
 				<SettingInput
+					settingId="app.word_separators"
 					label="Word separators"
 					value={settingsStore.state.wordSeparators}
 					onInput={(v) => settingsStore.setWordSeparators(v)}
 					hint="Characters that break a word for double-click selection. Whitespace and control characters are always separators regardless of this list."
 				/>
-				<button class={s.testBtn} onClick={() => settingsStore.setWordSeparators(DEFAULT_WORD_SEPARATORS)}>
+				<Button
+					data-setting-id="app.word_separators"
+					onClick={() => settingsStore.setWordSeparators(DEFAULT_WORD_SEPARATORS)}
+				>
 					Restore default separators
-				</button>
+				</Button>
 			</Show>
 
 			<Show when={settingsStore.state.wordSelectionMode === "regex"}>
 				<SettingInput
+					settingId="app.word_selection_regex"
 					label="Word pattern"
 					value={settingsStore.state.wordSelectionRegex}
 					onInput={(v) => settingsStore.setWordSelectionRegex(v)}
@@ -415,8 +433,8 @@ export const SelectionTab: Component = () => {
 			</p>
 
 			<div class={s.transferRow}>
-				<select
-					class={s.transferSelect}
+				<Select
+					data-non-setting="Chooses which rules the Export action writes"
 					data-testid="rule-export-scope-select"
 					value={exportScope()}
 					onChange={(e) => setExportScope(e.currentTarget.value as ExportScope)}
@@ -424,13 +442,21 @@ export const SelectionTab: Component = () => {
 					<option value="all">All rules ({scopeCounts().all})</option>
 					<option value="modified">Modified only ({scopeCounts().modified})</option>
 					<option value="custom">Custom only ({scopeCounts().custom})</option>
-				</select>
-				<button class={s.transferBtn} data-testid="rule-export-btn" onClick={handleExport}>
+				</Select>
+				<Button
+					data-non-setting="Exports Smart Selection rules to a file"
+					data-testid="rule-export-btn"
+					onClick={handleExport}
+				>
 					Export…
-				</button>
-				<button class={s.transferBtn} data-testid="rule-import-btn" onClick={handleImportFile}>
+				</Button>
+				<Button
+					data-non-setting="Imports Smart Selection rules from a file"
+					data-testid="rule-import-btn"
+					onClick={handleImportFile}
+				>
 					Import…
-				</button>
+				</Button>
 			</div>
 
 			<Index each={rules()}>
@@ -448,12 +474,12 @@ export const SelectionTab: Component = () => {
 				)}
 			</Index>
 			<div style={{ display: "flex", gap: "8px" }}>
-				<button class={s.testBtn} onClick={addRule}>
+				<Button data-setting-id="app.smart_selection_rules" onClick={addRule}>
 					Add rule
-				</button>
-				<button class={s.testBtn} onClick={restoreDefaultRules}>
+				</Button>
+				<Button data-setting-id="app.smart_selection_rules" onClick={restoreDefaultRules}>
 					Restore built-in defaults
-				</button>
+				</Button>
 			</div>
 
 			<Show when={importState()}>

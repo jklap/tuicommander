@@ -19,7 +19,9 @@ vi.mock("../ExpertSetting", () => ({ ExpertSetting: (props: { children: unknown 
 vi.mock("../../../services/tasksNotifications", () => ({
 	tasksNotifications: { enabled: () => false, setEnabled: vi.fn() },
 }));
-vi.mock("../../../stores/notifications", () => ({
+// The real config always carries every sound's preset choice (wip's per-event
+// sound picker reads `sound_choices[key].preset`); mirror the store's default.
+vi.mock("../../../stores/notifications", async () => ({
 	notificationsStore: {
 		state: {
 			isAvailable: true,
@@ -29,6 +31,7 @@ vi.mock("../../../stores/notifications", () => ({
 				volume: 0.5,
 				audio_device: null,
 				sounds: {},
+				sound_choices: { ...(await import("../../../notifications")).DEFAULT_NOTIFICATION_CONFIG.sound_choices },
 				silence_remote_completions: true,
 				toasts_in_bell: true,
 				pr_native_notifications: true,
@@ -65,7 +68,9 @@ describe("Application Settings restyle contracts", () => {
 		fireEvent.click(view.getByRole("button", { name: "Choose output device…" }));
 		await waitFor(() => expect(view.getByRole("option", { name: "USB speakers" })).toBeInTheDocument());
 		expect(invoke).toHaveBeenCalledExactlyOnceWith("list_audio_output_devices");
-		fireEvent.change(view.getByRole("combobox"), { target: { value: "USB speakers" } });
+		// Each notification event also has its own sound-preset select; target the device one.
+		const device = view.container.querySelector<HTMLSelectElement>('[data-setting-id="notifications.audio_device"]')!;
+		fireEvent.change(device, { target: { value: "USB speakers" } });
 		expect(setAudioDevice).toHaveBeenCalledWith("USB speakers");
 	});
 

@@ -486,6 +486,7 @@ export const TerminalTab: Component = () => {
 
 				<ExpertSetting configKey="app.osc1337_focus_attention" value={settingsStore.state.osc1337FocusAttention}>
 					<SettingToggle
+						settingId="app.osc1337_focus_attention"
 						checked={settingsStore.state.osc1337FocusAttention}
 						onChange={(v) => settingsStore.setOsc1337FocusAttention(v)}
 						label={t("general.toggle.osc1337FocusAttention", "Allow terminal focus/attention requests")}
@@ -497,6 +498,7 @@ export const TerminalTab: Component = () => {
 				</ExpertSetting>
 
 				<SettingSelect
+					settingId="app.terminal_link_activation"
 					row
 					label={t("terminal.label.linkActivation", "Open links on")}
 					value={settingsStore.state.linkActivation}
@@ -514,6 +516,7 @@ export const TerminalTab: Component = () => {
 				/>
 
 				<SettingSelect
+					settingId="app.block_timestamp_mode"
 					row
 					label={t("terminal.label.blockTimestampMode", "Show block timestamps")}
 					value={settingsStore.state.blockTimestampMode}
@@ -559,6 +562,7 @@ export const TerminalTab: Component = () => {
 
 				<ExpertSetting configKey="app.show_block_marks" value={settingsStore.state.showBlockMarks}>
 					<SettingToggle
+						settingId="app.show_block_marks"
 						row
 						checked={settingsStore.state.showBlockMarks}
 						onChange={(v) => settingsStore.setShowBlockMarks(v)}
@@ -572,6 +576,7 @@ export const TerminalTab: Component = () => {
 
 				<ExpertSetting configKey="app.show_prompt_marks" value={settingsStore.state.showPromptMarks}>
 					<SettingToggle
+						settingId="app.show_prompt_marks"
 						row
 						checked={settingsStore.state.showPromptMarks}
 						onChange={(v) => settingsStore.setShowPromptMarks(v)}
@@ -688,6 +693,7 @@ export const TerminalTab: Component = () => {
 			</ExpertSetting>
 			<SectionCard title={t("terminal.heading.sessionRestore", "Session Restore")}>
 				<SettingToggle
+					settingId="app.restore_shell_terminals"
 					checked={settingsStore.state.restoreShellTerminals}
 					onChange={(v) => settingsStore.setRestoreShellTerminals(v)}
 					label={t("terminal.toggle.restoreShellTerminals", "Restore open terminals on launch")}
@@ -697,6 +703,7 @@ export const TerminalTab: Component = () => {
 					)}
 				/>
 				<SettingToggle
+					settingId="app.restore_scrollback"
 					checked={settingsStore.state.restoreScrollback}
 					onChange={(v) => settingsStore.setRestoreScrollback(v)}
 					label={t("terminal.toggle.restoreScrollback", "Save terminal scrollback")}
@@ -706,6 +713,7 @@ export const TerminalTab: Component = () => {
 					)}
 				/>
 				<SettingSlider
+					settingId="app.restore_scrollback_lines"
 					label={t("terminal.label.restoreScrollbackLines", "Scrollback lines to save")}
 					value={settingsStore.state.restoreScrollbackLines}
 					onChange={(v) => settingsStore.setRestoreScrollbackLines(v)}

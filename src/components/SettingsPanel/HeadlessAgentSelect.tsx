@@ -1,35 +1,33 @@
 import { type Component, For, Show, splitProps } from "solid-js";
 import { AGENTS, type AgentType, toHeadlessAgentChoice } from "../../agents";
 import { agentConfigsStore } from "../../stores/agentConfigs";
-import { cx } from "../../utils/cx";
-import fc from "../ui/FormControls.module.css";
-import type { SelectProps } from "../ui/Select";
+import { Select, type SelectProps } from "../ui/Select";
 
 /** SmartPromptsTab's "Headless Agent" select. Values go through
  * `toHeadlessAgentChoice`, so a composite `agentType:configName` run-config
  * choice persists and anything naming no known agent stores "not configured".
  *
- * `selected` (not the `<select>`'s own `value`) is bound per-option so a
- * late-arriving option — agent detection is async and starts empty — still
- * lands correctly once inserted. A top-level `value` is only applied once,
- * against whatever options exist at that instant; if detection hasn't
- * resolved yet, the browser silently falls back to selecting the first
- * option instead of the stored value, and nothing ever re-applies it.
- * The shared `Select` primitive is not used: it drives selection through
- * `value` (re-applied only when the value changes, not when options arrive),
- * and per-option `selected` does not survive its child insertion order. This
- * native select carries the same `data-form-control` styling instead. Other
- * select attributes (`id`, `aria-describedby`, `data-setting-id`) are
- * forwarded. */
+ * Agent detection is async and starts empty, so the stored value may name an
+ * option that does not exist yet. The shared `Select` re-applies `value` only
+ * when the value expression re-runs, so `value` below also reads the option
+ * set (agent types and their run configs): when a late option arrives, the
+ * value is applied again against the options now present. Per-option
+ * `selected` stays as a second line of defence. Other select attributes
+ * (`id`, `aria-describedby`) are forwarded; the catalogue id is fixed here
+ * because this control only ever edits `agents.headless_agent`. */
 export const HeadlessAgentSelect: Component<
 	{ agentTypes: AgentType[] } & Omit<SelectProps, "value" | "onChange" | "children">
 > = (props) => {
-	const [local, rest] = splitProps(props, ["agentTypes", "class", "compact"]);
+	const [local, rest] = splitProps(props, ["agentTypes"]);
+	const value = () => {
+		for (const type of local.agentTypes) agentConfigsStore.getRunConfigs(type);
+		return agentConfigsStore.getHeadlessAgent() ?? "";
+	};
 	return (
-		<select
+		<Select
 			{...rest}
-			data-form-control
-			class={cx(fc.control, fc.select, local.compact && fc.compact, local.class)}
+			data-setting-id="agents.headless_agent"
+			value={value()}
 			onChange={(e) => {
 				agentConfigsStore.setHeadlessAgent(toHeadlessAgentChoice(e.currentTarget.value));
 			}}
@@ -72,6 +70,6 @@ export const HeadlessAgentSelect: Component<
 			<option value="api" selected={agentConfigsStore.getHeadlessAgent() === "api"}>
 				API (via ego)
 			</option>
-		</select>
+		</Select>
 	);
 };

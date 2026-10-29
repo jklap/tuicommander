@@ -245,6 +245,19 @@ button[data-control-layout="row"].navItemRepo {
   margin-top: 6px;
 }
 
+/* Connection editor (RemoteConnectionEditor): its grid gap spaces the fields, so
+   the shared SSH fields drop `.group`'s margins — otherwise `.group + .group`
+   pushes Port below Host in their shared row. */
+.group.editorField {
+  margin: 0;
+}
+
+/* A switch rendered after its label text in the DOM (so the search index reads
+   the label) but shown first in a flex row. */
+.leadingControl {
+  order: -1;
+}
+
 .group label {
   display: block;
   font-size: var(--font-sm);
@@ -365,19 +378,6 @@ button[data-control-layout="row"].navItemRepo {
 .copyPathInput {
   flex: 1;
   min-width: 0;
-  padding: 6px 10px;
-  background: var(--bg-tertiary);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  color: var(--fg-primary);
-  font-size: var(--font-sm);
-  height: 32px;
-  box-sizing: border-box;
-}
-
-.copyPathInput:focus {
-  outline: none;
-  border-color: var(--accent);
 }
 
 /* KEY = value row (Custom Environment Variables, TerminalTab). Ported from
@@ -564,23 +564,6 @@ button[data-control-layout="row"].navItemRepo {
   flex: 1;
 }
 
-.inlineBtn {
-  margin-left: 8px;
-  padding: 2px 8px;
-  background: var(--bg-tertiary);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  color: var(--fg-muted);
-  font-size: var(--font-sm);
-  cursor: pointer;
-  transition: color 0.15s, border-color 0.15s;
-}
-
-.inlineBtn:hover {
-  color: var(--accent);
-  border-color: var(--accent);
-}
-
 .url {
   display: block;
   padding: 8px 12px;
@@ -660,8 +643,6 @@ button[data-control-layout="row"].navItemRepo {
   word-break: break-all;
   user-select: all;
 }
-
-
 
 .mcpStatusRow {
   display: flex;
@@ -1069,24 +1050,6 @@ button[data-control-layout="row"].navItemRepo {
   overflow: hidden;
 }
 
-.ruleCard select,
-.ruleCard input[type="text"] {
-  padding: 8px 12px;
-  background: var(--bg-tertiary);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  color: var(--fg-primary);
-  font-size: var(--font-sm);
-  height: 32px;
-  box-sizing: border-box;
-}
-
-.ruleCard select:focus,
-.ruleCard input:focus {
-  outline: none;
-  border-color: var(--accent);
-}
-
 /* Single-line collapsed row — click anywhere to expand the editor below it. */
 .ruleHeader {
   display: flex;
@@ -1209,7 +1172,6 @@ button[data-control-layout="row"].navItemRepo {
   white-space: nowrap;
   font-size: var(--font-sm);
 }
-
 
 /* ── Settings Search ── */
 .searchBox {
@@ -1412,7 +1374,6 @@ button[data-control-layout="row"].searchResult:hover {
 .catalogueActions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-block-start: 8px; }
 
 .searchBox > input { flex: 1; width: 100%; }
-
 
 @media (max-width: 600px) {
  button[data-control-layout="row"].navItem, button[data-control-layout="row"].searchResult { min-height: 44px; }
