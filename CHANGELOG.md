@@ -30,6 +30,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - Reconcile the first mobile composer edit with an existing terminal draft so dictated text does not silently append to a hidden slash command. Render Claude slash-command user messages as a command chip and arguments instead of raw XML (#2460-5a96).
 - Keep the mobile CLI/Chat header selection visibly aligned with the open view, including session entry and reconnects (#2459-a5af).
+- Recognize ego project-trust prompts ending in `? [y/N]`, including hard-wrapped paths, so mobile shows awaiting input and Yes/No controls (#2461-1403).
 
 - Preserve unchanged sibling worktree monitoring snapshots after Windows Git-directory metadata notifications, without suppressing child index/ref/config changes (#2310-6e76).
 - Preserve quoted Windows profile paths when resuming agents, retain per-repository worktree-storage overrides across native path spellings, and report cross-project workflow requests as client errors (#2310-6e76).

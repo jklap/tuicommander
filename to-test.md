@@ -3287,3 +3287,4 @@ Isolated Chrome screenshot capture timed out after 35 seconds; visual rendering 
 - [ ] Mobile terminal CLI and Chat: queue a prompt with + > Queue or a long press on Send; verify the queued text remains above the input until delivery, and check Cancel / Clear all. Prompts queued in CLI or desktop must appear after switching to Chat (#2463-ad1c).
 
 - [ ] After rebuilding/restarting the Rust backend, complete a coloured automation run and check Automations > Recent runs: no raw terminal escapes, readable Unicode, the final report retained after more than 256 KiB of logs, and a truncation warning only when the cleaned output exceeds 256 KiB (#2467-5cda). Existing saved runs are not rewritten.
+- [ ] After a backend rebuild, open an untrusted ego project on mobile. Check that the project-trust prompt shows awaiting input and Yes/No. Answer each choice in separate scratch projects (#2461-1403).

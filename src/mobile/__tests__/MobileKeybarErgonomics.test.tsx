@@ -27,6 +27,7 @@ vi.mock("../useMobileVoice", () => ({
 	}),
 }));
 vi.mock("../components/OutputView", () => ({ OutputView: () => <div>Terminal output</div> }));
+vi.mock("../../stores/appLogger", () => ({ appLogger: { debug: vi.fn(), warn: vi.fn(), error: vi.fn() } }));
 
 afterEach(() => {
 	cleanup();
@@ -152,6 +153,16 @@ describe("mobile terminal controls", () => {
 		));
 		expect(screen.getByRole("button", { name: "Yes" })).toBeTruthy();
 		expect(screen.getByRole("button", { name: "No" })).toBeTruthy();
+	});
+
+	// Catches: ego text confirmations using menu Enter/Escape instead of y/n plus Enter.
+	it.each([
+		["Yes", "y\r"],
+		["No", "n\r"],
+	])("submits ego trust %s with its native bytes", async (label, data) => {
+		render(() => <TerminalKeybar sessionId="ego-trust" agentType="ego" awaitingInput questionConfident />);
+		fireEvent.click(screen.getByRole("button", { name: label }));
+		expect(rpc).toHaveBeenCalledWith("write_pty", { sessionId: "ego-trust", data });
 	});
 
 	it("keybar slash matches typed slash PTY bytes and parser menu", () => {

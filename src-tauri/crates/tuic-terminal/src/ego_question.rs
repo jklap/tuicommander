@@ -66,7 +66,47 @@ fn is_question_boundary(row: &str) -> bool {
         || (row.chars().count() >= 3 && row.chars().all(|ch| matches!(ch, '─' | '━' | '═' | '-')))
 }
 
+/// Ego's startup trust modal uses a line editor, not the numbered selector.
+/// Its final ? [y/N] is outside the silence detector's question grammar. Require
+/// the native offer context and the active tail so retained answers stay history.
+fn parse_ego_trust_question(rows: &[String]) -> Option<ParsedEvent> {
+    const PREFIX: &str = "Trust project files in";
+    let end = rows.iter().rposition(|row| !row.trim().is_empty())?;
+    let start = rows[..=end]
+        .iter()
+        .rposition(|row| row.starts_with(PREFIX))?;
+    if !rows[..start]
+        .iter()
+        .any(|row| row == "No: continue without project files.")
+    {
+        return None;
+    }
+    // wrap_notice inserts hard newlines even in paths; grid soft-wrap metadata
+    // alone cannot recover this native modal. No arbitrary scan-height cap.
+    let mut tail = rows[start].strip_prefix(PREFIX)?.trim_start().to_owned();
+    for row in &rows[start + 1..=end] {
+        if row.trim().is_empty() || is_question_boundary(row) {
+            return None;
+        }
+        tail.push_str(row.trim());
+    }
+    let suffix = ["[y/N]", "[Y/n]", "(y/n)"]
+        .into_iter()
+        .find(|suffix| tail.ends_with(suffix))?;
+    let path = tail.strip_suffix(suffix)?.trim_end().strip_suffix('?')?;
+    if path.is_empty() {
+        return None;
+    }
+    Some(ParsedEvent::Question {
+        prompt_text: format!("{PREFIX} {path}? {suffix}"),
+        confident: true,
+    })
+}
+
 pub fn parse_ego_question(rows: &[String]) -> Option<ParsedEvent> {
+    if let Some(question) = parse_ego_trust_question(rows) {
+        return Some(question);
+    }
     let (end, multiple) = footer_end(rows, FOOTER)
         .map(|end| (end, false))
         .or_else(|| footer_end(rows, MULTIPLE_FOOTER).map(|end| (end, true)))?;
@@ -259,6 +299,102 @@ mod tests {
 
     fn rows(lines: &[&str]) -> Vec<String> {
         lines.iter().map(|line| (*line).to_owned()).collect()
+    }
+
+    /// Catches: ego's real hard-wrapped ? [y/N] trust modal never reaching awaiting.
+    #[test]
+    fn captured_ego_trust_question_is_detected() {
+        let capture = crate::pty_capture::decode_capture(include_bytes!(
+            "../../../src/fixtures/agent_prompts/ego-trust-2461.tcap"
+        ))
+        .unwrap();
+        let (height, width) = capture.geometry.unwrap();
+        let mut grid = crate::vt_log::VtLogBuffer::new(height, width, 1000);
+        for record in capture.records {
+            if record.direction == crate::pty_capture::CaptureDirection::Output {
+                grid.process(&record.data);
+            }
+        }
+        let event = parse_ego_question(&grid.screen_rows());
+        assert!(
+            matches!(
+                event,
+                Some(ParsedEvent::Question {
+                    confident: true,
+                    ..
+                })
+            ),
+            "recorded trust modal must expose Yes/No, got {event:?}"
+        );
+    }
+
+    /// Catches: a short mobile viewport clipping the trust heading and hiding Yes/No.
+    #[test]
+    fn captured_ego_trust_survives_short_mobile_viewport() {
+        let capture = crate::pty_capture::decode_capture(include_bytes!(
+            "../../../src/fixtures/agent_prompts/ego-trust-short-2461.tcap"
+        ))
+        .unwrap();
+        let (height, width) = capture.geometry.unwrap();
+        let mut grid = crate::vt_log::VtLogBuffer::new(height, width, 1000);
+        for record in capture.records {
+            if record.direction == crate::pty_capture::CaptureDirection::Output {
+                grid.process(&record.data);
+            }
+        }
+        let event = parse_ego_question(&grid.screen_rows());
+        assert!(
+            matches!(
+                event,
+                Some(ParsedEvent::Question {
+                    confident: true,
+                    ..
+                })
+            ),
+            "active trust prompt in a short mobile viewport must expose Yes/No, got {event:?}"
+        );
+    }
+
+    /// Catches: suffix defaults or hard-wrapped paths hiding native trust controls.
+    #[test]
+    fn ego_trust_question_keeps_yes_no_forms_and_wrapped_paths() {
+        for suffix in ["[y/N]", "[Y/n]", "(y/n)"] {
+            let screen = rows(&[
+                "Project files offered for trust:",
+                "No: continue without project files.",
+                "",
+                "Trust project files in",
+                "/Users/stefano.straus/Gits/personal/",
+                &format!("MyWallet? {suffix}"),
+                "",
+            ]);
+            let event = parse_ego_question(&screen);
+            assert!(
+                matches!(event, Some(ParsedEvent::Question { ref prompt_text, confident: true })
+                if prompt_text == &format!("Trust project files in /Users/stefano.straus/Gits/personal/MyWallet? {suffix}")),
+                "{suffix}: {event:?}"
+            );
+        }
+    }
+
+    /// Catches: answered, quoted or superseded trust text re-arming a confident wait.
+    #[test]
+    fn ego_trust_question_rejects_history_and_missing_context() {
+        let base = rows(&[
+            "Project files offered for trust:",
+            "No: continue without project files.",
+            "",
+            "Trust project files in /repo? [y/N]",
+        ]);
+        for newer in ["yes", "no", "> ", "new output", "✓ read done"] {
+            let mut screen = base.clone();
+            screen.push(newer.to_owned());
+            assert!(parse_ego_question(&screen).is_none(), "{newer}");
+        }
+        assert!(parse_ego_question(&base[3..]).is_none());
+        let mut quoted = base;
+        quoted[3].insert_str(0, "  ");
+        assert!(parse_ego_question(&quoted).is_none());
     }
 
     /// Catches: assuming Risk is third-last and joining only two footer rows.
