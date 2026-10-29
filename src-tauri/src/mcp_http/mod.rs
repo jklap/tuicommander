@@ -7627,6 +7627,19 @@ mod tests {
                             .unwrap_or(&definition["description"])
                     }
                 );
+                if name == "agent" || name == "repo" {
+                    // The full reference text must keep every recorded line (agent's
+                    // prefer-dependent header aside).
+                    let copy = entry["description"].as_str().unwrap();
+                    let recorded_lines =
+                        recorded[name].as_str().expect("recorded copy").split('\n');
+                    for line in recorded_lines.skip(usize::from(name == "agent")) {
+                        assert!(
+                            copy.contains(line),
+                            "{name} Settings copy lost recorded line {line:?}"
+                        );
+                    }
+                }
                 // Catches: HTTP status retaining description prefixes while Settings
                 // switches to dedicated, concise native registry summaries.
                 let summary = entry["summary"].as_str().unwrap();
