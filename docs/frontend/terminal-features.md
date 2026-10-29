@@ -6,7 +6,7 @@ Session Chat shows a pulsing **Working…** row after Send and while the termina
 
 Consolidated reference for all terminal behaviors, keyboard shortcuts, and configurable features.
 
-The desktop CLI | Chat switch uses shared toolbar density. In CLI mode it is centred on the Context header and stays above its bottom divider. Switching modes keeps the switch in the same position.
+The desktop CLI | Chat switch uses shared toolbar density. In both modes it is centred on the Context header and stays above its bottom divider, without adding a separate row. Without Context, both modes reserve one shared control row so content cannot run beneath the switch. Switching modes keeps the switch and content at the same height.
 
 ## Mobile composer focus
 

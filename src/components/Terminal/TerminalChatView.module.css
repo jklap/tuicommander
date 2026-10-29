@@ -17,12 +17,13 @@
   background: var(--bg-secondary);
 }
 
-/* Chat content starts below its controls, even without a LastPromptBar. */
-.toggle[data-mode="chat"] {
+/* Without Context, reserve the same control row in both modes so content
+   cannot run under the switch. With Context, share its existing header row. */
+.toggle:not(:has(~ [data-terminal-context])) {
   position: static;
   align-self: flex-end;
   flex-shrink: 0;
-  margin: 2px 20px 4px;
+  margin: 2px 20px;
 }
 
 .fallbackBanner {
