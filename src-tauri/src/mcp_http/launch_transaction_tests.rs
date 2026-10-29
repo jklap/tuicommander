@@ -535,8 +535,10 @@ async fn launch_transaction_waits_for_the_setup_script_and_blocks_on_its_failure
     let repo = repo(root.path());
     let state = state();
 
-    let mut defaults = crate::config::RepoDefaultsConfig::default();
-    defaults.setup_script = "sleep 1; echo ready > setup.marker".into();
+    let defaults = crate::config::RepoDefaultsConfig {
+        setup_script: "sleep 1; echo ready > setup.marker".into(),
+        ..Default::default()
+    };
     crate::config::save_repo_defaults(crate::config::RepoDefaultsConfig::default(), defaults)
         .unwrap();
     let mut ok_request = request();
@@ -555,8 +557,10 @@ async fn launch_transaction_waits_for_the_setup_script_and_blocks_on_its_failure
     close(&state, result["session_id"].as_str().unwrap());
     crate::worktree::clear_warm(&path);
 
-    let mut defaults = crate::config::RepoDefaultsConfig::default();
-    defaults.setup_script = "echo setup-went-wrong >&2; exit 3".into();
+    let defaults = crate::config::RepoDefaultsConfig {
+        setup_script: "echo setup-went-wrong >&2; exit 3".into(),
+        ..Default::default()
+    };
     crate::config::save_repo_defaults(crate::config::RepoDefaultsConfig::default(), defaults)
         .unwrap();
     let sessions_before = state.session_maps.sessions.len();

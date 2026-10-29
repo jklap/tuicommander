@@ -1759,7 +1759,7 @@ fn initialize_instructions_pin_the_one_call_submit_rule_in_both_modes() {
 fn instructions_omit_disabled_session_tool() {
     let state = test_state();
     state.config.write().mcp_capabilities =
-        crate::mcp_capabilities::McpCapabilities::from_legacy(&vec!["session".to_string()]);
+        crate::mcp_capabilities::McpCapabilities::from_legacy(&["session".to_string()]);
     let out = build_mcp_instructions(&state, None);
 
     assert!(
@@ -1787,7 +1787,7 @@ fn instructions_omit_disabled_session_tool() {
 fn instructions_omit_disabled_agent_tool_and_multi_agent_section() {
     let state = test_state();
     state.config.write().mcp_capabilities =
-        crate::mcp_capabilities::McpCapabilities::from_legacy(&vec!["agent".to_string()]);
+        crate::mcp_capabilities::McpCapabilities::from_legacy(&["agent".to_string()]);
     let out = build_mcp_instructions(&state, None);
 
     assert!(
@@ -1811,7 +1811,7 @@ fn instructions_omit_disabled_agent_tool_and_multi_agent_section() {
 fn instructions_omit_disabled_repo_tool() {
     let state = test_state();
     state.config.write().mcp_capabilities =
-        crate::mcp_capabilities::McpCapabilities::from_legacy(&vec!["repo".to_string()]);
+        crate::mcp_capabilities::McpCapabilities::from_legacy(&["repo".to_string()]);
     let out = build_mcp_instructions(&state, None);
 
     assert!(
@@ -1832,40 +1832,42 @@ fn instructions_omit_disabled_repo_tool() {
     );
 }
 
-#[test]
-fn instructions_omit_disabled_ui_tool() {
+/// Instructions rendered with exactly `disabled` turned off in `mcp_capabilities`.
+fn instructions_with_disabled(disabled: &[&str]) -> String {
     let state = test_state();
-    state.config.write().mcp_capabilities =
-        crate::mcp_capabilities::McpCapabilities::from_legacy(&vec!["ui".to_string()]);
-    let out = build_mcp_instructions(&state, None);
-
-    assert!(!out.contains("- `ui` ("), "ui bullet must be omitted");
-    assert!(
-        !out.contains("**UI feedback:**"),
-        "UI feedback tip must be omitted when ui tool is disabled"
+    state.config.write().mcp_capabilities = crate::mcp_capabilities::McpCapabilities::from_legacy(
+        &disabled.iter().map(|t| t.to_string()).collect::<Vec<_>>(),
     );
+    build_mcp_instructions(&state, None)
 }
 
+// Catches: the capability map naming `ui` while the tool is disabled, or
+// dropping it while enabled (both directions, so the check can fail).
 #[test]
-fn instructions_omit_disabled_plugin_dev_guide_tool() {
-    let state = test_state();
-    state.config.write().mcp_capabilities =
-        crate::mcp_capabilities::McpCapabilities::from_legacy(&vec![
-            "plugin_dev_guide".to_string(),
-        ]);
-    let out = build_mcp_instructions(&state, None);
+fn instructions_name_the_ui_tool_only_while_it_is_enabled() {
+    const UI_ENTRY: &str = "`ui` (toast — `urgency=urgent` shows it on screen";
+    let enabled = instructions_with_disabled(&[]);
+    assert!(enabled.contains(UI_ENTRY), "{enabled}");
+    let disabled = instructions_with_disabled(&["ui"]);
+    assert!(!disabled.contains(UI_ENTRY), "{disabled}");
+    assert!(!disabled.contains("`ui`"), "{disabled}");
+}
 
-    assert!(
-        !out.contains("plugin_dev_guide`: plugin authoring reference"),
-        "plugin_dev_guide bullet must be omitted"
-    );
+// Catches: the capability map's "Also" line naming `plugin_dev_guide` while
+// the tool is disabled, or dropping it while enabled.
+#[test]
+fn instructions_name_the_plugin_dev_guide_tool_only_while_it_is_enabled() {
+    let enabled = instructions_with_disabled(&[]);
+    assert!(enabled.contains("`plugin_dev_guide`"), "{enabled}");
+    let disabled = instructions_with_disabled(&["plugin_dev_guide"]);
+    assert!(!disabled.contains("plugin_dev_guide"), "{disabled}");
 }
 
 #[test]
 fn instructions_workflow_header_omitted_when_session_agent_repo_all_disabled() {
     let state = test_state();
     state.config.write().mcp_capabilities =
-        crate::mcp_capabilities::McpCapabilities::from_legacy(&vec![
+        crate::mcp_capabilities::McpCapabilities::from_legacy(&[
             "session".to_string(),
             "agent".to_string(),
             "repo".to_string(),
@@ -2145,7 +2147,7 @@ fn instructions_disabled_agent_tool_wins_over_an_explicit_prefer_true_override()
 
     let state = test_state();
     state.config.write().mcp_capabilities =
-        crate::mcp_capabilities::McpCapabilities::from_legacy(&vec!["agent".to_string()]);
+        crate::mcp_capabilities::McpCapabilities::from_legacy(&["agent".to_string()]);
     let out = build_mcp_instructions(&state, Some("claude-code"));
     state.config.write().mcp_capabilities =
         crate::mcp_capabilities::McpCapabilities::from_legacy(&Vec::new());

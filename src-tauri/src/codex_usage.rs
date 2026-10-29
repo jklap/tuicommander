@@ -429,6 +429,7 @@ mod tests {
     /// Catches: passing root --profile after app-server, which the real CLI rejects.
     #[cfg(unix)]
     #[tokio::test]
+    #[allow(clippy::float_cmp)]
     async fn codex_profile_quota_uses_root_arguments_at_process_boundary() {
         // Syntax mirrors the installed CLI help captured by critic-2150r1.
         let script = crate::test_support::fake_ssh_script(

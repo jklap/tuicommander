@@ -1730,6 +1730,7 @@ pub async fn get_claude_project_list() -> Result<Vec<ProjectEntry>, String> {
 mod tests {
     /// Catches: serde's bucket defaults turning missing provider utilization into 0%.
     #[test]
+    #[allow(clippy::float_cmp)]
     fn primary_usage_missing_utilization_is_unknown_not_zero() {
         let usage = super::parse_primary_usage(r#"{"five_hour":{},"seven_day":{"utilization":0}}"#)
             .unwrap();
