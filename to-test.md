@@ -7,6 +7,10 @@
 
 - [ ] Coordinator: run the exact owner filter in `reports/2310-windows-ci-round-g.md` on native Windows. It covers all 24 failing owners, unchanged assertions/deadlines, profile decoding, workflow HTTP errors and gitconfig process-exit cleanup. rb RED and Linux Clippy are not native Windows GREEN.
 - [ ] After an authorized `make dev` restart or `make build`, verify that a Windows agent resumes from a profile path with spaces/backslashes and that its repository worktree-storage override still applies. Rust does not hot-reload; the daily app was not restarted.
+## External speech command cleanup (2455-f617) — Rust rebuild/restart required
+
+- [ ] After an authorized manual `make dev` restart or `make build`, confirm that cancelling a shell-wrapped external speech engine stops its subprocess. Rust does not hot-reload; the daily app was not restarted. Unix cleanup is covered on rb; Windows uses `taskkill /T /F` and still needs native Windows execution.
+
 ## Shared Files directory watches (2452-8076) — Rust rebuild/restart required
 
 - [ ] After Boss manually restarts a rebuilt `make dev` or installs `make build`, confirm that collapsing a desktop tree folder does not stop external-change refresh in a phone/browser listing rooted at that same folder. Rust does not hot-reload; the daily app was not restarted. Automated coverage uses native Rust notify on rb and mounted frontend rows on the Mac.

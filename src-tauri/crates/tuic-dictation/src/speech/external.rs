@@ -181,16 +181,21 @@ impl Speech for ExternalSpeech {
         } else {
             Stdio::piped()
         };
-        let mut child = Command::new(&argv[0])
+        let mut command = Command::new(&argv[0]);
+        command
             .args(&argv[1..])
             .stdin(stdin)
             .stdout(Stdio::null())
-            .stderr(Stdio::piped())
-            .spawn()
-            .map_err(|e| SpeechError::ModelUnavailable {
-                what: program.clone(),
-                reason: e.to_string(),
-            })?;
+            .stderr(Stdio::piped());
+        #[cfg(unix)]
+        {
+            use std::os::unix::process::CommandExt;
+            command.process_group(0);
+        }
+        let mut child = command.spawn().map_err(|e| SpeechError::ModelUnavailable {
+            what: program.clone(),
+            reason: e.to_string(),
+        })?;
 
         if !self.text_is_an_argument()
             && let Some(mut pipe) = child.stdin.take()
@@ -291,10 +296,28 @@ fn wait_for(
     }
 }
 
-/// Kill the command and collect it. Reaping matters: an unwaited child is a
-/// zombie for as long as this process lives, and the test harness reports one
-/// as a leak.
+/// Stop the owned command tree, then reap the direct child. Killing only a
+/// shell wrapper leaves its engine running (and holding stderr open).
 fn stop(child: &mut Child) {
+    #[cfg(unix)]
+    {
+        // SAFETY: synthesize creates a dedicated group whose ID is this child's
+        // PID. No other application process is part of that owned group.
+        unsafe { libc::kill(-(child.id() as libc::pid_t), libc::SIGKILL) };
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        let root = std::env::var_os("SystemRoot").unwrap_or_else(|| "C:\\Windows".into());
+        let _ = Command::new(Path::new(&root).join("System32").join("taskkill.exe"))
+            .args(["/PID", &child.id().to_string(), "/T", "/F"])
+            .creation_flags(0x0800_0000) // CREATE_NO_WINDOW
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+    }
+    // Also covers a failed tree kill; always collect the direct child.
     let _ = child.kill();
     let _ = child.wait();
 }
@@ -880,10 +903,56 @@ mod tests {
         assert!(reason.contains("not a RIFF/WAVE"), "{reason}");
     }
 
+    // Keep the sleeper's PID so timeout/cancellation tests observe the actual
+    // subprocess, not just the shell's exit status.
+    fn sleeping_script(workspace: &Path) -> String {
+        #[cfg(unix)]
+        {
+            format!(
+                "{} & sleeper=$!; echo $sleeper > '{}'; wait $sleeper; {}",
+                sleep_script(),
+                workspace.join("sleeper.pid").display(),
+                touch_script(OUT_MARKER),
+            )
+        }
+        #[cfg(windows)]
+        {
+            let _ = workspace;
+            chain(&sleep_script(), &touch_script(OUT_MARKER))
+        }
+    }
+
+    // Catches: stopping only the shell leaves its sleep child running.
+    #[cfg(unix)]
+    fn assert_sleeper_stopped(workspace: &Path) {
+        let pid = std::fs::read_to_string(workspace.join("sleeper.pid"))
+            .expect("shell must publish the sleeper PID");
+        let pid = pid.trim();
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let state = loop {
+            let output = Command::new("ps")
+                .args(["-o", "stat=", "-p", pid])
+                .output()
+                .unwrap();
+            let state = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+            if state.is_empty() || state.starts_with('Z') {
+                return;
+            }
+            if Instant::now() >= deadline {
+                break state;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        };
+        // Clean up the exact child this fixture started even on the RED run.
+        let _ = Command::new("kill").args(["-KILL", pid]).output();
+        panic!("sleep child {pid} survived stopping its shell: state={state}");
+    }
+
     #[test]
     fn a_command_that_never_finishes_is_stopped_and_reported() {
         let (shell, flag) = host_shell();
-        let script = chain(&sleep_script(), &touch_script(OUT_MARKER));
+        let workspace = tempfile::tempdir_in(tuic_test_support::test_temp_root()).unwrap();
+        let script = sleeping_script(workspace.path());
         let engine = ExternalSpeech::new(template(&[shell, flag, &script]))
             .unwrap()
             .with_timeout(Duration::from_millis(300));
@@ -893,6 +962,8 @@ mod tests {
             .synthesize("Ciao", "any", &SpeechCancel::new())
             .unwrap_err();
 
+        #[cfg(unix)]
+        assert_sleeper_stopped(workspace.path());
         let SpeechError::Failed(reason) = error else {
             panic!("expected a failure, got {error:?}");
         };
@@ -906,7 +977,8 @@ mod tests {
     #[test]
     fn an_abandoned_request_stops_the_command_rather_than_waiting_it_out() {
         let (shell, flag) = host_shell();
-        let script = chain(&sleep_script(), &touch_script(OUT_MARKER));
+        let workspace = tempfile::tempdir_in(tuic_test_support::test_temp_root()).unwrap();
+        let script = sleeping_script(workspace.path());
         let engine = ExternalSpeech::new(template(&[shell, flag, &script]))
             .unwrap()
             .with_timeout(Duration::from_secs(60));
@@ -921,6 +993,8 @@ mod tests {
         let started = Instant::now();
         let error = engine.synthesize("Ciao", "any", &cancel).unwrap_err();
 
+        #[cfg(unix)]
+        assert_sleeper_stopped(workspace.path());
         assert_eq!(error, SpeechError::Cancelled);
         assert!(
             started.elapsed() < Duration::from_secs(30),
