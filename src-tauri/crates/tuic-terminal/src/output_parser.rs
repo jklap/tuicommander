@@ -2824,6 +2824,12 @@ pub fn parse_claude_ask_user_question(screen_rows: &[String]) -> Option<ParsedEv
     if title_text.starts_with("──") || title_text.starts_with('←') {
         return None;
     }
+    // Native titles are drawn at column zero like the footer. An indented row
+    // is streamed text: a partial repaint can leave the user's next prompt
+    // directly above the answered dialog's options for one chunk.
+    if screen_rows[title].starts_with(char::is_whitespace) {
+        return None;
+    }
     let navigation = || ParsedEvent::ChoicePrompt {
         title: title_text.to_string(),
         options: [
@@ -7864,6 +7870,46 @@ Enter to select · ↑/↓ to navigate · Esc to cancel";
         ]
         .map(str::to_string);
         assert!(parse_claude_ask_user_question(&rows).is_none());
+    }
+
+    // Catches: a partial repaint's indented prompt row becoming a dialog title.
+    // Record 41 repaints rows 0-14 with the user's next prompt (row 14 indented)
+    // while the answered dialog's options and column-zero footer remain below.
+    #[test]
+    fn recorded_partial_repaint_does_not_title_a_dialog_with_an_indented_row() {
+        let bytes = std::fs::read(std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(
+            "../../src/fixtures/agent_prompts/claude_double_askuserquestion_second_missed.tcap",
+        ))
+        .unwrap();
+        let capture = crate::pty_capture::decode_capture(&bytes).unwrap();
+        // This capture predates recorded geometry; the replay oracle uses 41x128.
+        let (rows, cols) = capture.geometry.unwrap_or((41, 128));
+        let mut grid = crate::terminal_grid::TerminalGrid::new(rows, cols, 2000);
+        for record in capture.records.into_iter().take(42) {
+            if record.direction == crate::pty_capture::CaptureDirection::Output {
+                grid.process(&record.data);
+            }
+        }
+        let screen = grid.screen_text_rows();
+        assert!(
+            screen.iter().any(|row| is_ink_dialog_footer_row(row)),
+            "record 41 must still show the stale dialog footer"
+        );
+        assert!(
+            screen
+                .iter()
+                .any(|row| row.starts_with("  two-option question")),
+            "record 41 must have repainted the indented prompt row"
+        );
+        assert!(parse_claude_ask_user_question(&screen).is_none());
+
+        let clipped = [
+            "  wrapped prompt text",
+            "↓ 1. Apple",
+            "Enter to select · ↑/↓ to navigate · Esc to cancel",
+        ]
+        .map(str::to_string);
+        assert!(parse_claude_ask_user_question(&clipped).is_none());
     }
 
     #[test]

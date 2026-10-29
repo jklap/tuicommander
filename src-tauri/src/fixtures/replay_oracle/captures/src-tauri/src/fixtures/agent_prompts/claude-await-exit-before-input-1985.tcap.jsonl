@@ -403,6 +403,5 @@
 {"record":682,"event":{"type":"agent-block","action":"end","line":74,"on_alt_screen":false,"from_transcript_dump":false,"new_dump_generation":false,"_turn_epoch":0}}
 {"record":682,"state":{"shell":2,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":"Enter to select · ↑/↓ to navigate ·","choice_sig":null,"fullscreen":false}}
 {"record":683,"state":{"shell":2,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":"Enter to select · ↑/↓ to navigate ·","choice_sig":null,"fullscreen":false}}
-{"record":684,"event":{"type":"choice-prompt","title":"Choose red as the test color.","options":[{"key":"↑","label":"Previous option","highlighted":false,"destructive":false},{"key":"↓","label":"Next option","highlighted":false,"destructive":false},{"key":"↵","label":"Select highlighted option","highlighted":false,"destructive":false}],"selection_mode":"navigate-only","dismiss_key":"cancel","_turn_epoch":0}}
-{"record":684,"state":{"shell":2,"agent":"awaiting_input","awaiting":true,"question":"Choose red as the test color.","confident":true,"last_question":"Enter to select · ↑/↓ to navigate ·","choice_sig":"Choose red as the test color.|↑,↓,↵","fullscreen":false}}
+{"record":684,"state":{"shell":2,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":"Enter to select · ↑/↓ to navigate ·","choice_sig":null,"fullscreen":false}}
 {"ring_len":28231}
