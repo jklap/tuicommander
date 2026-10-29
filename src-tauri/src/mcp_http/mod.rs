@@ -3484,6 +3484,10 @@ mod tests {
             Query(types::PathQuery {
                 path: project.into(),
                 scope: None,
+                ignore_leading_ws: false,
+                ignore_trailing_ws: false,
+                ignore_ws_amount: false,
+                ignore_case: false,
             }),
             Json(crate::workflows::WorkflowAction::Publish {
                 id: draft.id.clone(),
@@ -4587,6 +4591,10 @@ mod tests {
             Query(types::PathQuery {
                 path: project.into(),
                 scope: None,
+                ignore_leading_ws: false,
+                ignore_trailing_ws: false,
+                ignore_ws_amount: false,
+                ignore_case: false,
             }),
             Json(WorkflowAction::Publish {
                 id: draft.id,
