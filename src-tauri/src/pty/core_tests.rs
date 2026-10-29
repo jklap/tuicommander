@@ -12383,15 +12383,15 @@ fn claude_double_askuserquestion_both_survive_dedup() {
             }
         }
     }
-    // Main's footer re-arm stands down for any chunk that already carries a
-    // Question (`rearm_awaiting_for_open_dialog`'s `question_this_tick`), and in
-    // this capture the footer only paints in chunks that also carry a hook
-    // `state=awaiting` marker — so the hook markers own both dialogs and the
-    // footer path fires exactly one stray question. Pinned exactly: a bound
-    // like `<= 2` would also pass if footer recovery stopped firing at all.
+    // Footer recovery fires once per dialog (records 41 and 99 of this
+    // output-only replay). It stands down for any chunk that already carries a
+    // Question or choice prompt, so a count of 1 means a chunk produced a
+    // spurious one: an indented row of the next prompt titled as the dialog in
+    // record 41's partial repaint. Pinned exactly: a bound like `<= 2` would
+    // also pass if footer recovery stopped firing at all.
     assert_eq!(
-        footer_question_count, 1,
-        "footer recovery must not storm: {footer_question_count} footer questions"
+        footer_question_count, 2,
+        "footer recovery should see each of the two AskUserQuestion dialogs once"
     );
 
     assert_eq!(
@@ -15624,6 +15624,7 @@ fn an_orchestrator_mail_wake_unparks_a_parked_parent() {
             content: "child result".to_string(),
             timestamp: 1,
             delivered_via_channel: false,
+            report: None,
         }]),
     );
     assert_eq!(standby_session(&state, parent_id), Ok(true));
