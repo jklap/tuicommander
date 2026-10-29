@@ -31,8 +31,3 @@ continuation evidence.
 The mounted regression `tints both recorded ego intent rows and stops before
 ordinary output` now passes without a TUIC classifier or painter change.
 The fix is in the ego producer, not a guessed frontend continuation rule.
-
-To inspect the real CanvasTerminal with this frame, run a worktree-only Vite
-server with `--strictPort` and open
-`/ego-intent-harness.html?fixture=1949&theme=dark` or `theme=light`.
-The harness uses shipped palette values and fixture-only IPC, not live config.
