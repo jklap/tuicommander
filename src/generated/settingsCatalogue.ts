@@ -7500,8 +7500,7 @@ export const settingsCatalogue = {
           "null"
         ],
         "format": "uint32",
-        "minimum": 0,
-        "default": null
+        "minimum": 0
       },
       "nullable": true,
       "default": null,
