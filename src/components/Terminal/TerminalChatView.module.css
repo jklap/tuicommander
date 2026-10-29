@@ -10,7 +10,7 @@
 .toggle {
   composes: toolbar from "../ui/FormControls.module.css";
   position: absolute;
-  top: 6px;
+  top: 2px;
   right: 20px;
   z-index: 11;
   display: flex;
@@ -22,7 +22,7 @@
   position: static;
   align-self: flex-end;
   flex-shrink: 0;
-  margin: 6px 20px 4px;
+  margin: 2px 20px 4px;
 }
 
 .fallbackBanner {
