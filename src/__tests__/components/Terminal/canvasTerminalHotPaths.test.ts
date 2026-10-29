@@ -32,7 +32,8 @@ describe("CanvasTerminal hot paths", () => {
 
 		it("still forces an immediate repaint of the (stale) current frame after resizing", () => {
 			const start = source.indexOf("(cols !== lastResizeCols || rows !== lastResizeRows)");
-			const afterBlock = source.slice(start, start + 1500);
+			// The window covers the resize block, including its perfDebug-gated resize_pty diag log.
+			const afterBlock = source.slice(start, start + 2500);
 			expect(afterBlock).toMatch(/if \(currentFrame\) \{\s*fullRepaintNeeded = true;\s*paintFrame\(currentFrame, m\);/);
 		});
 	});
