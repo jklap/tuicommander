@@ -13,6 +13,7 @@ import { IdeasOverlay } from "../components/IdeasOverlay";
 import { MobileJumpBottom } from "../components/MobileJumpBottom";
 import { createOpenMarkdownTabs, OpenMarkdownMenu } from "../components/OpenMarkdownMenu";
 import { OutputView } from "../components/OutputView";
+import { QueuedPrompts } from "../components/QueuedPrompts";
 import { SessionHeaderOverlay, type SessionHeaderPanel } from "../components/SessionHeaderOverlay";
 import { SessionUsageBlock } from "../components/SessionUsageBlock";
 import { SuggestChips } from "../components/SuggestChips";
@@ -115,6 +116,7 @@ export function SessionDetailScreen(props: SessionDetailScreenProps) {
 		awaitingInput: () => !!sessionState()?.awaiting_input || !!sessionState()?.last_error,
 		activityRevision: () => `${sessionState()?.shell_state}:${sessionState()?.last_activity_ms}`,
 	});
+	const [queueRevision, setQueueRevision] = createSignal(0);
 	const [cliAtBottom, setCliAtBottom] = createSignal(true);
 	let jumpCli: (() => void) | undefined;
 	const [browserDictating, setBrowserDictating] = createSignal(false);
@@ -630,6 +632,15 @@ export function SessionDetailScreen(props: SessionDetailScreenProps) {
 					agentType={sessionState()?.agent_type as string | null | undefined}
 				/>
 			</Show>
+			<Show when={props.sessionExists && props.session.session_id} keyed>
+				{(sessionId) => (
+					<QueuedPrompts
+						sessionId={sessionId}
+						count={sessionState()?.queued_commands ?? 0}
+						revision={queueRevision()}
+					/>
+				)}
+			</Show>
 			<div class={styles.controls}>
 				<TerminalKeybar
 					sessionId={props.session.session_id}
@@ -643,6 +654,9 @@ export function SessionDetailScreen(props: SessionDetailScreenProps) {
 					onInputKeyRequest={(key) => requestComposerInputKey?.(key)}
 				/>
 				<CommandInput
+					onQueued={(sessionId) => {
+						if (sessionId === props.session.session_id) setQueueRevision((value) => value + 1);
+					}}
 					serverVoiceRecording={voice.recording()}
 					onBrowserDictating={setBrowserDictating}
 					sessionId={props.session.session_id}

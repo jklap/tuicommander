@@ -173,7 +173,7 @@ the shared file opens as an AI Chat draft. iOS Safari currently requires the
 **+ → Attach file** because it does not support Web Share Target.
 The + menu also offers **Queue** in terminals, **Commands (/)** in agent terminals, and **Park draft / Restore parked draft / Swap parked
 draft** in AI Chat. Chat shows **Queue** and **Stop** while a turn is running.
-Terminal long-press on Send still opens Queue. Terminal parking is not offered:
+Terminal long-press on Send still opens Queue. In terminal **CLI** and **Chat**, a **Queued** list above the input shows the pending prompt text, including prompts queued in CLI or on desktop. Entries disappear when delivered. Tap **Cancel** to remove one or **Clear all** to empty the queue. Ordinary **Send** still submits now; switching to Chat does not change that. Terminal parking is not offered:
 the existing parked-draft store belongs to AI Chat. Tap outside the menu or
 press Escape to close it. Desktop AI Chat and Ctrl+S retain their controls.
 
