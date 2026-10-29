@@ -1,4 +1,5 @@
-import { type Component, createSignal, onMount, Show } from "solid-js";
+import { type Component, createSignal, For, onMount, Show } from "solid-js";
+import { settingOptions } from "../../../../services/settingsCatalogue";
 import type {
 	DeployMode,
 	DiscoveredSshHost,
@@ -12,6 +13,10 @@ import { tunnelsStore } from "../../../../stores/tunnels";
 import { randomId } from "../../../../utils/randomId";
 import { SshConnectionFields } from "../../../shared/SshConnectionFields";
 import { normalizeForwardForType, PortForwardsEditor } from "../../../TunnelsPanel/PortForwardsEditor";
+import { Button } from "../../../ui/Button";
+import { Input } from "../../../ui/Input";
+import { Select } from "../../../ui/Select";
+import { Switch } from "../../../ui/Switch";
 import s from "../../Settings.module.css";
 
 export type ConnectionKind = "SshTunnel" | "RemoteSsh" | "RemoteDirect" | "RemoteLocal" | "RemoteRelay";
@@ -372,16 +377,18 @@ export const RemoteConnectionEditor: Component<RemoteConnectionEditorProps> = (p
 		<>
 			<label style={{ display: "flex", gap: "8px", "align-items": "center" }}>
 				Auto-update remote daemons
-				<input
-					type="checkbox"
-					style={{ order: -1 }}
+				<Switch
+					role="checkbox"
+					data-setting-id="connections.connections.{id}.auto_update"
+					class={s.leadingControl}
 					checked={autoUpdate()}
 					onChange={(e) => setAutoUpdate(e.currentTarget.checked)}
 				/>
 			</label>
 			<div class={s.group}>
 				<label>Auth username (optional)</label>
-				<input
+				<Input
+					data-setting-id="connections.connections.{id}.auth_username"
 					type="text"
 					autocomplete="off"
 					autocorrect="off"
@@ -393,7 +400,8 @@ export const RemoteConnectionEditor: Component<RemoteConnectionEditorProps> = (p
 			</div>
 			<div class={s.group}>
 				<label>Auth password (optional)</label>
-				<input
+				<Input
+					data-setting-id="connections.{id}.credential"
 					type="password"
 					autocomplete="off"
 					value={password()}
@@ -401,9 +409,14 @@ export const RemoteConnectionEditor: Component<RemoteConnectionEditorProps> = (p
 					placeholder={passwordExists() ? "Password stored — leave blank to keep it" : "No password set"}
 				/>
 				<Show when={passwordExists()}>
-					<button type="button" class={s.testBtn} style={{ "margin-top": "6px" }} onClick={handleClearPassword}>
+					<Button
+						data-setting-id="connections.{id}.credential"
+						size="compact"
+						style={{ "margin-top": "6px" }}
+						onClick={handleClearPassword}
+					>
 						Clear stored password
-					</button>
+					</Button>
 				</Show>
 				<p class={s.hint} style={{ margin: "4px 0 0" }}>
 					The password is kept in the OS credential vault, never in connections.json. It is traded for the daemon's
@@ -422,25 +435,45 @@ export const RemoteConnectionEditor: Component<RemoteConnectionEditorProps> = (p
 			<div style={{ display: "grid", gap: "8px" }}>
 				<div class={s.group}>
 					<label>Name</label>
-					<input type="text" value={name()} onInput={(e) => setName(e.currentTarget.value)} />
+					<Input
+						data-setting-id="connections.connections.{id}.name"
+						type="text"
+						value={name()}
+						onInput={(e) => setName(e.currentTarget.value)}
+					/>
 				</div>
 
 				<div class={s.group}>
 					<label>Kind</label>
-					<select value={kind()} disabled={isEdit} onChange={(e) => setKind(e.currentTarget.value as ConnectionKind)}>
+					<Select
+						data-non-setting="Chooses which editor form (SSH tunnel profile or Remote Server transport) is shown; Save writes the record's type"
+						value={kind()}
+						disabled={isEdit}
+						onChange={(e) => setKind(e.currentTarget.value as ConnectionKind)}
+					>
 						<option value="SshTunnel">SSH Tunnel</option>
 						<option value="RemoteSsh">Remote Server — SSH</option>
 						<option value="RemoteDirect">Remote Server — Direct</option>
 						<option value="RemoteLocal">Remote Server — Local</option>
 						<option value="RemoteRelay">Remote Server — Relay</option>
-					</select>
+					</Select>
 				</div>
 
 				<Show when={kind() === "SshTunnel"}>
-					<SshConnectionFields value={shownSsh()} onChange={patchSsh} settingIdPrefix="tunnels.profiles.{id}.ssh" />
+					<SshConnectionFields
+						value={shownSsh()}
+						onChange={patchSsh}
+						settingIdPrefix="tunnels.profiles.{id}.ssh"
+						fieldClass={s.editorField}
+					/>
 					<PortForwardsEditor forwards={forwards()} onChange={setForwards} defaultRemoteHost={ssh().host.trim()} />
 					<label class={s.toggle}>
-						<input type="checkbox" checked={autoConnect()} onChange={(e) => setAutoConnect(e.currentTarget.checked)} />
+						<Switch
+							role="checkbox"
+							data-setting-id="tunnels.profiles.{id}.auto_connect"
+							checked={autoConnect()}
+							onChange={(e) => setAutoConnect(e.currentTarget.checked)}
+						/>
 						<span>Connect automatically on startup</span>
 					</label>
 				</Show>
@@ -450,6 +483,7 @@ export const RemoteConnectionEditor: Component<RemoteConnectionEditorProps> = (p
 						value={shownSsh()}
 						onChange={patchSsh}
 						settingIdPrefix="connections.connections.{id}.transport.ssh"
+						fieldClass={s.editorField}
 					/>
 					<p class={s.hint} style={{ margin: 0 }}>
 						StrictHostKeyChecking applies to every SSH command run for this server (Connect's tunnel, Test Connection,
@@ -458,7 +492,8 @@ export const RemoteConnectionEditor: Component<RemoteConnectionEditorProps> = (p
 					</p>
 					<div class={s.group}>
 						<label>Remote daemon port</label>
-						<input
+						<Input
+							data-setting-id="connections.connections.{id}.transport.remote_daemon_port"
 							type="number"
 							min={1}
 							max={65535}
@@ -470,15 +505,26 @@ export const RemoteConnectionEditor: Component<RemoteConnectionEditorProps> = (p
 					</div>
 					<div class={s.group}>
 						<label>Deployment</label>
-						<select value={deploy()} onChange={(e) => setDeploy(e.currentTarget.value as DeployMode)}>
-							<option value="never">Never deploy</option>
-							<option value="on_connect">Deploy on connect</option>
-							<option value="installed">Installed service</option>
-						</select>
+						<Select
+							data-setting-id="connections.connections.{id}.deploy"
+							value={deploy()}
+							onChange={(e) => setDeploy(e.currentTarget.value as DeployMode)}
+						>
+							<For
+								each={settingOptions("connections.connections.{id}.deploy", {
+									never: "Never deploy",
+									on_connect: "Deploy on connect",
+									installed: "Installed service",
+								})}
+							>
+								{(option) => <option value={option.value}>{option.label}</option>}
+							</For>
+						</Select>
 					</div>
 					<div class={s.group}>
 						<label>Keep ephemeral daemon alive (minutes)</label>
-						<input
+						<Input
+							data-setting-id="connections.connections.{id}.survive_secs"
 							type="number"
 							min={1}
 							value={surviveMinutes()}
@@ -487,7 +533,8 @@ export const RemoteConnectionEditor: Component<RemoteConnectionEditorProps> = (p
 					</div>
 					<div class={s.group}>
 						<label>Instance ID (optional)</label>
-						<input
+						<Input
+							data-setting-id="connections.connections.{id}.transport.instance_id"
 							type="text"
 							placeholder="e.g. dev-box"
 							value={sshInstanceId()}
@@ -498,13 +545,14 @@ export const RemoteConnectionEditor: Component<RemoteConnectionEditorProps> = (p
 							used to discover a port.
 						</p>
 					</div>
-					{/* Text before the checkbox (`order: -1` puts the box first), as the
+					{/* Text before the switch (`leadingControl` puts it first), as the
 					    auto-update toggle does, so the search index can read the label. */}
 					<label style={{ display: "flex", gap: "8px", "align-items": "center" }}>
 						Offer to start the remote daemon if it is not running
-						<input
-							type="checkbox"
-							style={{ order: -1 }}
+						<Switch
+							role="checkbox"
+							data-setting-id="connections.connections.{id}.transport.start_if_not_running"
+							class={s.leadingControl}
 							checked={startIfNotRunning()}
 							onChange={(e) => setStartIfNotRunning(e.currentTarget.checked)}
 						/>
@@ -512,9 +560,10 @@ export const RemoteConnectionEditor: Component<RemoteConnectionEditorProps> = (p
 					<Show when={startIfNotRunning()}>
 						<label style={{ display: "flex", gap: "8px", "align-items": "center" }}>
 							Leave it running on disconnect
-							<input
-								type="checkbox"
-								style={{ order: -1 }}
+							<Switch
+								role="checkbox"
+								data-setting-id="connections.connections.{id}.transport.leave_running_on_disconnect"
+								class={s.leadingControl}
 								checked={leaveRunningOnDisconnect()}
 								onChange={(e) => setLeaveRunningOnDisconnect(e.currentTarget.checked)}
 							/>
@@ -530,7 +579,8 @@ export const RemoteConnectionEditor: Component<RemoteConnectionEditorProps> = (p
 				<Show when={kind() === "RemoteDirect"}>
 					<div class={s.group}>
 						<label>URL</label>
-						<input
+						<Input
+							data-setting-id="connections.connections.{id}.transport.url"
 							type="text"
 							placeholder="http://192.168.1.100:9877"
 							value={directUrl()}
@@ -543,9 +593,14 @@ export const RemoteConnectionEditor: Component<RemoteConnectionEditorProps> = (p
 						<Show when={directTlsFingerprint()}>
 							<p class={s.hint}>
 								Certificate pinned: <code>{directTlsFingerprint()}</code>{" "}
-								<button type="button" class={s.textBtn} onClick={() => setDirectTlsFingerprint(null)}>
+								<Button
+									data-setting-id="connections.connections.{id}.transport.tls_fingerprint"
+									variant="ghost"
+									size="compact"
+									onClick={() => setDirectTlsFingerprint(null)}
+								>
 									Forget pinned certificate
-								</button>
+								</Button>
 							</p>
 						</Show>
 					</div>
@@ -558,6 +613,7 @@ export const RemoteConnectionEditor: Component<RemoteConnectionEditorProps> = (p
 						<div style={{ display: "flex", gap: "16px", "align-items": "center" }}>
 							<label style={{ display: "flex", gap: "4px", "align-items": "center" }}>
 								<input
+									data-non-setting="Chooses which Local target field is shown; Save writes the instance id or the port"
 									type="radio"
 									name="remote-local-mode"
 									checked={localMode() === "instance"}
@@ -567,6 +623,7 @@ export const RemoteConnectionEditor: Component<RemoteConnectionEditorProps> = (p
 							</label>
 							<label style={{ display: "flex", gap: "4px", "align-items": "center" }}>
 								<input
+									data-non-setting="Chooses which Local target field is shown; Save writes the instance id or the port"
 									type="radio"
 									name="remote-local-mode"
 									checked={localMode() === "port"}
@@ -579,7 +636,8 @@ export const RemoteConnectionEditor: Component<RemoteConnectionEditorProps> = (p
 					<Show when={localMode() === "instance"}>
 						<div class={s.group}>
 							<label>Instance ID</label>
-							<input
+							<Input
+								data-setting-id="connections.connections.{id}.transport.instance_id"
 								type="text"
 								placeholder="e.g. dev-box"
 								value={localInstanceId()}
@@ -590,7 +648,8 @@ export const RemoteConnectionEditor: Component<RemoteConnectionEditorProps> = (p
 					<Show when={localMode() === "port"}>
 						<div class={s.group}>
 							<label>Port</label>
-							<input
+							<Input
+								data-setting-id="connections.connections.{id}.transport.port"
 								type="number"
 								value={localPort()}
 								onInput={(e) => setLocalPort(Number.parseInt(e.currentTarget.value, 10) || DEFAULT_REMOTE_DAEMON_PORT)}
@@ -623,9 +682,10 @@ export const RemoteConnectionEditor: Component<RemoteConnectionEditorProps> = (p
 					</div>
 					<label style={{ display: "flex", gap: "8px", "align-items": "center" }}>
 						Auto-update remote daemons
-						<input
-							type="checkbox"
-							style={{ order: -1 }}
+						<Switch
+							role="checkbox"
+							data-setting-id="connections.connections.{id}.auto_update"
+							class={s.leadingControl}
 							checked={autoUpdate()}
 							onChange={(e) => setAutoUpdate(e.currentTarget.checked)}
 						/>
@@ -633,9 +693,13 @@ export const RemoteConnectionEditor: Component<RemoteConnectionEditorProps> = (p
 				</Show>
 
 				<div style={{ display: "flex", gap: "8px", "align-items": "center" }}>
-					<button type="button" class={s.testBtn} onClick={handleTest} disabled={testing() || kind() === "RemoteRelay"}>
+					<Button
+						data-non-setting="Explicit SSH discovery or authentication probe; not configuration persistence"
+						onClick={handleTest}
+						disabled={testing() || kind() === "RemoteRelay"}
+					>
 						{testing() ? "Testing..." : "Test Connection"}
-					</button>
+					</Button>
 					<Show when={testResult()}>
 						{(result) => (
 							<span
@@ -651,12 +715,17 @@ export const RemoteConnectionEditor: Component<RemoteConnectionEditorProps> = (p
 				</div>
 
 				<div style={{ display: "flex", gap: "8px", "justify-content": "flex-end" }}>
-					<button class={s.testBtn} onClick={handleSave} disabled={saving()}>
+					<Button
+						data-non-setting="Create, update or remove a stable connection through the existing owner"
+						variant="primary"
+						onClick={handleSave}
+						disabled={saving()}
+					>
 						{saving() ? "Saving..." : "Save"}
-					</button>
-					<button class={s.testBtn} onClick={props.onClose}>
+					</Button>
+					<Button data-non-setting="Open, prefill, cancel or close the connection editor" onClick={props.onClose}>
 						Cancel
-					</button>
+					</Button>
 				</div>
 				<Show when={error()}>
 					<p class={s.hint} style={{ color: "var(--error, #e06c75)" }}>

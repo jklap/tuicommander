@@ -9,9 +9,8 @@ import { HelpPanel } from "../../components/HelpPanel/HelpPanel";
 import { MarkdownPanel } from "../../components/MarkdownPanel/MarkdownPanel";
 import { PromptDrawer } from "../../components/PromptDrawer/PromptDrawer";
 import { CloseDialog } from "../../components/QuitDialog/CloseDialog";
-import { defaultSsh } from "../../components/SettingsPanel/tabs/services/RemoteConnectionEditor";
+import { RemoteConnectionEditor } from "../../components/SettingsPanel/tabs/services/RemoteConnectionEditor";
 import { StoriesDialog } from "../../components/StoriesDialog/StoriesDialog";
-import { SshConnectionFields } from "../../components/shared/SshConnectionFields";
 import { TaskField } from "../../components/Tasks/detail/TaskField";
 import { roadmapDemo } from "../../components/Tasks/roadmap/demo";
 import { TasksRoadmap } from "../../components/Tasks/roadmap/TasksRoadmap";
@@ -187,18 +186,10 @@ describe("visual review layout regressions", () => {
 	});
 
 	it("catches tunnel sibling fields receiving unequal top margins", () => {
-		css("src/components/SettingsPanel/Settings.module.css", "src/components/TunnelsPanel/TunnelEditorModal.module.css");
-		// TunnelEditorModal is gone; this mounts its SshConnectionFields usage (layout `.body` + `.field` reset).
-		const { container } = render(() => (
-			<div class="body">
-				<SshConnectionFields
-					value={defaultSsh()}
-					onChange={noop}
-					settingIdPrefix="tunnels.profiles.{id}.ssh"
-					fieldClass="field"
-				/>
-			</div>
-		));
+		css("src/components/SettingsPanel/Settings.module.css");
+		// The real editor: its SSH fields sit in a grid whose gap spaces them, so
+		// `.group + .group` must not push Port below Host in their shared row.
+		const { container } = render(() => <RemoteConnectionEditor target={{ kind: "new" }} onClose={noop} />);
 		const host = container.querySelector('[data-setting-id="tunnels.profiles.{id}.ssh.host"]')!;
 		const port = container.querySelector('[data-setting-id="tunnels.profiles.{id}.ssh.port"]')!;
 		const top = (element: Element) => getComputedStyle(element.parentElement!).marginTop || "0px";

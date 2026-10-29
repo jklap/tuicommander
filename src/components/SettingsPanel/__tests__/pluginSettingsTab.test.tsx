@@ -11,11 +11,14 @@ vi.mock("../../../stores/settings", () => ({ settingsStore: { isAiChatEnabled: (
 vi.mock("../ExpertSetting", () => ({ ExpertModeSwitch: () => null }));
 vi.mock("../../../stores/settingsExpert", () => ({ settingsExpertStore: { open: () => Promise.resolve() } }));
 
+// The title is unique to the fixture: a search for it must hit no built-in
+// entry (a built-in relay hint mentions a server endpoint), so every result is
+// the plugin page's own.
 const field = {
 	id: "plugins.fixture.endpoint",
 	path: "/endpoint",
 	label: "endpoint",
-	schema: { type: "string", title: "Server endpoint" },
+	schema: { type: "string", title: "Fixture endpoint" },
 	operations: ["get", "set", "reset"],
 	sensitivity: "public",
 	order: 0,
@@ -41,7 +44,7 @@ beforeEach(() => {
 					properties: {
 						endpoint: {
 							type: "string",
-							title: "Server endpoint",
+							title: "Fixture endpoint",
 							"x-setting": {
 								sensitivity: "public",
 								apply: "live",
@@ -86,9 +89,9 @@ it("unloaded_plugin_tab_disappears — catches stale tab writing to a dead plugi
 it("plugin_tab_is_searchable — catches search index built only from static tabs", async () => {
 	const view = render(() => <SettingsPanel visible onClose={() => {}} />);
 	await waitFor(() => expect(view.container.textContent).toContain("Fixture integration"));
-	fireEvent.input(view.container.querySelector("nav input")!, { target: { value: "Server endpoint" } });
+	fireEvent.input(view.container.querySelector("nav input")!, { target: { value: "Fixture endpoint" } });
 	await waitFor(() =>
-		expect(view.container.querySelector("[data-settings-content]")?.textContent).toContain("Server endpoint"),
+		expect(view.container.querySelector("[data-settings-content]")?.textContent).toContain("Fixture endpoint"),
 	);
 	fireEvent.click(view.container.querySelector("[data-settings-content] button")!);
 	await view.findByDisplayValue("https://example.test");
@@ -99,8 +102,8 @@ it("plugin_tab_is_searchable — catches search index built only from static tab
 it("plugin search remains catalogue-only until the result opens its scoped editor", async () => {
 	const view = render(() => <SettingsPanel visible onClose={() => {}} />);
 	await waitFor(() => expect(view.container.textContent).toContain("Fixture integration"));
-	fireEvent.input(view.container.querySelector("nav input")!, { target: { value: "Server endpoint" } });
-	const result = await view.findByRole("button", { name: /Server endpoint.*Fixture integration/ });
+	fireEvent.input(view.container.querySelector("nav input")!, { target: { value: "Fixture endpoint" } });
+	const result = await view.findByRole("button", { name: /Fixture endpoint.*Fixture integration/ });
 	expect(mockInvoke.mock.calls.some(([, args]) => args?.action?.action === "get")).toBe(false);
 	fireEvent.click(result);
 	await view.findByDisplayValue("https://example.test");
@@ -123,7 +126,7 @@ it("an empty described catalogue offers no plugin page or search result", async 
 		}),
 	);
 	expect(view.queryByRole("button", { name: "Fixture integration Plugin" })).toBeNull();
-	fireEvent.input(view.container.querySelector("nav input")!, { target: { value: "Server endpoint" } });
+	fireEvent.input(view.container.querySelector("nav input")!, { target: { value: "Fixture endpoint" } });
 	expect(view.getByText("No settings match your search.")).toBeVisible();
 	expect(view.getByRole("heading", { name: "Settings" })).toBeVisible();
 });
@@ -152,13 +155,13 @@ it("plugin_tab_write_goes_through_settings_service — catches a second settings
 it("unloaded plugin search entries disappear — catches a retained catalogue exposing dead pages", async () => {
 	const view = render(() => <SettingsPanel visible onClose={() => {}} />);
 	await waitFor(() => expect(view.container.textContent).toContain("Fixture integration"));
-	fireEvent.input(view.container.querySelector("nav input")!, { target: { value: "Server endpoint" } });
+	fireEvent.input(view.container.querySelector("nav input")!, { target: { value: "Fixture endpoint" } });
 	await waitFor(() =>
-		expect(view.container.querySelector("[data-settings-content]")?.textContent).toContain("Server endpoint"),
+		expect(view.container.querySelector("[data-settings-content]")?.textContent).toContain("Fixture endpoint"),
 	);
 	pluginStore.updatePlugin("fixture", { loaded: false });
 	await waitFor(() =>
-		expect(view.container.querySelector("[data-settings-content]")?.textContent).not.toContain("Server endpoint"),
+		expect(view.container.querySelector("[data-settings-content]")?.textContent).not.toContain("Fixture endpoint"),
 	);
 });
 
@@ -348,7 +351,7 @@ it.each(["string", "integer", "boolean"])(
 			return { effects: [], restart: [] };
 		});
 		const view = render(() => <SettingsPanel visible onClose={() => {}} initialTab="plugin:fixture" />);
-		const reset = await view.findByRole("button", { name: "Reset Server endpoint" });
+		const reset = await view.findByRole("button", { name: "Reset Fixture endpoint" });
 		expect(reset.parentElement).toHaveClass("settingRowWithActions");
 		expect(reset.closest(".settingRow")?.querySelector("input")).not.toBeNull();
 		fireEvent.click(reset);
@@ -358,7 +361,7 @@ it.each(["string", "integer", "boolean"])(
 				action: { action: "reset", path: "/endpoint", expectedRevision: "r1" },
 			}),
 		);
-		await waitFor(() => expect(view.queryByRole("button", { name: "Reset Server endpoint" })).toBeNull());
+		await waitFor(() => expect(view.queryByRole("button", { name: "Reset Fixture endpoint" })).toBeNull());
 	},
 );
 

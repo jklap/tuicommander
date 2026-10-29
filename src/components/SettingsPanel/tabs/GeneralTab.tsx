@@ -669,6 +669,7 @@ export const GeneralTab: Component<{ onOpenAiChat?: () => void }> = (props) => {
 			<Show when={isTauri()}>
 				<SectionCard title={t("general.heading.window", "Window")}>
 					<SettingToggle
+						settingId="app.restore_window_geometry"
 						checked={settingsStore.state.restoreWindowGeometry}
 						onChange={(v) => settingsStore.setRestoreWindowGeometry(v)}
 						label={t("general.toggle.restoreWindowGeometry", "Restore window size and position on launch")}
@@ -769,6 +770,7 @@ export const GeneralTab: Component<{ onOpenAiChat?: () => void }> = (props) => {
 					value={settingsStore.state.diffIgnoreLeadingWhitespace}
 				>
 					<SettingToggle
+						settingId="app.diff_ignore_leading_whitespace"
 						row
 						checked={settingsStore.state.diffIgnoreLeadingWhitespace}
 						onChange={(v) => settingsStore.setDiffIgnoreLeadingWhitespace(v)}
@@ -784,6 +786,7 @@ export const GeneralTab: Component<{ onOpenAiChat?: () => void }> = (props) => {
 					value={settingsStore.state.diffIgnoreTrailingWhitespace}
 				>
 					<SettingToggle
+						settingId="app.diff_ignore_trailing_whitespace"
 						row
 						checked={settingsStore.state.diffIgnoreTrailingWhitespace}
 						onChange={(v) => settingsStore.setDiffIgnoreTrailingWhitespace(v)}
@@ -799,6 +802,7 @@ export const GeneralTab: Component<{ onOpenAiChat?: () => void }> = (props) => {
 					value={settingsStore.state.diffIgnoreWhitespaceAmount}
 				>
 					<SettingToggle
+						settingId="app.diff_ignore_whitespace_amount"
 						row
 						checked={settingsStore.state.diffIgnoreWhitespaceAmount}
 						onChange={(v) => settingsStore.setDiffIgnoreWhitespaceAmount(v)}
@@ -811,6 +815,7 @@ export const GeneralTab: Component<{ onOpenAiChat?: () => void }> = (props) => {
 				</ExpertSetting>
 				<ExpertSetting configKey="app.diff_ignore_case" value={settingsStore.state.diffIgnoreCase}>
 					<SettingToggle
+						settingId="app.diff_ignore_case"
 						row
 						checked={settingsStore.state.diffIgnoreCase}
 						onChange={(v) => settingsStore.setDiffIgnoreCase(v)}
@@ -819,6 +824,7 @@ export const GeneralTab: Component<{ onOpenAiChat?: () => void }> = (props) => {
 					/>
 				</ExpertSetting>
 				<SettingToggle
+					settingId="preferences.diff_soft_wrap"
 					row
 					checked={uiStore.state.diffSoftWrap}
 					onChange={(v) => uiStore.setDiffSoftWrap(v)}
@@ -827,6 +833,7 @@ export const GeneralTab: Component<{ onOpenAiChat?: () => void }> = (props) => {
 				/>
 				<ExpertSetting configKey="app.session_diff_auto_open" value={settingsStore.state.sessionDiffAutoOpen}>
 					<SettingSelect
+						settingId="app.session_diff_auto_open"
 						row
 						label={t("general.label.sessionDiffAutoOpen", "Auto-open Session Diff Review")}
 						value={settingsStore.state.sessionDiffAutoOpen}
@@ -844,6 +851,7 @@ export const GeneralTab: Component<{ onOpenAiChat?: () => void }> = (props) => {
 				</ExpertSetting>
 				<ExpertSetting configKey="app.session_diff_truncate_lines" value={settingsStore.state.sessionDiffTruncateLines}>
 					<SettingSlider
+						settingId="app.session_diff_truncate_lines"
 						row
 						label={t("general.label.sessionDiffTruncateLines", "Truncate long changes")}
 						value={settingsStore.state.sessionDiffTruncateLines}
@@ -936,7 +944,10 @@ export const GeneralTab: Component<{ onOpenAiChat?: () => void }> = (props) => {
 						checked={settingsStore.state.experimentalFeaturesEnabled}
 						onChange={(enabled) => settingsStore.setExperimentalFeaturesEnabled(enabled)}
 						label={t("general.toggle.experimentalFeatures", "Enable experimental features")}
-						hint={t("general.hint.experimentalFeatures", "Opt in to features under active development: the AI Chat panel.")}
+						hint={t(
+							"general.hint.experimentalFeatures",
+							"Opt in to features under active development: the AI Chat panel.",
+						)}
 					/>
 				</div>
 			</SectionCard>

@@ -385,7 +385,7 @@ describe("repoSettingsStore", () => {
 		// the tests above — every getEffective() case here starts from an
 		// in-memory settings object, never from a value that actually went
 		// through the wire. These two round-trip through a real save→hydrate
-		// cycle, the same path a TriStateToggle's "Use global"/explicit-off
+		// cycle, the same path a "Use global default" select's inherit/explicit-off
 		// choice takes in production.
 		it("a tri-state field left at null survives save→hydrate and resolves to the global default", async () => {
 			setMockDefaults("copyIgnoredFiles", true);

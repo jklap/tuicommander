@@ -311,6 +311,7 @@ export const NotificationsTab: Component = () => {
 													</span>
 													<Select
 														ref={selectRef}
+														data-setting-id={`notifications.sound_choices.${sound.key}.preset`}
 														compact
 														aria-label={`${sound.label} sound`}
 														value={choice().preset}
