@@ -611,6 +611,7 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
 		expert: true,
 		configKey: "repo_defaults.auto_archive_merged",
 	},
+	{ tab: "github", section: "Worktree Defaults", label: "Archived worktree retention (days)" },
 	{
 		tab: "github",
 		section: "Worktree Defaults",

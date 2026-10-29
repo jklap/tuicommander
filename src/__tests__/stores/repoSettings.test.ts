@@ -19,6 +19,7 @@ const [mockDefaults, setMockDefaults] = createStore({
 	setupScript: "",
 	runScript: "",
 	archiveScript: "",
+	archiveRetentionDays: 0,
 });
 
 vi.mock("../../stores/repoDefaults", () => ({
@@ -50,6 +51,7 @@ describe("repoSettingsStore", () => {
 			setupScript: "",
 			runScript: "",
 			archiveScript: "",
+			archiveRetentionDays: 0,
 		});
 
 		vi.doMock("@tauri-apps/api/core", () => ({
@@ -109,6 +111,18 @@ describe("repoSettingsStore", () => {
 		}
 	});
 
+	// Catches: Off (0) being flattened into inheritance.
+	it("archive retention inherits the default but preserves explicit Off", () => {
+		testInScope(() => {
+			store.getOrCreate("/repo", "Repo");
+			setMockDefaults("archiveRetentionDays", 14);
+			expect(store.getEffective("/repo")?.archiveRetentionDays).toBe(14);
+			store.update("/repo", { archiveRetentionDays: 0 });
+			expect(store.getEffective("/repo")?.archiveRetentionDays).toBe(0);
+			store.update("/repo", { archiveRetentionDays: null });
+			expect(store.getEffective("/repo")?.archiveRetentionDays).toBe(14);
+		});
+	});
 	describe("get()", () => {
 		it("returns undefined for unknown repo", () => {
 			testInScope(() => {

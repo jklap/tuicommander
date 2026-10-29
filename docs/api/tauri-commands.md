@@ -1142,3 +1142,7 @@ Issue triage: `automation_action` run/history responses include
 shared `triage_decision` action is bound-agent-only: HTTP and IPC both reject
 unbound submissions with `Triage decision requires a bound agent caller`.
 See the MCP guide for the managed evaluator's report contract.
+
+## Archive retention cleanup
+
+`sweep_archive_retention(repo_path)` returns `{ deleted: string[], kept: string[] }`. The host resolves the configured days; callers cannot supply a deletion threshold. Used by repository refresh. Named kept entries include their reason. It preserves archive refs and uses non-force Git removal. HTTP twin: `POST /worktrees/archive-retention`.

@@ -275,6 +275,29 @@ export const RepoWorktreeTab: Component<RepoTabProps> = (props) => {
 					/>
 				</div>
 
+				<SettingRow label="Archived worktree retention (days)" hint="0 is Off. Leave empty to use the global default.">
+					{(id, descriptionId) => (
+						<Input
+							data-setting-id="repositories.repos.{key}.archive_retention_days"
+							id={id}
+							aria-describedby={descriptionId()}
+							type="number"
+							min={0}
+							max={4294967295}
+							step={1}
+							placeholder={`Global default: ${props.defaults.archiveRetentionDays} days (0 is Off)`}
+							value={props.settings.archiveRetentionDays === null ? "" : String(props.settings.archiveRetentionDays)}
+							onInput={(event) => {
+								const value = event.currentTarget.value;
+								const days = Number(value);
+								if (value === "") props.onUpdate("archiveRetentionDays", null);
+								else if (Number.isInteger(days) && days >= 0 && days <= 4294967295)
+									props.onUpdate("archiveRetentionDays", days);
+							}}
+						/>
+					)}
+				</SettingRow>
+
 				<div class={r.group}>
 					<div class={s.helpLabel}>
 						<label for="repo-field-5">{t("repoWorktree.label.orphanCleanup", "Orphan Worktree Cleanup")}</label>

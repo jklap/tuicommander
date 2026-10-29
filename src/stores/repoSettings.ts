@@ -47,6 +47,7 @@ export interface RepoSettings {
 	deleteBranchOnRemove: boolean | null;
 	/** null = inherit from repoDefaultsStore */
 	autoArchiveMerged: boolean | null;
+	archiveRetentionDays: number | null;
 	/** null = inherit from repoDefaultsStore */
 	orphanCleanup: OrphanCleanup | null;
 	/** null = inherit from repoDefaultsStore */
@@ -87,6 +88,7 @@ export interface EffectiveRepoSettings {
 	promptOnCreate: boolean;
 	deleteBranchOnRemove: boolean;
 	autoArchiveMerged: boolean;
+	archiveRetentionDays: number;
 	orphanCleanup: OrphanCleanup;
 	prMergeStrategy: MergeStrategy;
 	afterMerge: WorktreeAfterMerge;
@@ -115,6 +117,7 @@ const OVERRIDABLE_NULL_DEFAULTS: Pick<
 	| "promptOnCreate"
 	| "deleteBranchOnRemove"
 	| "autoArchiveMerged"
+	| "archiveRetentionDays"
 	| "orphanCleanup"
 	| "prMergeStrategy"
 	| "afterMerge"
@@ -136,6 +139,7 @@ const OVERRIDABLE_NULL_DEFAULTS: Pick<
 	promptOnCreate: null,
 	deleteBranchOnRemove: null,
 	autoArchiveMerged: null,
+	archiveRetentionDays: null,
 	orphanCleanup: null,
 	prMergeStrategy: null,
 	afterMerge: null,
@@ -157,6 +161,7 @@ interface RepoLocalConfig {
 	worktree_storage?: WorktreeStorage;
 	delete_branch_on_remove?: boolean;
 	auto_archive_merged?: boolean;
+	archive_retention_days?: number;
 	orphan_cleanup?: OrphanCleanup;
 	pr_merge_strategy?: MergeStrategy;
 	after_merge?: WorktreeAfterMerge;
@@ -265,6 +270,8 @@ function createRepoSettingsStore() {
 		promptOnCreate: (s) => s.promptOnCreate ?? repoDefaultsStore.state.promptOnCreate,
 		deleteBranchOnRemove: (s, local) =>
 			s.deleteBranchOnRemove ?? local()?.delete_branch_on_remove ?? repoDefaultsStore.state.deleteBranchOnRemove,
+		archiveRetentionDays: (s, local) =>
+			s.archiveRetentionDays ?? local()?.archive_retention_days ?? repoDefaultsStore.state.archiveRetentionDays,
 		autoArchiveMerged: (s, local) =>
 			s.autoArchiveMerged ?? local()?.auto_archive_merged ?? repoDefaultsStore.state.autoArchiveMerged,
 		orphanCleanup: (s, local) => s.orphanCleanup ?? local()?.orphan_cleanup ?? repoDefaultsStore.state.orphanCleanup,
@@ -408,6 +415,7 @@ function createRepoSettingsStore() {
 				promptOnCreate: resolvers.promptOnCreate(settings, local),
 				deleteBranchOnRemove: resolvers.deleteBranchOnRemove(settings, local),
 				autoArchiveMerged: resolvers.autoArchiveMerged(settings, local),
+				archiveRetentionDays: resolvers.archiveRetentionDays(settings, local),
 				orphanCleanup: resolvers.orphanCleanup(settings, local),
 				prMergeStrategy: resolvers.prMergeStrategy(settings, local),
 				afterMerge: resolvers.afterMerge(settings, local),

@@ -3754,3 +3754,7 @@ but HTTP/IPC callers have no managed-agent binding and receive
 `Triage decision requires a bound agent caller`; only the bound managed MCP
 evaluator can submit. A decision completes the run; GitHub publication remains
 a separate host effect.
+
+## Archive retention cleanup
+
+`POST /worktrees/archive-retention` accepts `{ "repoPath": "/absolute/repository" }` and returns `{ "deleted": ["archive-name"], "kept": ["archive-name: reason"] }`. The host resolves retention from its repository settings; no threshold is accepted from the caller. Desktop IPC uses the identical result via `sweep_archive_retention`. It deletes only recorded eligible completed archives under `__archived/`, with live-session checks and non-force Git removal; commit archive refs remain.

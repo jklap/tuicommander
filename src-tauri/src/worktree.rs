@@ -610,6 +610,44 @@ pub fn spawn_background_warm(
 use crate::git_cli::{finish_failed_git_operation_after_abort, git_cmd};
 use crate::state::AppState;
 
+/// Shared host-side retention policy: callers cannot supply a deletion threshold.
+pub(crate) fn sweep_archive_retention_impl(
+    state: &AppState,
+    repo_path: &str,
+) -> Result<ArchiveRetentionReport, String> {
+    let repos = crate::config::load_repo_settings();
+    let local = crate::config::load_repo_local_config_from_path(Path::new(repo_path));
+    let days = repos
+        .repos
+        .get(repo_path)
+        .and_then(|entry| entry.archive_retention_days)
+        .or_else(|| local.and_then(|entry| entry.archive_retention_days))
+        .unwrap_or_else(|| crate::config::load_repo_defaults().archive_retention_days);
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|error| error.to_string())?
+        .as_secs();
+    let report = sweep_archived_worktrees(Path::new(repo_path), days, now, |path| {
+        live_sessions_in(state, path).is_empty()
+    })?;
+    if !report.deleted.is_empty() {
+        state.invalidate_repo_caches(repo_path);
+    }
+    Ok(report)
+}
+
+#[cfg(feature = "desktop")]
+#[tauri::command]
+pub(crate) async fn sweep_archive_retention(
+    state: State<'_, Arc<AppState>>,
+    repo_path: String,
+) -> Result<ArchiveRetentionReport, String> {
+    let state = state.inner().clone();
+    tokio::task::spawn_blocking(move || sweep_archive_retention_impl(&state, &repo_path))
+        .await
+        .map_err(|error| format!("Task panic: {error}"))?
+}
+
 /// Resolve the effective archive_script for a repo from the three-tier config:
 /// per-repo settings → repo-local .tuic.json → global defaults.
 /// Returns None if no script is configured at any level.

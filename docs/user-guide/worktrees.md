@@ -117,6 +117,7 @@ Global defaults apply to all repos. Per-repo overrides take precedence when set.
 | **Prompt on create** | On / Off | On |
 | **Delete branch on remove** | On / Off | On |
 | **Auto-archive merged** | On / Off | Off |
+| **Archived worktree retention (days)** | 0 (Off) or a positive number of days | Off |
 | **Orphan cleanup** | Ask before removing / Auto-remove / Keep | Ask |
 | **Safe orphan countdown** (Expert Mode) | 5 / 10 / 20 / 30 seconds | 10 seconds |
 | **PR merge strategy** | Merge / Squash / Rebase | Merge |
@@ -374,3 +375,13 @@ If `git worktree add --force` puts a branch in several checkouts, the lexicograp
 Unavailable detached registrations are excluded from automatic orphan cleanup in both Ask and On modes, including the Ask countdown. They remain repair diagnostics until restored or explicitly removed. Safe-only removal rechecks availability, so a directory moved after assessment cannot be pruned automatically. Explicit user-confirmed removal remains available.
 
 Bare repository metadata does not appear as a missing checkout. Linked checkouts from a bare repository remain available; deleted or broken linked checkouts still show repair guidance.
+
+## Archived worktree retention
+
+Set **Archived worktree retention (days)** in Settings → Git & GitHub → Worktree Defaults, or override it in the repository Worktree page. `0` is **Off** and is the global default. An empty repository field inherits the global setting (or `.tuic.json` value). The stored field is `archive_retention_days`.
+
+Cleanup runs with the existing repository-refresh cleanup, even if automatic archive is off. It adds no timer. At N × 86400 elapsed seconds, a recorded archive becomes eligible. The archive operation writes Unix seconds, checkout path, branch and tip to `tuic-archive.json` in the checkout’s Git administration directory. Later writes and directory modification times do not reset this age. Existing archives without a valid record are kept, not assigned a guessed date.
+
+Only registered, completed checkouts immediately inside `__archived/`, at their recorded path, can be deleted. Active checkouts outside this folder are never retention candidates. Locked archives, live sessions, changed tips, missing commit recovery refs, and failed Git safety checks are kept. A branch-tip archive ref does not recover uncommitted files: dirty archives are kept because Archive does not create a dirty-file recovery snapshot. Submodules can also cause Git to refuse removal. Cleanup does not force deletion and does not run the archive script again.
+
+The status line names deleted archives and retained archives with their reasons. Removal also removes the corresponding Git worktree registration. `refs/archive/<branch>` (or its collision-safe SHA suffix) stays, so committed work remains recoverable with Git. Retention never deletes local branches or archive refs.

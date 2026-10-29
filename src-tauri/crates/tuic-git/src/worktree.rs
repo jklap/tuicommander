@@ -3546,15 +3546,26 @@ pub(crate) fn delete_local_branch_with_archive(repo: &Path, branch: &str) -> Res
     }
     let branch_ref = format!("refs/heads/{branch}");
     let tip = rev_at(repo, &branch_ref)?;
+    preserve_archive_tip(repo, branch, &tip)?;
+    git_cmd(repo)
+        .args(["update-ref", "-d", &branch_ref, &tip])
+        .run()
+        .map_err(|error| {
+            format!("Cannot delete '{branch}': local ref moved or deletion failed: {error}")
+        })?;
+    Ok(())
+}
+
+fn preserve_archive_tip(repo: &Path, branch: &str, tip: &str) -> Result<(), String> {
     // A reused branch name collides with the earlier archive. The tip's short
     // SHA names a second archive, so earlier work is never replaced and the new
     // tip is still preserved.
-    let archives = archive_refs_for_tip(branch, &tip);
-    if archive_ref_at_tip(repo, branch, &tip).is_none() {
+    let archives = archive_refs_for_tip(branch, tip);
+    if archive_ref_at_tip(repo, branch, tip).is_none() {
         let mut failure = String::new();
         let created = archives.iter().any(|archive| {
             // An empty old value means the archive must not exist.
-            match git_cmd(repo).args(["update-ref", archive, &tip, ""]).run() {
+            match git_cmd(repo).args(["update-ref", archive, tip, ""]).run() {
                 Ok(_) => true,
                 Err(error) => {
                     failure = error.to_string();
@@ -3569,12 +3580,6 @@ pub(crate) fn delete_local_branch_with_archive(repo: &Path, branch: &str) -> Res
             ));
         }
     }
-    git_cmd(repo)
-        .args(["update-ref", "-d", &branch_ref, &tip])
-        .run()
-        .map_err(|error| {
-            format!("Cannot delete '{branch}': local ref moved or deletion failed: {error}")
-        })?;
     Ok(())
 }
 
@@ -4899,6 +4904,36 @@ pub fn archive_worktree(
     workspace_id: &str,
     archive_script: Option<&str>,
 ) -> Result<String, String> {
+    archive_worktree_at(
+        base_repo,
+        workspace_id,
+        archive_script,
+        archive_clock_seconds,
+    )
+}
+
+fn archive_clock_seconds() -> Result<u64, String> {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|value| value.as_secs())
+        .map_err(|error| error.to_string())
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct ArchiveRecord {
+    archived_at: u64,
+    path: PathBuf,
+    branch: String,
+    tip: String,
+}
+
+fn archive_worktree_at(
+    base_repo: &Path,
+    workspace_id: &str,
+    archive_script: Option<&str>,
+    clock: impl FnOnce() -> Result<u64, String>,
+) -> Result<String, String> {
+    let _allocation_guard = allocation_guard(base_repo)?;
     // Resolve the checkout by id — the archive directory name is derived from the
     // record's branch, so a same-branch sibling can never be the one moved away.
     let workspace = resolve_workspace(base_repo, workspace_id)?;
@@ -4936,6 +4971,19 @@ pub fn archive_worktree(
     };
     move_registered_checkout(base_repo, &wt_path, &archive_dest)?;
     let archived = (|| -> Result<(), String> {
+        let tip = rev_at(&archive_dest, "HEAD")?;
+        preserve_archive_tip(base_repo, &workspace.branch, &tip)?;
+        let record = ArchiveRecord {
+            archived_at: clock()?,
+            path: std::fs::canonicalize(&archive_dest).map_err(|error| error.to_string())?,
+            branch: workspace.branch.clone(),
+            tip,
+        };
+        std::fs::write(
+            admin.join("tuic-archive.json"),
+            serde_json::to_vec(&record).map_err(|error| error.to_string())?,
+        )
+        .map_err(|error| format!("Cannot record archive time: {error}"))?;
         finish_worktree(base_repo, &archive_dest)?;
         record_worktree_rename(base_repo, &workspace.path, &archive_dest.to_string_lossy())
     })();
@@ -4958,6 +5006,107 @@ pub fn archive_worktree(
     clear_warm(&wt_path);
 
     Ok(archive_dest.to_string_lossy().to_string())
+}
+
+/// Presentation-ready outcome shared by IPC and HTTP, including each retained reason.
+#[derive(Debug, Default, Serialize)]
+pub struct ArchiveRetentionReport {
+    pub deleted: Vec<String>,
+    pub kept: Vec<String>,
+}
+
+/// Delete only explicitly recorded completed archives. The clock and availability
+/// port let the app protect live sessions and tests drive the actual Git lifecycle.
+pub fn sweep_archived_worktrees(
+    base_repo: &Path,
+    retention_days: u32,
+    now: u64,
+    available: impl Fn(&Path) -> bool,
+) -> Result<ArchiveRetentionReport, String> {
+    let mut report = ArchiveRetentionReport::default();
+    if retention_days == 0 {
+        return Ok(report);
+    }
+    let _allocation_guard = allocation_guard(base_repo)?;
+    let listed = git_cmd(base_repo)
+        .args(["worktree", "list", "--porcelain", "-z"])
+        .run()
+        .map_err(|error| error.to_string())?;
+    for entry in parse_worktree_entries(&listed.stdout) {
+        let path = Path::new(&entry.path);
+        if entry.bare || !is_archived_checkout(path) {
+            continue;
+        }
+        let name = path
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .into_owned();
+        let outcome = (|| -> Result<bool, String> {
+            let admin = registered_worktree_admin_dir(base_repo, path)?
+                .ok_or("Git registration unavailable")?;
+            let record: ArchiveRecord = std::fs::read(admin.join("tuic-archive.json"))
+                .ok()
+                .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+                .ok_or("archive time is not recorded; keep legacy archive")?;
+            let canonical = std::fs::canonicalize(path).map_err(|error| error.to_string())?;
+            if canonical != record.path
+                || !is_archived_checkout(&canonical)
+                || std::fs::read_to_string(admin.join("tuic-allocation"))
+                    .ok()
+                    .as_deref()
+                    != Some("finished")
+            {
+                return Err("archive ownership changed".into());
+            }
+            if now
+                .checked_sub(record.archived_at)
+                .is_none_or(|age| age < u64::from(retention_days) * 86400)
+            {
+                return Ok(false);
+            }
+            if admin.join("locked").exists() {
+                return Err("worktree is locked".into());
+            }
+            if !available(path) {
+                return Err("live session uses this archive".into());
+            }
+            let status = git_cmd(path)
+                .args([
+                    "status",
+                    "--porcelain",
+                    "--untracked-files=all",
+                    "--ignored",
+                    "--ignore-submodules=none",
+                ])
+                .run()
+                .map_err(|error| format!("Cannot inspect archived files: {error}"))?;
+            if !status.stdout.trim().is_empty() {
+                // DEFERRED (2026-10-29) — archive records preserve commits, not dirty
+                // file snapshots. Never treat a branch-tip ref as file recovery.
+                return Err("uncommitted files have no archive-time recovery ref".into());
+            }
+            if rev_at(path, "HEAD")? != record.tip
+                || !archived_at_tip(base_repo, &record.branch, &record.tip)
+            {
+                return Err("checkout tip or recovery ref changed".into());
+            }
+            // No force: Git rechecks dirtiness, locks and submodules at removal.
+            git_cmd(base_repo)
+                .args(["worktree", "remove", "--", &entry.path])
+                .run()
+                .map_err(|error| format!("Git refused removal: {error}"))?;
+            Ok(true)
+        })();
+        match outcome {
+            Ok(true) => report.deleted.push(name),
+            Ok(false) => {}
+            Err(reason) => report.kept.push(format!("{name}: {reason}")),
+        }
+    }
+    report.deleted.sort();
+    report.kept.sort();
+    Ok(report)
 }
 
 /// Deadline for a user-supplied worktree script.
@@ -7848,6 +7997,154 @@ mod tests {
             false,
             &WorktreeDirtiness::Clean
         ));
+    }
+
+    // Catches: early expiry, mtime-based age, losing archive refs, and dirty-file loss.
+    #[test]
+    fn archive_retention_honors_age_and_keeps_unrecoverable_dirty_files() {
+        let repo = setup_test_repo();
+        let make = |branch: &str| {
+            create_worktree_internal(
+                &repo.path().join("worktrees"),
+                &WorktreeConfig {
+                    task_name: branch.into(),
+                    base_repo: repo.path().to_string_lossy().into_owned(),
+                    branch: Some(branch.into()),
+                    create_branch: true,
+                },
+                None,
+            )
+            .unwrap()
+        };
+        let clean = make("retention-clean");
+        let tip = rev_at(&clean.path, "HEAD").unwrap();
+        let clean = PathBuf::from(
+            archive_worktree_at(repo.path(), "retention-clean", None, || Ok(100)).unwrap(),
+        );
+        let dirty = make("retention-dirty");
+        fs::write(dirty.path.join("precious.txt"), "uncommitted work").unwrap();
+        let dirty = PathBuf::from(
+            archive_worktree_at(repo.path(), "retention-dirty", None, || Ok(100)).unwrap(),
+        );
+        let ignored = make("retention-ignored");
+        let exclude = git_cmd(&ignored.path)
+            .args([
+                "rev-parse",
+                "--path-format=absolute",
+                "--git-path",
+                "info/exclude",
+            ])
+            .run()
+            .unwrap()
+            .stdout;
+        fs::write(Path::new(exclude.trim()), "ignored-secret.txt\n").unwrap();
+        fs::write(ignored.path.join("ignored-secret.txt"), "ignored work").unwrap();
+        let ignored = PathBuf::from(
+            archive_worktree_at(repo.path(), "retention-ignored", None, || Ok(100)).unwrap(),
+        );
+        // A later directory write must not reset the recorded archive age.
+        fs::create_dir(clean.join("later-empty-directory")).unwrap();
+        assert_eq!(
+            sweep_archived_worktrees(repo.path(), 0, 999999, |_| true)
+                .unwrap()
+                .deleted,
+            Vec::<String>::new()
+        );
+        assert_eq!(
+            sweep_archived_worktrees(repo.path(), 1, 99, |_| true)
+                .unwrap()
+                .deleted,
+            Vec::<String>::new()
+        );
+        assert_eq!(
+            sweep_archived_worktrees(repo.path(), 1, 86499, |_| true)
+                .unwrap()
+                .deleted,
+            Vec::<String>::new()
+        );
+        assert!(clean.exists());
+        let report = sweep_archived_worktrees(repo.path(), 1, 86500, |_| true).unwrap();
+        assert_eq!(report.deleted, vec!["retention-clean"]);
+        assert!(
+            report
+                .kept
+                .iter()
+                .any(|entry| entry.contains("retention-dirty") && entry.contains("recovery"))
+        );
+        assert!(!clean.exists());
+        assert!(
+            report
+                .kept
+                .iter()
+                .any(|entry| entry.contains("retention-ignored") && entry.contains("recovery"))
+        );
+        assert_eq!(
+            fs::read_to_string(ignored.join("ignored-secret.txt")).unwrap(),
+            "ignored work"
+        );
+        assert_eq!(
+            fs::read_to_string(dirty.join("precious.txt")).unwrap(),
+            "uncommitted work"
+        );
+        assert_eq!(
+            rev_at(repo.path(), "refs/archive/retention-clean").unwrap(),
+            tip
+        );
+        let listed = git_cmd(repo.path())
+            .args(["worktree", "list", "--porcelain"])
+            .run()
+            .unwrap()
+            .stdout;
+        assert!(!listed.contains(&clean.to_string_lossy().into_owned()));
+        assert!(listed.contains(&dirty.to_string_lossy().into_owned()));
+    }
+
+    // Catches: deleting legacy archives, active/locked archives, or a live checkout.
+    #[test]
+    fn archive_retention_requires_recorded_ownership_and_availability() {
+        let repo = setup_test_repo();
+        let make = |branch: &str| {
+            create_worktree_internal(
+                &repo.path().join("worktrees"),
+                &WorktreeConfig {
+                    task_name: branch.into(),
+                    base_repo: repo.path().to_string_lossy().into_owned(),
+                    branch: Some(branch.into()),
+                    create_branch: true,
+                },
+                None,
+            )
+            .unwrap()
+        };
+        let live = make("retention-live");
+        for branch in ["retention-legacy", "retention-active", "retention-locked"] {
+            make(branch);
+            let path = archive_worktree_at(repo.path(), branch, None, || Ok(100)).unwrap();
+            if branch == "retention-legacy" {
+                let admin = registered_worktree_admin_dir(repo.path(), Path::new(&path))
+                    .unwrap()
+                    .unwrap();
+                fs::remove_file(admin.join("tuic-archive.json")).unwrap();
+            }
+            if branch == "retention-locked" {
+                git_cmd(repo.path())
+                    .args(["worktree", "lock", &path])
+                    .run()
+                    .unwrap();
+            }
+        }
+        let report = sweep_archived_worktrees(repo.path(), 1, 86500, |path| {
+            !path.ends_with("retention-active")
+        })
+        .unwrap();
+        assert_eq!(report.deleted, Vec::<String>::new());
+        assert!(live.path.exists());
+        for reason in ["archive time", "live session", "locked"] {
+            assert!(
+                report.kept.iter().any(|entry| entry.contains(reason)),
+                "{report:?}: {reason}"
+            );
+        }
     }
 
     #[test]

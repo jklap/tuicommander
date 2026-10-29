@@ -35,6 +35,7 @@ describe("repository refresh interval (#1491)", () => {
 				clearOrphanCleanup: vi.fn(async () => {}),
 				removeOrphanWorktree: vi.fn(async () => {}),
 				getWorkspaceLifecycle: vi.fn(),
+				sweepArchiveRetention: vi.fn().mockResolvedValue({ deleted: [], kept: [] }),
 				finalizeMergedWorktree: vi.fn(),
 			},
 			dialogs: {},

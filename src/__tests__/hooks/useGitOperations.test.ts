@@ -120,6 +120,7 @@ describe("useGitOperations", () => {
 		generateCloneBranchName: vi.fn().mockResolvedValue("feat-auth--bold-nexus-042"),
 		listBaseRefOptions: vi.fn().mockResolvedValue([{ name: "main", kind: "local", is_default: true }]),
 		mergeAndArchiveWorktree: vi.fn().mockResolvedValue({ merged: true, action: "archived", archive_path: null }),
+		sweepArchiveRetention: vi.fn().mockResolvedValue({ deleted: [], kept: [] }),
 		finalizeMergedWorktree: vi.fn().mockResolvedValue({ merged: true, action: "archived", archive_path: null }),
 		listLocalBranches: vi.fn().mockResolvedValue(["main"]),
 		getMergedBranches: vi.fn().mockResolvedValue(["main"]),
@@ -4813,6 +4814,29 @@ describe("useGitOperations", () => {
 			mockRepo.getRepoDiffStats.mockResolvedValue({ diff_stats: {}, last_commit_ts: {} });
 		});
 
+		// Catches: gating retention on auto-archive or omitting the named kept reason.
+		it("sweeps archive retention on refresh independently of auto-archive", async () => {
+			repoSettingsStore.getOrCreate("/repo", "Repo");
+			repoSettingsStore.update("/repo", { autoArchiveMerged: false, archiveRetentionDays: 7 });
+			mockRepo.sweepArchiveRetention.mockResolvedValueOnce({
+				deleted: ["old-clean"],
+				kept: ["dirty-archive: uncommitted files have no archive-time recovery ref"],
+			});
+			await gitOps.refreshAllBranchStats();
+			expect(mockRepo.sweepArchiveRetention).toHaveBeenCalledWith("/repo");
+			expect(mockRepo.finalizeMergedWorktree).not.toHaveBeenCalled();
+			expect(mockSetStatusInfo).toHaveBeenCalledWith(
+				"Archive cleanup: deleted 1: old-clean; kept 1: dirty-archive: uncommitted files have no archive-time recovery ref",
+			);
+		});
+
+		// Catches: a persisted explicit Off accidentally inheriting a nonzero default.
+		it("does not call archive retention when it is Off", async () => {
+			repoSettingsStore.getOrCreate("/repo", "Repo");
+			repoSettingsStore.update("/repo", { archiveRetentionDays: 0 });
+			await gitOps.refreshAllBranchStats();
+			expect(mockRepo.sweepArchiveRetention).not.toHaveBeenCalled();
+		});
 		it("archives merged linked worktrees when autoArchiveMerged=true", async () => {
 			repoSettingsStore.getOrCreate("/repo", "Repo");
 			repoSettingsStore.update("/repo", { autoArchiveMerged: true });

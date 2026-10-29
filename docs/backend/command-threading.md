@@ -403,3 +403,7 @@ process waits do not occupy a Tokio worker. The async continuation resolves the
 repository API and publishes the draft with the existing allowlist and branch
 checks. Prerequisite errors and blocking-task failures reach the existing
 publication warning; this boundary does not add retries or durable outcomes.
+
+## Archive retention
+
+`sweep_archive_retention` is async and runs config reads, allocation locking, Git inspection and deletion on `spawn_blocking`. Its HTTP twin uses the same `sweep_archive_retention_impl` and also offloads: the desktop-gated command cannot be called by the headless router.

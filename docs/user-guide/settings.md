@@ -693,3 +693,7 @@ Settings → Agents → Idle agent hibernation (Expert Mode) includes **Close ab
 The monitored-repository count tracks successful snapshots in the running GitHub monitor, including repositories with no open PRs. Query-cache expiry and temporary poll failures do not reset this count. Removing a repository or stopping monitoring removes its entry.
 
 Git & GitHub access diagnostics show exact per-repository messages grouped by owner and account. For github.com OAuth accounts, use the OAuth app authorization action, then select Refresh status to clear NOT_FOUND retry delays for all accounts before the next monitoring poll. Opening Settings does not clear these delays.
+
+## Archived worktree retention
+
+Git & GitHub → Worktree Defaults includes **Archived worktree retention (days)**. `0` is Off, the default. Repository → Worktree has a nullable override: leave it empty to inherit, or enter `0` to keep that repository’s archives. Cleanup uses recorded archive age on repository refresh, preserves committed work in archive refs, and keeps dirty or otherwise unsafe archives with named reasons. See [Worktrees](worktrees.md#archived-worktree-retention).

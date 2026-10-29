@@ -1687,6 +1687,10 @@ pub(crate) struct RepoLocalConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates auto archive merged for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) auto_archive_merged: Option<bool>,
+    /// Days in the archive before cleanup; 0 disables deletion.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Deletes eligible archived worktrees on repository refresh; 0 is Off.","operations":["get","set"],"confirmationClass":"ordinary"}))]
+    pub(crate) archive_retention_days: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates orphan cleanup for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) orphan_cleanup: Option<OrphanCleanup>,
@@ -1776,6 +1780,10 @@ pub(crate) struct RepoSettingsEntry {
     #[serde(default)]
     #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates auto archive merged for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) auto_archive_merged: Option<bool>,
+    /// Days in the archive before cleanup; 0 disables deletion.
+    #[serde(default)]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Deletes eligible archived worktrees on repository refresh; 0 is Off.","operations":["get","set"],"confirmationClass":"ordinary"}))]
+    pub(crate) archive_retention_days: Option<u32>,
     #[serde(default)]
     #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates orphan cleanup for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) orphan_cleanup: Option<OrphanCleanup>,
@@ -1839,6 +1847,7 @@ impl RepoSettingsEntry {
             || self.prompt_on_create.is_some()
             || self.delete_branch_on_remove.is_some()
             || self.auto_archive_merged.is_some()
+            || self.archive_retention_days.is_some()
             || self.orphan_cleanup.is_some()
             || self.pr_merge_strategy.is_some()
             || self.after_merge.is_some()
@@ -1888,6 +1897,10 @@ pub(crate) struct RepoDefaultsConfig {
     #[serde(default)]
     #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates auto archive merged for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) auto_archive_merged: bool,
+    /// Days in the archive before cleanup; 0 disables deletion.
+    #[serde(default)]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Deletes eligible archived worktrees on repository refresh; 0 is Off.","operations":["get","set"],"confirmationClass":"ordinary"}))]
+    pub(crate) archive_retention_days: u32,
     #[serde(default)]
     #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates orphan cleanup for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) orphan_cleanup: OrphanCleanup,
@@ -1923,6 +1936,7 @@ impl Default for RepoDefaultsConfig {
             prompt_on_create: true,
             delete_branch_on_remove: true,
             auto_archive_merged: false,
+            archive_retention_days: 0,
             orphan_cleanup: OrphanCleanup::default(),
             orphan_cleanup_countdown_seconds: default_orphan_cleanup_countdown_seconds(),
             pr_merge_strategy: MergeStrategy::default(),
@@ -3634,6 +3648,9 @@ fn fill_repo_local_defaults(
     if base.delete_branch_on_remove.is_none() {
         base.delete_branch_on_remove = Some(defaults.delete_branch_on_remove);
     }
+    if base.archive_retention_days.is_none() {
+        base.archive_retention_days = Some(defaults.archive_retention_days);
+    }
     if base.auto_archive_merged.is_none() {
         base.auto_archive_merged = Some(defaults.auto_archive_merged);
     }
@@ -3670,6 +3687,9 @@ fn overlay_repo_local_config(
     }
     if entry.delete_branch_on_remove.is_some() {
         base.delete_branch_on_remove = entry.delete_branch_on_remove;
+    }
+    if entry.archive_retention_days.is_some() {
+        base.archive_retention_days = entry.archive_retention_days;
     }
     if entry.auto_archive_merged.is_some() {
         base.auto_archive_merged = entry.auto_archive_merged;
@@ -6480,6 +6500,7 @@ mod tests {
                 prompt_on_create: None,
                 delete_branch_on_remove: None,
                 auto_archive_merged: None,
+                archive_retention_days: None,
                 orphan_cleanup: None,
                 pr_merge_strategy: None,
                 after_merge: None,
@@ -7071,6 +7092,7 @@ mod tests {
             prompt_on_create: false,
             delete_branch_on_remove: false,
             auto_archive_merged: true,
+            archive_retention_days: 0,
             orphan_cleanup: OrphanCleanup::On,
             pr_merge_strategy: MergeStrategy::Squash,
             after_merge: WorktreeAfterMerge::Delete,
@@ -7130,6 +7152,7 @@ mod tests {
                 prompt_on_create: Some(false),
                 delete_branch_on_remove: Some(false),
                 auto_archive_merged: Some(true),
+                archive_retention_days: Some(7),
                 orphan_cleanup: Some(OrphanCleanup::Off),
                 pr_merge_strategy: Some(MergeStrategy::Rebase),
                 after_merge: Some(WorktreeAfterMerge::Ask),

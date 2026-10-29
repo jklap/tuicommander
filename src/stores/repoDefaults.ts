@@ -31,6 +31,7 @@ export interface RepoDefaults {
 	promptOnCreate: boolean;
 	deleteBranchOnRemove: boolean;
 	autoArchiveMerged: boolean;
+	archiveRetentionDays: number;
 	orphanCleanup: OrphanCleanup;
 	orphanCleanupCountdownSeconds: number;
 	prMergeStrategy: MergeStrategy;
@@ -50,6 +51,7 @@ const INITIAL_DEFAULTS: RepoDefaults = {
 	promptOnCreate: true,
 	deleteBranchOnRemove: true,
 	autoArchiveMerged: false,
+	archiveRetentionDays: 0,
 	orphanCleanup: "ask",
 	orphanCleanupCountdownSeconds: 10,
 	prMergeStrategy: "squash",
@@ -69,6 +71,7 @@ type RepoDefaultsConfig = {
 	prompt_on_create?: boolean;
 	delete_branch_on_remove?: boolean;
 	auto_archive_merged?: boolean;
+	archive_retention_days?: number;
 	orphan_cleanup?: OrphanCleanup;
 	orphan_cleanup_countdown_seconds?: number;
 	pr_merge_strategy?: MergeStrategy;
@@ -94,6 +97,7 @@ function createRepoDefaultsStore() {
 			promptOnCreate: loaded.prompt_on_create ?? INITIAL_DEFAULTS.promptOnCreate,
 			deleteBranchOnRemove: loaded.delete_branch_on_remove ?? INITIAL_DEFAULTS.deleteBranchOnRemove,
 			autoArchiveMerged: loaded.auto_archive_merged ?? INITIAL_DEFAULTS.autoArchiveMerged,
+			archiveRetentionDays: loaded.archive_retention_days ?? INITIAL_DEFAULTS.archiveRetentionDays,
 			orphanCleanup: loaded.orphan_cleanup ?? INITIAL_DEFAULTS.orphanCleanup,
 			orphanCleanupCountdownSeconds:
 				loaded.orphan_cleanup_countdown_seconds ?? INITIAL_DEFAULTS.orphanCleanupCountdownSeconds,
@@ -116,6 +120,7 @@ function createRepoDefaultsStore() {
 			prompt_on_create: state.promptOnCreate,
 			delete_branch_on_remove: state.deleteBranchOnRemove,
 			auto_archive_merged: state.autoArchiveMerged,
+			archive_retention_days: state.archiveRetentionDays,
 			orphan_cleanup: state.orphanCleanup,
 			orphan_cleanup_countdown_seconds: state.orphanCleanupCountdownSeconds,
 			pr_merge_strategy: state.prMergeStrategy,
@@ -197,6 +202,11 @@ function createRepoDefaultsStore() {
 
 		setDeleteBranchOnRemove(value: boolean): void {
 			setState("deleteBranchOnRemove", value);
+			save();
+		},
+
+		setArchiveRetentionDays(value: number): void {
+			setState("archiveRetentionDays", value);
 			save();
 		},
 
