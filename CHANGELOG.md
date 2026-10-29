@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [2.0.0-beta.5] - 2026-10-29
+
 ### Added
 
 - Add opt-in archived worktree retention in days, with global and per-repository settings, recorded archive age, recoverable commit refs and named cleanup results (#2469-c93f).

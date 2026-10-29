@@ -102,7 +102,7 @@ authors and communities behind each project.
 | tauri-plugin-opener | 2.7.0 | Apache-2.0 OR MIT |
 | tauri-plugin-process | 2.4.0 | Apache-2.0 OR MIT |
 | tauri-plugin-single-instance | 2.5.2 | Apache-2.0 OR MIT |
-| tauri-plugin-updater | 2.14.0 | Apache-2.0 OR MIT |
+| tauri-plugin-updater | 2.14.1 | Apache-2.0 OR MIT |
 | tauri-plugin-window-state | 2.5.0 | Apache-2.0 OR MIT |
 | tempfile | 3.27.0 | MIT OR Apache-2.0 |
 | tokenizers | 0.22.2 | Apache-2.0 |
@@ -220,7 +220,7 @@ authors and communities behind each project.
 | rollup | 4.62.2 | MIT |
 | rollup-plugin-visualizer | 7.1.1 | MIT |
 | typescript | 7.0.2 | Apache-2.0 |
-| vite | 8.3.0 | MIT |
+| vite | 8.3.5 | MIT |
 | vite-plugin-checker | 0.14.5 | MIT |
 | vite-plugin-purgecss | 0.2.13 | MIT |
 | vite-plugin-solid | 2.11.14 | MIT |
