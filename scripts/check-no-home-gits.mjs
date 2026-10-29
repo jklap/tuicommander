@@ -38,7 +38,6 @@ const ALLOWED = new Map([
 	["src-tauri/src/config.rs", "recognized_temp_roots: classifies historical ghost rows already in users' repositories.json"],
 	["src-tauri/tauri.conf.json", "asset-protocol scope ($HOME/** skips dot-dirs); a product decision"],
 	["scripts/check-no-home-gits.mjs", "this guard's own self-test fixtures"],
-	["src-tauri/crates/tuic-core/src/temp_paths.rs", "recognized_temp_roots (moved out of config.rs): classifies historical ghost rows, read-only"],
 ]);
 
 const HOME_PATTERNS = [

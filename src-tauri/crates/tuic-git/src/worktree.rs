@@ -15465,35 +15465,44 @@ branch refs/heads/feat
         }
     }
 
-    // Catches: the app's configured temp directory hiding standard OS and tooling roots.
+    // Catches: the app's configured temp directory hiding standard OS roots, or a
+    // home-relative scratch root returning.
     #[test]
-    fn temporary_orphan_roots_include_standard_and_tooling_locations() {
+    fn temporary_orphan_roots_are_the_standard_os_locations() {
         use tuic_core::temp_paths::is_temporary_path;
         assert!(is_temporary_path(&std::env::temp_dir().join("review")));
+        let system_roots = [
+            "/tmp",
+            "/private/tmp",
+            "/var/folders",
+            "/private/var/folders",
+        ];
         if cfg!(unix) {
-            for root in [
-                "/tmp",
-                "/private/tmp",
-                "/var/folders",
-                "/private/var/folders",
-            ] {
+            for root in system_roots {
                 assert!(
                     is_temporary_path(&Path::new(root).join("tuic-review/missing")),
                     "{root}"
                 );
             }
         }
-        let home = tuic_core::temp_paths::recognized_temp_roots()
-            .into_iter()
-            .find(|root| root.ends_with("Gits/.tmp"))
-            .expect("tooling scratch root");
-        assert!(is_temporary_path(&home.join("review-r5-wt")));
-        // Ask the Gits/.tmp root alone: under TUIC_TEST_FAKE_HOME the fake HOME
-        // lives inside the test temp root, so the sibling is temporary anyway.
-        assert!(!tuic_core::temp_paths::is_under_temp_roots(
-            &home.with_file_name(".tmp-other").join("review"),
-            std::slice::from_ref(&home)
-        ));
+        // Every root is the OS temp dir, a temp variable or a fixed system
+        // root: nothing home-relative (the old `~/Gits/.tmp`) comes back.
+        let configured: Vec<PathBuf> = std::iter::once(std::env::temp_dir())
+            .chain(
+                ["TMPDIR", "TMP", "TEMP"]
+                    .into_iter()
+                    .filter_map(std::env::var_os)
+                    .map(PathBuf::from),
+            )
+            .collect();
+        for root in tuic_core::temp_paths::recognized_temp_roots() {
+            assert!(
+                configured.contains(&root)
+                    || (cfg!(unix) && system_roots.iter().any(|fixed| root == Path::new(fixed))),
+                "unexpected temp root {}",
+                root.display()
+            );
+        }
     }
 
     // Catches: a detached HEAD being mistaken for a deleted active branch.
