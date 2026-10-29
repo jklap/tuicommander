@@ -2,6 +2,7 @@
 
 - [x] Headless `--credential-file` selects a read-once JSON seed with process-local credential edits, fail-closed content-free boot diagnostics and restart-based rotation; desktop keyring defaults remain unchanged (#2343-5358).
 
+- [x] Mobile terminal CLI and Chat display the existing backend prompt queue, including CLI/desktop additions, and supports cancellation and clearing (#2463-ad1c).
 - [x] Session Chat shows working feedback from Send and existing terminal busy state on desktop and mobile, hidden for idle and awaiting input (#2397-06b6).
 
 - [x] AI Chat active conversation follows across desktop and mobile through backend workspace selection, IPC/SSE invalidation and reconnect catch-up; session CLI | Chat remains device-local (#2403-e711).
@@ -822,6 +823,7 @@ Some frontend-only stores persist to localStorage:
 - [x] Mobile Send long-press Queue transfers the live draft to the shared server ready-window queue; taps still submit immediately.
 - [x] Session uploads live under TUIC data, with launch grants and session-end cleanup; startup reclaims only provably dead owners, preserving concurrent instances; ego invocation-scoped binary-file read roots remain unsupported (#1833-aa60).
 - [x] Shared mobile composer + menu: attach file, camera capture, supported queue/commands and Chat draft parking; browser mic inside the text box (#1880-d7ff).
+- [x] Mobile Sessions counters toggle state filters with multi-select, global counts, selectable empty states and search/sort composition (#2458-ba9d).
 - [x] Mobile Companion PWA (cached connection-test landing on unreachable navigation; visible API/stream outage state with retry and automatic recovery; Working/Idle/Awaiting header counts share row badge state and the Working hold across poll updates, include Sub-tasks as Working and exclude Finished rows; searchable sessions, live output, question reply including Codex interactive choices, activity feed)
 - [x] Mobile blocked reports keep their Input state while current suggested actions replace generic Yes/No controls; native dialog choices retain priority (#2082-f782).
 - [x] Automatic mobile resume evidence: bounded per-tab lifecycle/viewport/root/stream trail, acknowledged backend-log upload after an abnormal prior document; original iPhone grey-screen cause remains unproven (#1900-5ff6)

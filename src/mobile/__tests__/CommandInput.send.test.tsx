@@ -178,7 +178,7 @@ it("starts Chat working feedback on mobile Send, not while typing", async () => 
 			</>
 		);
 	});
-	fireEvent.click(view.getByRole("button", { name: "Chat" }));
+	fireEvent.click(view.getByRole("tab", { name: "Chat" }));
 	await waitFor(() => expect(view.container.textContent).toContain("No messages in this conversation yet."));
 	fireEvent.input(view.container.querySelector("textarea")!, { target: { value: "Next task" } });
 	expect(view.queryByText("Working…")).toBeNull();

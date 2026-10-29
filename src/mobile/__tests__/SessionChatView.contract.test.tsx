@@ -100,7 +100,7 @@ function mount(host: "desktop" | "mobile") {
 	return {
 		...view,
 		exit: () => setAgent(undefined),
-		mode: () => (view.queryByText("CLI")?.getAttribute("aria-pressed") === "false" ? "chat" : "cli"),
+		mode: () => (view.queryByText("CLI")?.getAttribute("aria-selected") === "false" ? "chat" : "cli"),
 		busy: setBusy,
 		awaiting: setAwaiting,
 		output: () => setRevision((value) => value + 1),

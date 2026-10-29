@@ -1,3 +1,7 @@
+## Mobile Sessions state filters (2458-ba9d)
+
+- [x] Worktree Vite and agent-browser at 390×844: toggle Working/Idle/Awaiting, combine states, select zero Awaiting without changing counter bounds, and intersect Working with API search. Five screenshots and browser assertions: `~/Gits/.tmp/results/tuic-2458-evidence/`. No daily app or backend was used.
+
 ## Windows monitoring directory metadata (2310-6e76, round l) — Rust rebuild/restart required
 
 - [ ] Coordinator: confirm complete native Windows-x64 CI success after the directory-metadata repair. The raw-event replay proves the recorded event no longer rejects an unchanged status load; rb is not native Windows GREEN. Keep the original unchanged-sibling and tracked `target/tracked.txt` assertions and 20-second deadlines.
@@ -3276,3 +3280,4 @@ Isolated Chrome screenshot capture timed out after 35 seconds; visual rendering 
 - [ ] After an authorized rebuild, verify on Windows that a main-only commit or adding a worktree does not rescan unchanged sibling dirty/diff status; editing and staging in that sibling must still update its badges (#2310-6e76, round j).
 
 - [ ] Mobile dictation after opening a session with an existing desktop slash-command draft: confirm the spoken sentence replaces the unseen prefix and submits as plain text. Browser fixture verifies the composer path with synthetic Web Speech callbacks, not iPhone audio or native Claude keystroke handling (#2460-5a96).
+- [ ] Mobile terminal CLI and Chat: queue a prompt with + > Queue or a long press on Send; verify the queued text remains above the input until delivery, and check Cancel / Clear all. Prompts queued in CLI or desktop must appear after switching to Chat (#2463-ad1c).

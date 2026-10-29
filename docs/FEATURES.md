@@ -2,6 +2,7 @@
 
 AI Chat shares the active conversation across desktop and mobile for the configured host workspace. The last saved selection wins; reconnect catches up. Open-tab layout, drafts and the session CLI | Chat switch remain per device.
 
+- **Mobile Chat queue** — Terminal CLI and Chat show pending prompt text and a Queued count above the input, including CLI/desktop additions. Cancel one prompt or clear the queue; delivered entries disappear (#2463-ad1c).
 - **Session Chat working feedback** — Desktop and mobile show **Working…** from Send through existing terminal busy state; native questions and permissions take precedence (#2397-06b6).
 
 AI Chat automatically connects on opening, restores the selected conversation, and keeps its transcript visible when stopped. Retry after a failed initial connection starts connecting without Send (#2407-84f5). Session model changes keep the same conversation; the global default affects new ego runs only (#2404-e946).
@@ -201,6 +202,8 @@ Right-click an HTTP(S) terminal link (including localhost) and choose **Start in
 - **Send to agent** sanitises and fences page evidence in Rust, then uses the same idle gate as Markdown reviews: deliver now when idle, queue when busy. Failed sends retain the cards; retry keys prevent duplicate delivery. See the [pilot guide](user-guide/design-mode.md) for setup and validation limits.
 
 ### 1.1 PTY Sessions
+
+- **Mobile state filters** — Tap Working, Idle or Awaiting counters to select any combination of session states. No selection shows all sessions. Counts stay global; state filters combine with search and sorting, and zero-count states remain selectable.
 - Up to 50 concurrent PTY sessions (configurable in Rust `MAX_SESSIONS`)
 - Each tab runs an independent pseudo-terminal with the user's shell
 - Terminals are never unmounted — hidden tabs stay alive with full scroll history

@@ -173,7 +173,7 @@ the shared file opens as an AI Chat draft. iOS Safari currently requires the
 **+ → Attach file** because it does not support Web Share Target.
 The + menu also offers **Queue** in terminals, **Commands (/)** in agent terminals, and **Park draft / Restore parked draft / Swap parked
 draft** in AI Chat. Chat shows **Queue** and **Stop** while a turn is running.
-Terminal long-press on Send still opens Queue. Terminal parking is not offered:
+Terminal long-press on Send still opens Queue. In terminal **CLI** and **Chat**, a **Queued** list above the input shows the pending prompt text, including prompts queued in CLI or on desktop. Entries disappear when delivered. Tap **Cancel** to remove one or **Clear all** to empty the queue. Ordinary **Send** still submits now; switching to Chat does not change that. Terminal parking is not offered:
 the existing parked-draft store belongs to AI Chat. Tap outside the menu or
 press Escape to close it. Desktop AI Chat and Ctrl+S retain their controls.
 
@@ -254,7 +254,7 @@ is unavailable until the upload finishes. Smaller mic and Send controls sit insi
 Hold Send with a finger or mouse, then select **Queue** to hold your current agent prompt until its next ready window. A normal tap still sends immediately. Queue clears the input after acceptance and shows a notice. If the result is uncertain, check the agent session before trying again.
 
 
-- **Sessions list** — See all running agents with status (idle, busy, question, rate-limited, error)
+- **Sessions list** — See all running agents with status (idle, busy, question, rate-limited, error). Tap the Working, Idle and Awaiting counters to filter by one or more states. Tap an active counter again to clear it; no active counters shows every session. Counts always include all sessions. A zero-count state shows an empty result. State filters combine with the search field and the Default/Recent sort menu.
 - **Return to latest output** — Scroll back in a session’s CLI or Chat output to show the down-arrow at the right end of the key bar, above Send. Tap it to return to the bottom without sending terminal input. It hides when you reach the bottom, including by manual scrolling.
 - **Question cards** — Single-choice, multiple-choice and free-text cards use the selected theme and open above the terminal key bar, leaving its keys available. Native ego selectors open automatically; use the header question action to hide or reopen them. If a typed reply requires an option selection, the question controls reopen and the draft stays editable. Free-text cards still open on request.
 - **Session detail** — Opening an ego free-text question card preserves your unsent answer. Send submits the complete answer through the guarded human-reply path, whether the card is open or closed; a refused reply keeps the draft. Live output streaming, quick-reply chips (Yes/No/Enter/Ctrl-C), text input. The terminal keybar Ctrl button opens Ctrl+C, Ctrl+B, Ctrl+D and Ctrl+Enter. A choice sends once and closes; tap outside or press Escape to dismiss. Ctrl+C and Ctrl+D use danger colours. Ctrl+Enter is agent-aware: it submits in Claude Code and ego, and inserts a newline in Codex, OpenCode, Goose, Grok and pi. Other agents use documented or conservative fallback keys; ordinary Enter remains the submit key.

@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- Show queued prompt text in mobile terminal CLI and Chat, including prompts queued from CLI or desktop, with Cancel and Clear all actions (#2463-ad1c).
+
 - Show the Archive workspace safety checklist with backend file, commit and open-session counts. Disable Delete on failed checks and keep dirty or unmerged work when Archive is selected (#2453-2ec7).
 
 - Add default-off incoming PR reviews with durable per-head deduplication, stale-result suppression and host-only COMMENT publication pinned to the GitHub SHA; never retry uncertain review writes (#2327-1ca0).
@@ -21,6 +23,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Fixed
 
 - Reconcile the first mobile composer edit with an existing terminal draft so dictated text does not silently append to a hidden slash command. Render Claude slash-command user messages as a command chip and arguments instead of raw XML (#2460-5a96).
+- Keep the mobile CLI/Chat header selection visibly aligned with the open view, including session entry and reconnects (#2459-a5af).
 
 - Preserve unchanged sibling worktree monitoring snapshots after Windows Git-directory metadata notifications, without suppressing child index/ref/config changes (#2310-6e76).
 - Preserve quoted Windows profile paths when resuming agents, retain per-repository worktree-storage overrides across native path spellings, and report cross-project workflow requests as client errors (#2310-6e76).
@@ -33,6 +36,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - Keep known remote daemon versions visible after connection failures and explain updating and restarting an outdated daemon as a possible remedy for HTTP 403 Untrusted Host (#2445-fc5d).
 - Detect configured labelled-issue intake in event-driven setup guides instead of requiring a dedicated tool action; name the remaining triage, review-gate and PR-trigger gaps (#2328-15f2).
+- Filter mobile Sessions by tapping the Working, Idle and Awaiting counters. Select multiple states, including empty states, without changing global counts or search and sort (#2458-ba9d).
 
 ## [2.0.0-beta.4] - 2026-10-28
 
@@ -50,6 +54,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- Show the Archive workspace safety checklist with backend file, commit and open-session counts. Disable Delete on failed checks and keep dirty or unmerged work when Archive is selected (#2453-2ec7).
+- Add default-off incoming PR reviews with durable per-head deduplication, stale-result suppression and host-only COMMENT publication pinned to the GitHub SHA; never retry uncertain review writes (#2327-1ca0).
+- Accept write-only task secrets with a TTL, inject them into scoped child environments, and mask terminal output before HTTP, WebSocket, history and capture publication. Expiry revokes new injection; existing session masks remain until teardown (#2319-02f6).
+- Add opt-in per-repository issue triage with operator-attested read-only profiles, trusted-author admission, durable policy-versioned decisions and host-owned rejection comments/intake labels. TUIC does not enforce credential isolation; uncertain publication is not replayed (#2324-424d).
+- Opt labelled-issue intake into a pinned native story workflow; require current independent review and configured checks on the pushed commit before opening its draft PR, with findings in the draft body (#2325-10c4).
+- Offer a red Delete alternative in the Archive workspace dialog for clean, integrated workspaces with no live sessions; recheck safety before permanently removing the checkout and local branch (#2446-2de7).
+- Retain event-run publication URLs, exact publication intent and failure/refusal decisions across restart; reconcile uncertain PR creation by lookup without blind retries and record filtered/duplicate admissions (#2326-98f1).
+
 - Allow headless release daemons to use `--credential-file` with a read-once mounted JSON vault and process-local credential changes, without an OS keyring or session bus (#2343-5358).
 - Draft a New story from a plain request with **Fill with AI**, review every field before saving, and cancel the owned model turn without discarding the request (#2357-a8f2).
 - Show stories from all plans together in List and Kanban, with plan labels, shared filters and plan-bound story actions (#2358-b0b2).
@@ -65,6 +77,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Show all queued commands and messages in a muted pill on the collapsed Compose button, with a command/message breakdown on hover or focus (#2339-056c).
 
 ### Fixed
+
+- Preserve unchanged sibling worktree monitoring snapshots after Windows Git-directory metadata notifications, without suppressing child index/ref/config changes (#2310-6e76).
+- Preserve quoted Windows profile paths when resuming agents, retain per-repository worktree-storage overrides across native path spellings, and report cross-project workflow requests as client errors (#2310-6e76).
+- Stop external speech command descendants on timeout or cancellation, so shell-wrapped engines and test sleepers do not remain running (#2455-f617).
+- Refresh expanded Files tree folders after external file or folder changes, including non-Git roots and nested repositories; reload collapsed folders when reopened (#2452-8076).
+- Mask split Basic-auth credentials, unfinished escape sequences at process exit, and overlapping secret tails before terminal output publication (#2319-02f6).
+- Start terminal Compose at one line, grow with the draft up to its existing 96px editor height, and scroll longer drafts inside (#2447-9d28).
+- Keep known remote daemon versions visible after connection failures and explain updating and restarting an outdated daemon as a possible remedy for HTTP 403 Untrusted Host (#2445-fc5d).
+- Detect configured labelled-issue intake in event-driven setup guides instead of requiring a dedicated tool action; name the remaining triage, review-gate and PR-trigger gaps (#2328-15f2).
 
 - Relaunch updated Linux headless daemons from their startup executable path instead of the deleted running inode (#2343-5358).
 

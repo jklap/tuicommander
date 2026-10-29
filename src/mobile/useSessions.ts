@@ -7,6 +7,8 @@ import { createVisibilityInterval } from "./utils/visibilityInterval";
 
 /** Server-side accumulated state for a session (matches Rust SessionState) */
 export interface SessionState {
+	/** Existing backend PTY FIFO size; omitted when empty. */
+	queued_commands?: number;
 	awaiting_input: boolean;
 	question_text?: string;
 	question_confident?: boolean;

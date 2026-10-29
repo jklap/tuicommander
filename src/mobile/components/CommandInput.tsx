@@ -20,6 +20,8 @@ import { SlashMenuOverlay } from "./SlashMenuOverlay";
 import { type ComposerInputKey, computeInputDelta, isPostSendGuardActive, isSupersetEcho } from "./syncGuards";
 
 interface CommandInputProps {
+	/** Refresh the server-owned FIFO after an accepted enqueue. */
+	onQueued?: (sessionId: string) => void;
 	sessionId: string;
 	serverVoiceRecording?: boolean;
 	onBrowserDictating?: (recording: boolean) => void;
@@ -91,6 +93,7 @@ export function CommandInput(props: CommandInputProps) {
 				expectedDraft: draft,
 			});
 			if (!result.accepted) throw new Error("Queue was not accepted");
+			props.onQueued?.(sessionId);
 			syncedText = "";
 			inputRequest = null;
 			lastSendAt = Date.now();
