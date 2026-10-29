@@ -2147,24 +2147,42 @@ fn instructions_disabled_agent_tool_wins_over_an_explicit_prefer_true_override()
     state.config.write().mcp_capabilities =
         crate::mcp_capabilities::McpCapabilities::from_legacy(&vec!["agent".to_string()]);
     let out = build_mcp_instructions(&state, Some("claude-code"));
+    state.config.write().mcp_capabilities =
+        crate::mcp_capabilities::McpCapabilities::from_legacy(&Vec::new());
+    let enabled = build_mcp_instructions(&state, Some("claude-code"));
 
     assert!(
         !out.contains("## Multi-Agent Work"),
         "an explicit prefer_tuic_*=true override must not override agent_enabled=false"
     );
-    assert!(
-        !out.contains("- `agent` ("),
-        "agent bullet must still be omitted from Tools"
-    );
     assert!(!out.contains("- **Coordinate:**"));
-    // session/repo guidance is unaffected by the agent-only override. A
-    // launch-capable client (claude-code) gets the Submit/Worktrees rules through
-    // its native launch flag, not here, so check the tools survive instead.
     assert!(
-        out.contains("`session`"),
-        "session tool must still be offered"
+        enabled.contains("## Multi-Agent Work"),
+        "control must render the section"
     );
-    assert!(out.contains("`repo`"), "repo tool must still be offered");
+    // Only the agent guidance goes: the same config with `agent` enabled, minus the
+    // Multi-Agent Work section, the agent-named Tool identity paragraph and
+    // `agent` in the tool listing, is exactly the disabled output (blank lines aside).
+    let mut expected = Vec::new();
+    let mut in_multi_agent = false;
+    for line in enabled.lines() {
+        if line.starts_with("## ") {
+            in_multi_agent = line == "## Multi-Agent Work";
+        }
+        if in_multi_agent || line.starts_with("**Tool identity:**") || line.trim().is_empty() {
+            continue;
+        }
+        expected.push(line.replace("`session`, `agent`, ", "`session`, "));
+    }
+    let actual: Vec<&str> = out.lines().filter(|line| !line.trim().is_empty()).collect();
+    assert_eq!(
+        actual, expected,
+        "disabling agent changed non-agent guidance"
+    );
+    assert!(
+        actual.iter().any(|line| line.contains("`session`, `repo`")),
+        "the tool listing must still name session and repo"
+    );
 }
 
 /// There are two instruction surfaces and they are not equals. Every client
@@ -3277,14 +3295,12 @@ fn instructions_make_no_claim_about_the_user_or_the_platform() {
                 &ctx,
                 &default_tool_gates(),
             );
-            // Whole words only: wip's "Prefer TUICommander" bullet says "throwaway"
-            // (a single-shot subagent), which is not a claim about the user.
-            let words: Vec<&str> = out
-                .split(|c: char| !c.is_alphanumeric())
-                .filter(|word| !word.is_empty())
-                .collect();
+            // wip's "Prefer TUICommander" bullet says "throwaway" (a single-shot
+            // subagent), which is not a claim about the user; strip only that word
+            // so "MacBook", "awaybot" etc. are still caught.
+            let checked = out.replace("throwaway", "");
             for banned in ["away", "Mac"] {
-                assert!(!words.contains(&banned), "{banned:?} in: {out}");
+                assert!(!checked.contains(banned), "{banned:?} in: {out}");
             }
         }
     }
