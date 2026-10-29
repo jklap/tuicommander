@@ -20,6 +20,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Normalize redundant leading slashes in native file-tab URLs before storing the path, so Copy Path uses `~/…` for home files (#2466-7f4f).
+
 - Keep the mobile CLI/Chat header selection visibly aligned with the open view, including session entry and reconnects (#2459-a5af).
 
 - Preserve unchanged sibling worktree monitoring snapshots after Windows Git-directory metadata notifications, without suppressing child index/ref/config changes (#2310-6e76).

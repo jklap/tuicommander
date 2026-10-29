@@ -1,3 +1,5 @@
+import { parseTuicFilePath } from "../../utils/tuicFilePath";
+
 /** Version of the TUIC SDK injected into plugin iframes */
 export const TUIC_SDK_VERSION = "1.0";
 
@@ -8,6 +10,7 @@ export const TUIC_SDK_VERSION = "1.0";
  */
 export const TUIC_SDK_SCRIPT = `<script id="tuic-sdk">
 (function(){
+  var parseFilePath=${parseTuicFilePath.toString()};
   var _activeRepo=null;
   var _repoListeners=[];
   var _filePending={};
@@ -90,13 +93,11 @@ export const TUIC_SDK_SCRIPT = `<script id="tuic-sdk">
       var url=new URL(href);
       var cmd=url.hostname;
       if(cmd==="open"){
-        var rawPath=decodeURIComponent(url.pathname);
-        var path=rawPath.length>1&&rawPath.charAt(0)==="/"?rawPath.slice(1):rawPath;
+        var path=parseFilePath(url.pathname);
         var pinned=a.hasAttribute("data-pinned");
         tuic.open(path,{pinned:pinned});
       }else if(cmd==="edit"){
-        var rawEpath=decodeURIComponent(url.pathname);
-        var epath=rawEpath.length>1&&rawEpath.charAt(0)==="/"?rawEpath.slice(1):rawEpath;
+        var epath=parseFilePath(url.pathname);
         var line=parseInt(url.searchParams.get("line")||"0",10);
         tuic.edit(epath,{line:line});
       }else if(cmd==="terminal"){
