@@ -388,9 +388,12 @@ than flag:
   to ~2 frames/s without making the ticker's stuck-frontend warning fire.
 
 **Coalesced scroll (`pending_scroll`).** The wheel and the scrollbar drag do not
-take the vt lock: `terminal_scroll_to_offset` — the Tauri command and the
-`POST /sessions/{id}/terminal/scroll-to-offset` route alike — stores the absolute
-display offset in a per-session `AtomicI64` and marks the grid dirty. The ticker
+take the vt lock: the frontend calls `terminal_scroll_to_anchor` (an all-time row,
+so output arriving meanwhile cannot move the target; HTTP
+`POST /sessions/{id}/terminal/scroll-to-anchor`), and `terminal_scroll_to_offset`
+(`POST /sessions/{id}/terminal/scroll-to-offset`) remains for display-offset
+callers. Both store the target in the per-session pending-scroll slot and mark the
+grid dirty. The ticker
 consumes it (`take_pending_scroll`) under the lock it already holds, so a burst of
 wheel events costs one grid move, latest wins, and scrolling never contends with
 the PTY output processor.
