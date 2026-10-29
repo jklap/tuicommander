@@ -16,7 +16,7 @@
 
 ## Windows CI repairs (2310-6e76, round g) — Rust rebuild/restart required
 
-- [ ] Coordinator: run the exact owner filter in `reports/2310-windows-ci-round-g.md` on native Windows. It covers all 24 failing owners, unchanged assertions/deadlines, profile decoding, workflow HTTP errors and gitconfig process-exit cleanup. rb RED and Linux Clippy are not native Windows GREEN.
+- [ ] Coordinator: run the exact owner filter in [reports/2310-windows-ci-round-g.md](https://github.com/sstraus/tuicommander/blob/895ed2b4eaa9c4dbd91df4acd354f845731e07ad/reports/2310-windows-ci-round-g.md) on native Windows. It covers all 24 failing owners, unchanged assertions/deadlines, profile decoding, workflow HTTP errors and gitconfig process-exit cleanup. rb RED and Linux Clippy are not native Windows GREEN.
 - [ ] After an authorized `make dev` restart or `make build`, verify that a Windows agent resumes from a profile path with spaces/backslashes and that its repository worktree-storage override still applies. Rust does not hot-reload; the daily app was not restarted.
 ## External speech command cleanup (2455-f617) — Rust rebuild/restart required
 
@@ -234,7 +234,7 @@
 
 ## Worktree removal identity (2334-ca53) — Rust restart required
 
-- [ ] After Boss chooses to rebuild/restart the daily backend, refresh the repository and retry removal. Rust changes do not hot-reload. The colleague's exact state is not confirmed; first inspect whether his branch ref is symbolic with the command in `reports/2334-worktree-identity.md`. This peer did not restart or access the daily app.
+- [ ] After Boss chooses to rebuild/restart the daily backend, refresh the repository and retry removal. Rust changes do not hot-reload. The colleague's exact state is not confirmed; first inspect whether his branch ref is symbolic with the command in [reports/2334-worktree-identity.md](https://github.com/sstraus/tuicommander/blob/895ed2b4eaa9c4dbd91df4acd354f845731e07ad/reports/2334-worktree-identity.md). This peer did not restart or access the daily app.
 
 ## Ego conversational submit (2314-cf94) — Rust restart required
 
@@ -248,7 +248,7 @@
 
 ## Windows workspace and resume paths (2310-6e76) — Rust restart required
 
-- [ ] On the next authorized Windows CI push, verify worktree creation from canonical paths and the exact inventory/registration assertions. After Boss chooses to rebuild/restart the daily backend, verify a resumed Claude command drops the expired TUIC attachment grant but retains user directory grants. Rust edits do not hot-reload; the peer did not restart the daily app. The recorded Windows directory-event replay is RED on macOS and Linux; the cache repair still needs batch GREEN and native Windows validation. Cleanup pruning and the 40-worktree latency contract still require native diagnosis; see `reports/2310-windows-ci.md`.
+- [ ] On the next authorized Windows CI push, verify worktree creation from canonical paths and the exact inventory/registration assertions. After Boss chooses to rebuild/restart the daily backend, verify a resumed Claude command drops the expired TUIC attachment grant but retains user directory grants. Rust edits do not hot-reload; the peer did not restart the daily app. The recorded Windows directory-event replay is RED on macOS and Linux; the cache repair still needs batch GREEN and native Windows validation. Cleanup pruning and the 40-worktree latency contract still require native diagnosis; see [reports/2310-windows-ci.md](https://github.com/sstraus/tuicommander/blob/895ed2b4eaa9c4dbd91df4acd354f845731e07ad/reports/2310-windows-ci.md).
 
 ## Required MCP tool search names (2300-6355) — Rust restart required
 
@@ -328,7 +328,7 @@
 - [ ] After Boss manually rebuilds and restarts the daily backend, verify document recovery and detached-panel background unload/restore. This Rust fix does not hot-reload; the peer does not restart the daily app.
 ## CLI status signature preservation (2129-1dfd) — backend restart required
 
-- [ ] After Boss manually rebuilds and restarts the backend, open General Settings and run `tuic --version` again. The status query must not invalidate the installed CLI signature. The old running backend still opens the executable for writing until that restart; no daily app or installed binary was changed by this peer. Native isolated probes reproduced intermittent SIGKILL without changed bytes; historical writer attribution remains open in `reports/2129-cli-signature.md`.
+- [ ] After Boss manually rebuilds and restarts the backend, open General Settings and run `tuic --version` again. The status query must not invalidate the installed CLI signature. The old running backend still opens the executable for writing until that restart; no daily app or installed binary was changed by this peer. Native isolated probes reproduced intermittent SIGKILL without changed bytes; historical writer attribution remains open in [reports/2129-cli-signature.md](https://github.com/sstraus/tuicommander/blob/895ed2b4eaa9c4dbd91df4acd354f845731e07ad/reports/2129-cli-signature.md).
 
 ## Detached command peer isolation (2100-c249) — CLI update and backend restart required
 
