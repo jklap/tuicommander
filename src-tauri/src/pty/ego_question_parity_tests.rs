@@ -1,3 +1,21 @@
+/// Catches: native trust detection being lost before the shared mobile session state.
+#[tokio::test]
+async fn captured_ego_trust_reaches_mobile_session_state() {
+    let mut awaiting = false;
+    replay_native_question("ego-trust-2461.tcap", "ego", |_, session| {
+        awaiting |= session.awaiting_input
+            && session.question_confident
+            && session.choice_prompt.is_none()
+            && session.question_text.as_deref().is_some_and(|text| {
+                text.starts_with("Trust project files in ") && text.ends_with("? [y/N]")
+            });
+    });
+    assert!(
+        awaiting,
+        "real trust modal must publish the shared Yes/No awaiting state"
+    );
+}
+
 /// Catches: a hard-wrapped approval footer losing mobile controls or latching after answer.
 #[tokio::test]
 async fn captured_ego_wrapped_approval_reaches_mobile_answer_controls() {

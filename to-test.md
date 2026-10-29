@@ -3274,3 +3274,5 @@ Isolated Chrome screenshot capture timed out after 35 seconds; visual rendering 
 - [ ] After a manual backend restart, opt in only on an authorized disposable GitHub repository and verify the latest pushed head gets one pinned COMMENT review; older in-flight output remains superseded and no branch push or new PR occurs. No live GitHub write was performed during implementation. Rust changes require `make dev` restart or a new release build; Vite hot reload cannot load them.
 
 - [ ] After an authorized rebuild, verify on Windows that a main-only commit or adding a worktree does not rescan unchanged sibling dirty/diff status; editing and staging in that sibling must still update its badges (#2310-6e76, round j).
+
+- [ ] After a backend rebuild, open an untrusted ego project on mobile. Check that the project-trust prompt shows awaiting input and Yes/No. Answer each choice in separate scratch projects (#2461-1403).
