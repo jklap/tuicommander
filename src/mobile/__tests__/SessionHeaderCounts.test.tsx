@@ -55,7 +55,9 @@ it("matches Working, Idle and Awaiting row badges and excludes finished and exit
 	expect(badges.filter((label) => label === "Idle")).toHaveLength(2);
 	expect(badges.filter((label) => label === "Input")).toHaveLength(1);
 	await fireEvent.click(view.getByRole("button", { name: "1Awaiting" }));
-	expect(onSelect).toHaveBeenCalledWith("question");
+	expect(onSelect).not.toHaveBeenCalled();
+	expect(view.getByRole("button", { name: "Open session question" })).toBeTruthy();
+	expect(view.queryByRole("button", { name: "Open session idle" })).toBeNull();
 	// Exited sessions leave the live snapshot; they must also leave the counts.
 	setSessions((current) => current.filter((item) => item.session_id !== "working"));
 	expect(header(view)).toEqual(["2Working", "1Idle", "1Awaiting"]);

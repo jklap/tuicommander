@@ -1,45 +1,39 @@
+import { For } from "solid-js";
+import { Button } from "../../components/ui/Button";
 import styles from "./HeroMetrics.module.css";
+import type { SessionStatus } from "./StatusBadge";
 
 interface HeroMetricsProps {
 	workingCount: number;
 	idleCount: number;
 	awaitingCount: number;
-	onAwaitingClick?: () => void;
+	selectedStates?: ReadonlySet<SessionStatus>;
+	onToggleState?: (status: SessionStatus) => void;
 }
 
 export function HeroMetrics(props: HeroMetricsProps) {
 	return (
 		<div class={styles.row}>
-			<div class={styles.card} data-testid="metric-card">
-				<span class={styles.number} data-testid="metric-number">
-					{props.workingCount}
-				</span>
-				<span class={styles.label} data-testid="metric-label">
-					Working
-				</span>
-			</div>
-			<div class={styles.card} data-testid="metric-card">
-				<span class={styles.number} data-testid="metric-number">
-					{props.idleCount}
-				</span>
-				<span class={styles.label} data-testid="metric-label">
-					Idle
-				</span>
-			</div>
-			<button
-				type="button"
-				class={`${styles.card} ${styles.awaiting}`}
-				data-testid="metric-card"
-				disabled={props.awaitingCount === 0}
-				onClick={props.onAwaitingClick}
-			>
-				<span class={styles.number} data-testid="metric-number">
-					{props.awaitingCount}
-				</span>
-				<span class={styles.label} data-testid="metric-label">
-					Awaiting
-				</span>
-			</button>
+			<For each={["busy", "idle", "question"] as const}>
+				{(status) => (
+					<Button
+						class={styles.card}
+						geometry="stretch"
+						data-testid="metric-card"
+						aria-pressed={props.selectedStates?.has(status) ?? false}
+						onClick={() => props.onToggleState?.(status)}
+					>
+						<span class={styles.content}>
+							<span class={styles.number} data-testid="metric-number">
+								{status === "busy" ? props.workingCount : status === "idle" ? props.idleCount : props.awaitingCount}
+							</span>
+							<span class={styles.label} data-testid="metric-label">
+								{status === "busy" ? "Working" : status === "idle" ? "Idle" : "Awaiting"}
+							</span>
+						</span>
+					</Button>
+				)}
+			</For>
 		</div>
 	);
 }
