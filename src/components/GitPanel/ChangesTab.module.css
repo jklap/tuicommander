@@ -30,7 +30,7 @@
   align-items: center;
   gap: 4px;
   color: var(--fg-secondary);
-  font-size: var(--font-xs);
+  font-size: var(--font-sm);
   font-family: var(--font-ui);
   cursor: pointer;
   user-select: none;
@@ -134,16 +134,27 @@
 }
 
 .sectionLabel {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .sectionCount {
   font-size: var(--font-xs);
   color: var(--fg-secondary);
-  font-weight: 400;
+  font-weight: 600;
+  flex-shrink: 0;
+  padding: 0 6px;
+  border-radius: var(--radius-pill);
+  background: var(--bg-highlight);
+  letter-spacing: 0;
 }
 
 .sectionAction {
   opacity: 0;
+  flex-shrink: 0;
+  white-space: nowrap;
   transition: opacity 0.15s ease;
 }
 
@@ -151,13 +162,13 @@
   margin-left: auto;
 }
 
-.sectionHeader:hover .sectionAction {
+.sectionHeader:hover .sectionAction,
+.sectionHeader:focus-within .sectionAction {
   opacity: 1;
 }
 
 /* File entries */
 .fileEntry {
-  position: relative;
   display: flex;
   align-items: center;
   gap: 6px;
@@ -184,10 +195,6 @@
 
 .fileSelected.fileFocused {
   background: color-mix(in srgb, var(--accent) 25%, transparent);
-}
-
-.fileFocused .actions {
-  opacity: 1;
 }
 
 /* Status badge (M, A, D, R, ?) */
@@ -246,6 +253,20 @@
   color: var(--fg-primary);
 }
 
+/* One in-flow slot reserves room for three compact actions in every row. */
+.rowSlot {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  align-items: center;
+  justify-items: end;
+  width: 72px;
+  flex-shrink: 0;
+}
+
+.rowSlot > * {
+  grid-area: 1 / 1;
+}
+
 /* Diff stats (+N -M) — hidden when action buttons show */
 .diffStats {
   display: flex;
@@ -253,7 +274,8 @@
   flex-shrink: 0;
   font-size: var(--font-2xs);
   font-family: var(--font-ui);
-  transition: opacity 0.15s ease;
+  max-width: 100%;
+  overflow: hidden;
 }
 
 .diffAdd {
@@ -264,27 +286,29 @@
   color: var(--error);
 }
 
-/* Action buttons — overlay on hover, replacing diff stats */
+/* Stats and actions occupy the same grid cell, never the path. */
 .actions {
   composes: toolbar from "../ui/FormControls.module.css";
-  position: absolute;
-  right: 12px;
-  top: 50%;
-  transform: translateY(-50%);
   display: flex;
   gap: 2px;
-  opacity: 0;
-  transition: opacity 0.15s ease;
-  background: inherit;
-  padding-left: 4px;
+  visibility: hidden;
 }
 
-.fileEntry:hover .actions {
-  opacity: 1;
+.fileEntry:hover .actions,
+.fileEntry:focus-within .actions,
+.fileFocused .actions {
+  visibility: visible;
 }
 
-.fileEntry:hover .diffStats {
-  opacity: 0;
+.fileEntry:hover .diffStats,
+.fileEntry:focus-within .diffStats,
+.fileFocused .diffStats {
+  visibility: hidden;
+}
+
+.discardAction:is(:hover, :focus-visible):enabled {
+  color: var(--error);
+  background: color-mix(in srgb, var(--error) 15%, transparent);
 }
 
 /* Empty state */
@@ -295,4 +319,5 @@
 
 @media (max-width: 600px) {
   .fileEntry { min-height: 44px; }
+  .rowSlot { width: 136px; }
 }
