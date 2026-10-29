@@ -1,3 +1,7 @@
+## CLI return focus (2484-9adb)
+
+- [ ] After landing, check Chat → CLI by click in the desktop WKWebView and type without clicking the terminal. Worktree Chrome verified the real Terminal and CanvasTerminal focus plus typed write_pty data through an isolated IPC sink; the assignment did not launch a desktop instance, so WebKit-specific focus behavior is not verified.
+
 ## Relay admission ordering (2470-4d10) — relay rebuild/restart required
 
 - [ ] After deploying and restarting the rebuilt relay service, connect a daemon and desktop with an existing pairing bundle at the same time. Confirm first attach succeeds without replacing the bundle. The change is in `tuic-relay`, not the running desktop; restarting `make dev` alone does not load it. The daily app and relay service were not restarted by the agent.
