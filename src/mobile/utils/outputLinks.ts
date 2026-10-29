@@ -1,5 +1,7 @@
 import { filePathRegex, fileUrlRegex, matchWebUrls } from "../../components/Terminal/linkProvider";
 
+import { parseTuicFilePath } from "../../utils/tuicFilePath";
+
 export interface OutputLink {
 	start: number;
 	end: number;
@@ -34,7 +36,7 @@ export function detectOutputLinks(text: string): OutputLink[] {
 		const label = trimSentenceTail(match[0]);
 		try {
 			const parsed = new URL(label);
-			const candidate = decodeURIComponent(parsed.pathname).replace(/^\//, "");
+			const candidate = parseTuicFilePath(parsed.pathname);
 			if (!MARKDOWN_PATH.test(candidate)) continue;
 			const queryLine = Number(parsed.searchParams.get("line"));
 			matches.push({

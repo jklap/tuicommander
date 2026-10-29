@@ -89,7 +89,7 @@ describe("font preferences after a real module reload", () => {
 		await screen.findByText("CLI answer");
 		expect(view.container.querySelector("pre")?.style.fontSize).toBe("16px");
 		expect(view.container.querySelector("textarea")?.style.getPropertyValue("--mobile-font-size")).toBe("");
-		fireEvent.click(screen.getByRole("button", { name: "Chat" }));
+		fireEvent.click(screen.getByRole("tab", { name: "Chat" }));
 		await screen.findByText("Chat answer");
 		const transcript = view.container.querySelector("[data-mobile-reading]") as HTMLElement;
 		expect(transcript.style.getPropertyValue("--font-base")).toBe("18px");

@@ -312,7 +312,7 @@ it.each(["claude", "ego"])("renders mobile %s CLI without invented guidance", as
 		/>
 	));
 	await new Promise((resolve) => setTimeout(resolve, 0));
-	expect(view.getByRole("button", { name: "CLI" }).getAttribute("aria-pressed")).toBe("true");
-	expect(view.getByRole("button", { name: "Chat" })).not.toBeNull();
+	expect(view.getByRole("tab", { name: "CLI" }).getAttribute("aria-selected")).toBe("true");
+	expect(view.getByRole("tab", { name: "Chat" })).not.toBeNull();
 	expect(view.container.textContent).not.toMatch(/Reply below|Switch to CLI|Read file edits in Chat/);
 });

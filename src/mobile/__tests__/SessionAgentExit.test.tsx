@@ -122,11 +122,11 @@ describe("mobile viewed agent exit", () => {
 	it("fresh_poll_returns_chat_to_cli_after_agent_exit", async () => {
 		const view = mount("claude");
 		stream.push({ ...waiting, agent_type: "claude" });
-		await fireEvent.click(view.getByRole("button", { name: /^Chat$/ }));
+		await fireEvent.click(view.getByRole("tab", { name: /^Chat$/ }));
 		expect(view.queryByText("Shell output")).toBeNull();
 		view.poll(shell);
 		expect(view.getByText("Shell output")).toBeTruthy();
-		expect(view.queryByRole("group", { name: "Terminal view" })).toBeNull();
+		expect(view.queryByRole("tablist", { name: "Terminal view" })).toBeNull();
 	});
 
 	// Catches: PTY closure leaves the user trapped in agent controls instead of offering Back.

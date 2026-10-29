@@ -175,7 +175,7 @@ HTML `<a>` tags with `tuic://` href are automatically intercepted:
 <a href="tuic://terminal?repo=/path/to/repo">Open terminal</a>
 ```
 
-Link pathnames are treated as **relative paths** (the leading `/` from URL parsing is stripped).
+Absolute link targets use an extra slash, for example `tuic://open//Users/me/repo/file.md`. The URL parser collapses redundant leading slashes to one POSIX root before resolving the file. A single leading slash is the URL delimiter for a relative path; Windows drive paths keep their existing meaning.
 
 ### Repository
 

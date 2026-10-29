@@ -626,6 +626,32 @@ describe("initApp", () => {
 		expect(mdTabsStore.getVisibleIds("/repos/orchestrator|main")).toContain(tab!.id);
 	});
 
+	// Catches: the URL separator leaks into the stored path and Copy Path clipboard value.
+	it("2466 copies a redundant-root tuic open link as a home-relative path", async () => {
+		vi.spyOn(appLogger, "info").mockImplementation(() => {});
+		vi.spyOn(appLogger, "debug").mockImplementation(() => {});
+		for (const level of ["warn", "error"] as const) {
+			vi.spyOn(appLogger, level).mockImplementation((_source, message) => {
+				expect(message).toMatch(
+					/Failed to save activity|Failed to load themes|Unknown theme|Settings reload failed|Failed to register progress-recorded|Failed to sync native window background/,
+				);
+			});
+		}
+		let send: ((event: { payload: unknown }) => void) | undefined;
+		vi.mocked(listen).mockImplementation(((event: string, handler: (event: { payload: unknown }) => void) => {
+			if (event === "ui-tab") send = handler;
+			return Promise.resolve(vi.fn());
+		}) as unknown as typeof listen);
+		await initApp(createMockDeps());
+		send!({ payload: { id: "2466", title: "Report", html: "", pinned: false, url: "tuic://open///Users/boss/x.md" } });
+		const tab = mdTabsStore.getActive();
+		if (tab?.type !== "file") throw new Error("Expected a native file tab");
+		const { copyPathToClipboard } = await import("../../utils/clipboard");
+		copyPathToClipboard(tab.filePath);
+		expect(mockInvoke).toHaveBeenCalledWith("write_clipboard_text", { text: "~/x.md" });
+		expect(tab).toMatchObject({ filePath: "/Users/boss/x.md" });
+	});
+
 	it("uses MCP ids for native Markdown tab identity", async () => {
 		let uiTabCallback:
 			| ((event: {

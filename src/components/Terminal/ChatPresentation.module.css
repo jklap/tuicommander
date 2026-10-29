@@ -14,3 +14,12 @@
   overflow-wrap: anywhere;
 }
 
+
+.command {
+  padding: 2px 6px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-tertiary);
+  color: var(--accent);
+  font-family: var(--font-mono);
+  overflow-wrap: anywhere;
+}
