@@ -93,7 +93,9 @@ export default defineConfig({
       // Re-measured 2026-10-29 on the 2026-10-27 replay of wip-squashed onto main
       // (1,088 files / 14,039 tests, mdKanban.test.ts excluded for the plugins-pin
       // divergence): lines 86.3%, statements 84.43%, functions 84.79%, branches 76.7%.
-      // Floors below are each value minus one point, rounded down.
+      // Floors below are each value minus one point, rounded down. Since 2026-10-29
+      // `make check` (and scripts/check-gate.sh) enforces them: its single Vitest
+      // run is `vitest run --coverage`.
       thresholds: {
         lines: 85,
         functions: 83,

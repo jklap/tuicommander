@@ -157,7 +157,10 @@ fi
 
 if grep -q "rust tests ✓" "$LOG" && ! grep -q "vitest ✓" "$LOG"; then
 	echo
-	echo "NOTE: the failure looks like it's in the vitest step. Before treating"
+	echo "NOTE: the failure looks like it's in the vitest step. It also enforces"
+	echo "      the coverage floors in vitest.config.ts: an 'ERROR: Coverage for"
+	echo "      ... does not meet global threshold' line above is a real failure."
+	echo "      Otherwise, before treating"
 	echo "      this as a regression, run 'pnpm exec vitest run' directly and"
 	echo "      check for 'Tests  N passed (N)' with 0 real failures — a known,"
 	echo "      pre-existing flaky async leak in ChangelogModal.test.tsx marks"

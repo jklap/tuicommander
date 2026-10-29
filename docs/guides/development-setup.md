@@ -522,6 +522,11 @@ pnpm test              # Run all tests
 pnpm test:coverage     # Coverage report
 ```
 
+`make check` (and so `scripts/check-gate.sh`) runs Vitest once with coverage, so
+the `coverage.thresholds` floors in `vitest.config.ts` (lines 85, statements 83,
+functions 83, branches 75) fail the gate. Raise a floor when measured coverage
+rises; never lower one to make the gate pass.
+
 **Test tiers:**
 - Tier 1: Pure functions (utils, type transformations)
 - Tier 2: Store logic (state management)
@@ -530,7 +535,7 @@ pnpm test:coverage     # Coverage report
 
 **Framework:** Vitest + SolidJS Testing Library + happy-dom
 
-**Coverage:** ~80%+
+**Coverage:** floors enforced by `make check` (see above)
 
 ### Chat browser landing gate (macOS)
 
