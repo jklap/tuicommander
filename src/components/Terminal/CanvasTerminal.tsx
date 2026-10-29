@@ -1504,6 +1504,10 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 	let scrollbarMarksContainer: HTMLDivElement | null = null;
 	let lastScrollbarMarksKey = "";
 
+	// Force an immediate scrollbar-marks repaint on toggle — paintScrollbarMarks
+	// is otherwise only invoked from the frame-decode/scroll path. If a future
+	// mark type gets its own setting, it needs tracking here too, alongside its
+	// own branch in paintScrollbarMarks's memo key — the two must stay in sync.
 	createEffect(() => {
 		settingsStore.state.showScrollbarMarks;
 		settingsStore.state.showBlockMarks;
@@ -4496,21 +4500,8 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 		remeasure();
 	});
 
-	// Force an immediate scrollbar-marks repaint on toggle — paintScrollbarMarks
-	// is otherwise only invoked from the frame-decode/scroll path, so without
-	// this, flipping a setting wouldn't take visible effect until the next
-	// unrelated repaint. If a future mark type gets its own setting, it needs
-	// tracking here too, alongside its own placeholder branch in
-	// paintScrollbarMarks's memo key below — the two must stay in sync.
-	createEffect(() => {
-		settingsStore.state.showScrollbarMarks;
-		settingsStore.state.showBlockMarks;
-		settingsStore.state.showPromptMarks;
-		if (!alive || !currentFrame) return;
-		updateScrollbar(currentFrame);
-	});
-
-	// Same reasoning as the scrollbar-marks effect above, for the gutter-overlay
+	// Same reasoning as the scrollbar-marks repaint effect (next to
+	// paintScrollbarMarks), for the gutter-overlay
 	// settings: paintBlockTimestamps/paintFoldChevrons are only invoked from the
 	// frame-decode/scroll path, so toggling the timestamp mode or block folding
 	// on an otherwise-idle terminal wouldn't take visible effect until the next
