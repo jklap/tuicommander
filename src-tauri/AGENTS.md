@@ -210,11 +210,11 @@ undecided between two diverged plugin commits.** `497bb1f` predated the plugins 
 (`feat(plugins): externalize plan and stories tools`), so `plugins/plan/` and
 `plugins/stories-ticker/` — which `plugins.rs`'s `SEEDED_PLUGINS` unconditionally `include_str!`s —
 did not exist and the whole crate failed to compile (six `couldn't read ... No such file or
-directory` errors). Both later pins have them: this tree records main's `670c36628` (adds
-`sqlite-viewer/`); the pre-rebase `wip` branch recorded `6dc4b8047`, the plugins repo's `wip` tip
+directory` errors). Both later pins have them: this tree records main's `d8de7d39b` (adds
+`sqlite-viewer/`, `wiz-kanban/`); the pre-rebase `wip` branch recorded `6dc4b8047`, the plugins repo's `wip` tip
 (adds `md-kanban/` and `tuic-voice/`). They diverge from `c964e7bb9`, so `src/__tests__/plugins/mdKanban.test.ts`
-cannot pass against a checkout of `670c36628`. **The final pin needs a commit inside the plugins
-repo that merges `670c36628` and `6dc4b8047`, pushed to that repo's remote** (see the two-commit
+cannot pass against a checkout of `d8de7d39b`. **The final pin needs a commit inside the plugins
+repo that merges `d8de7d39b` and `6dc4b8047`, pushed to that repo's remote** (see the two-commit
 dance below — the parent repo's push does not carry it), and then a parent-repo commit pinning it.
 If a similar gap reappears (a new bundled plugin referenced via `include_str!` before the pin
 catches up), verify with `git -C plugins ls-tree HEAD --name-only | grep -E
