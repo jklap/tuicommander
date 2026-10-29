@@ -122,13 +122,31 @@ fn native_tool_catalog_summaries_are_short_and_not_description_prefixes() {
         let description = tool["description"].as_str().unwrap();
         let summary = entry["summary"].as_str().unwrap();
         assert_eq!(entry["name"], tool["name"]);
-        assert_eq!(
-            &entry["description"],
-            recorded
-                .get(name)
-                .filter(|_| name != "workflow")
-                .unwrap_or(&tool["description"])
-        );
+        if name == "agent" || name == "repo" {
+            // Both copies grew past main's recording: agent carries wip's
+            // Prefer-TUICommander framing (both flags on by default) and repo gained
+            // worktree_setup_status. Each is the full reference text, and every
+            // recorded line must survive in it (agent's prefer-dependent header aside).
+            let reference = crate::mcp_http::mcp_transport_catalogue::native_tool_help(name)
+                .expect("reference copy");
+            assert_eq!(entry["description"], reference["description"]);
+            let copy = entry["description"].as_str().unwrap();
+            let recorded_lines = recorded[name].as_str().expect("recorded copy").split('\n');
+            for line in recorded_lines.skip(usize::from(name == "agent")) {
+                assert!(
+                    copy.contains(line),
+                    "{name} Settings copy lost recorded line {line:?}"
+                );
+            }
+        } else {
+            assert_eq!(
+                &entry["description"],
+                recorded
+                    .get(name)
+                    .filter(|_| name != "workflow")
+                    .unwrap_or(&tool["description"])
+            );
+        }
         assert!(!summary.trim().is_empty(), "{name} needs a summary");
         assert!(summary.chars().count() <= 70, "{name} summary is too long");
         assert!(
@@ -1949,9 +1967,7 @@ fn instructions_messaging_disabled_keeps_spawn_but_omits_messaging_guidance() {
 
     // Spawn guidance stays.
     assert!(out.contains("- **Prefer TUICommander for peers/teams:**"));
-    assert!(
-        out.contains("- **Same repo:** TUIC `agent action=spawn` peers to work in this repo.")
-    );
+    assert!(out.contains("- **Same repo:** TUIC `agent action=spawn` peers to work in this repo."));
     assert!(out.contains("- **Isolated branches:**"));
 
     // Messaging guidance is gone.
@@ -2141,9 +2157,14 @@ fn instructions_disabled_agent_tool_wins_over_an_explicit_prefer_true_override()
         "agent bullet must still be omitted from Tools"
     );
     assert!(!out.contains("- **Coordinate:**"));
-    // session/repo guidance is unaffected by the agent-only override.
-    assert!(out.contains("**Submit:** `session action=submit"));
-    assert!(out.contains("**Worktrees:** use `repo action=worktree_create`"));
+    // session/repo guidance is unaffected by the agent-only override. A
+    // launch-capable client (claude-code) gets the Submit/Worktrees rules through
+    // its native launch flag, not here, so check the tools survive instead.
+    assert!(
+        out.contains("`session`"),
+        "session tool must still be offered"
+    );
+    assert!(out.contains("`repo`"), "repo tool must still be offered");
 }
 
 /// There are two instruction surfaces and they are not equals. Every client
@@ -3256,8 +3277,14 @@ fn instructions_make_no_claim_about_the_user_or_the_platform() {
                 &ctx,
                 &default_tool_gates(),
             );
+            // Whole words only: wip's "Prefer TUICommander" bullet says "throwaway"
+            // (a single-shot subagent), which is not a claim about the user.
+            let words: Vec<&str> = out
+                .split(|c: char| !c.is_alphanumeric())
+                .filter(|word| !word.is_empty())
+                .collect();
             for banned in ["away", "Mac"] {
-                assert!(!out.contains(banned), "{banned:?} in: {out}");
+                assert!(!words.contains(&banned), "{banned:?} in: {out}");
             }
         }
     }
@@ -3758,11 +3785,25 @@ async fn native_help_preserves_every_displaced_rule_2069() {
             None,
         )
         .await;
-        if reply["description"] != *original {
+        // Help is the full reference definition. Since the recording, `repo` gained
+        // worktree_setup_status and `agent`'s header gained the Prefer-TUICommander
+        // framing, so exact equality with the recording no longer holds; instead
+        // every recorded line must survive (agent's prefer-dependent header aside).
+        let full = crate::mcp_http::mcp_transport_catalogue::native_tool_help(name)
+            .map(|help| help["description"].clone());
+        if full.as_ref() != Some(&reply["description"]) {
             failures.push(format!(
-                "{name}: help lost recorded guidance ({})",
+                "{name}: help is not the full reference definition ({})",
                 reply.get("error").unwrap_or(&serde_json::Value::Null)
             ));
+            continue;
+        }
+        let help = reply["description"].as_str().unwrap();
+        let skip_header = usize::from(name == "agent");
+        for line in original.as_str().unwrap().split('\n').skip(skip_header) {
+            if !help.contains(line) {
+                failures.push(format!("{name}: help lost recorded guidance line {line:?}"));
+            }
         }
     }
     assert!(failures.is_empty(), "{}", failures.join("\n"));
