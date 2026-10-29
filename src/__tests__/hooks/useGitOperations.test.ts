@@ -4847,6 +4847,25 @@ describe("useGitOperations", () => {
 			expect(mockSetStatusInfo).toHaveBeenCalledWith("Auto-archived 1 merged worktree(s)");
 		});
 
+		// Catches: a stale merged inventory overrides the fresh empty-start preview.
+		it("keeps an empty-start worktree without a session when auto-archive is on", async () => {
+			repoSettingsStore.getOrCreate("/repo", "Repo");
+			repoSettingsStore.update("/repo", { autoArchiveMerged: true });
+			mockRepo.getWorkspaceLifecycle.mockResolvedValueOnce({
+				dirtyFiles: 0,
+				commitStatus: "unmerged",
+				removalSafety: "needs_review",
+				liveSessions: [],
+				warnings: ["This branch has unmerged commits"],
+			});
+
+			await gitOps.refreshAllBranchStats();
+
+			expect(mockRepo.getWorkspaceLifecycle).toHaveBeenCalledWith("/repo", "feature/x");
+			expect(mockRepo.finalizeMergedWorktree).not.toHaveBeenCalled();
+			expect(repositoriesStore.get("/repo")?.workspaces["feature/x"]).toBeDefined();
+		});
+
 		it("keeps an untouched worktree occupied by a live agent during automatic archive", async () => {
 			repoSettingsStore.getOrCreate("/repo", "Repo");
 			repoSettingsStore.update("/repo", { autoArchiveMerged: true });

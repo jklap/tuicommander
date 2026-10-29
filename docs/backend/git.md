@@ -286,7 +286,10 @@ fails or the branch moves, removal reports a warning and keeps the ref. For
 branch deletion, it checks the default branch's ancestry. A clean branch
 whose commits were squash- or rebase-merged can also pass when `git cherry`
 reports no unique patches. `git cherry` and context-free twin comparisons do not cover merge resolution
-changes; a virtual no-op merge can cover the final tree instead. The removal
+changes; a virtual no-op merge can cover the final tree instead. Content-based
+proofs require a nonempty delta from the merge base. An empty start commit alone
+is not integration evidence, even when a virtual merge leaves the default tree
+unchanged. Actual ancestry and verified merged-PR evidence still apply. The removal
 result names the matching rule.
 
 Default-branch resolution uses only verified local Git refs, without a fetch:
@@ -541,7 +544,8 @@ proves it clean and integrated, with no unpushed submodule commits, lock, operat
 pending warm, or live session. Ignored artifacts stay in place. Git registration and
 submodule paths are repaired. The old workspace removal event precedes the new creation
 event. A durable `tuic-worktree-renames.jsonl` journal lets external registry consumers
-reconcile paths. Allocation uses a blocking OS file lock in the Git common directory;
+reconcile paths. Each record, including its newline, is serialized before the
+append so parallel archive workers do not interleave JSON fragments. Allocation uses a blocking OS file lock in the Git common directory;
 concurrent creates wait, and a process exit releases the lock. A failed recycle restores
 the old checkout path, registration, branch and finished allocation state before returning
 the error. Live sessions prevent recycling; fingerprint-confirmed forced deletion keeps
