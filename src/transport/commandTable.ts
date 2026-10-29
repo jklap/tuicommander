@@ -1655,6 +1655,9 @@ export const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 			body: { existing_names: args.existingNames },
 		}),
 	},
+	sweep_archive_retention: {
+		map: (args) => ({ method: "POST", path: "/worktrees/archive-retention", body: { repoPath: args.repoPath } }),
+	},
 	finalize_merged_worktree: {
 		map: (args) => ({
 			method: "POST",

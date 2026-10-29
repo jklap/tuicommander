@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- Add opt-in archived worktree retention in days, with global and per-repository settings, recorded archive age, recoverable commit refs and named cleanup results (#2469-c93f).
+
 - Add temporary, opt-in mobile Send press diagnostics with bounded event timing and viewport metadata mirrored to the host log, without draft text (#2462-5839).
 - Show queued prompt text in mobile terminal CLI and Chat, including prompts queued from CLI or desktop, with Cancel and Clear all actions (#2463-ad1c).
 

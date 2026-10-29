@@ -101,6 +101,7 @@ export interface GitOperationsDeps {
 			commits_ahead?: number;
 			worktree_dirty?: boolean;
 		}>;
+		sweepArchiveRetention: (repoPath: string) => Promise<{ deleted: string[]; kept: string[] }>;
 		finalizeMergedWorktree: (
 			repoPath: string,
 			workspaceId: string,
