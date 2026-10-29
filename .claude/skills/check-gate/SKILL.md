@@ -28,7 +28,8 @@ architecture-cycle check, plugin-docs-sync, the Makefile guards
 followed by the frontend bundle-size budget check (`scripts/report-frontend-bundles.mjs --check`:
 fails over an entry's gzip cap — `mobile.html` is the tight one — and warns at 98% of it),
 `cargo fmt --check`, `cargo clippy --workspace --exclude bm25 --release -D warnings`,
-`cargo nextest run --workspace` + doctests, the full `vitest run`, plugin tests, and
+`cargo nextest run --workspace` + doctests, the full `vitest run --coverage` (which also
+enforces the `coverage.thresholds` floors in `vitest.config.ts`), plugin tests, and
 `pnpm audit` / `cargo audit`.
 
 **Do not declare a feature complete, or tell the user "all tests pass," based only on a

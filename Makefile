@@ -178,7 +178,11 @@ check: test-shell check-desktop-embedding
 # bm25 is a vendored third-party patch (patches/bm25): not ours to lint.
 	@cd src-tauri && ../scripts/with-test-tmp.sh $(RTK) cargo clippy --workspace --exclude bm25 --release -- -D warnings && echo "  clippy ✓"
 	@cd src-tauri && ulimit -n 10240 && TUIC_TEST_FAKE_HOME=1 ../scripts/with-test-tmp.sh $(RTK) cargo nextest run --workspace && TUIC_TEST_FAKE_HOME=1 ../scripts/with-test-tmp.sh $(RTK) cargo test --doc --workspace -q && echo "  rust tests ✓"
-	@bash -o pipefail -c 'scripts/with-test-tmp.sh $(RTK) pnpm exec vitest run --reporter=dot 2>&1 | tail -3' && echo "  vitest ✓"
+# One coverage-instrumented run: it enforces vitest.config.ts's coverage floors
+# (coverage.thresholds) as well as the tests, instead of running vitest twice.
+# The filter keeps failures, threshold errors and the summaries; leak traces
+# would otherwise push them out of a tail. pipefail keeps vitest's exit code.
+	@bash -o pipefail -c 'scripts/with-test-tmp.sh $(RTK) pnpm exec vitest run --coverage --coverage.reporter=text-summary --reporter=dot 2>&1 | { grep -E "^ FAIL |ERROR: Coverage|^(Statements|Branches|Functions|Lines) +:| Test Files | Tests " || true; }' && echo "  vitest ✓ (with coverage floors)"
 	@bash -o pipefail -c 'scripts/with-test-tmp.sh $(RTK) pnpm test:plugins 2>&1 | tail -3' && echo "  plugin tests ✓"
 	@scripts/with-test-tmp.sh $(RTK) pnpm audit --audit-level=high && echo "  pnpm audit ✓"
 	@cd src-tauri && ../scripts/with-test-tmp.sh $(RTK_ERR) cargo audit -q && echo "  cargo audit ✓"
