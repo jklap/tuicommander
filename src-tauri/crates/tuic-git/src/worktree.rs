@@ -3538,12 +3538,14 @@ pub fn archive_ref_name(branch_name: &str) -> String {
     format!("refs/archive/{branch_name}")
 }
 
-/// Archive refs that may hold `tip` of `branch`: the primary ref, then the one
-/// a reused branch name falls back to, named by the tip's short SHA.
-fn archive_refs_for_tip(branch: &str, tip: &str) -> [String; 2] {
+/// Shared creation/lookup candidates: legacy branch refs, then a flat fallback
+/// outside refs/archive so a retained parent ref cannot block a nested branch.
+fn archive_refs_for_tip(branch: &str, tip: &str) -> [String; 3] {
     let primary = archive_ref_name(branch);
     let suffixed = format!("{primary}-{}", tip.get(..7).unwrap_or(tip));
-    [primary, suffixed]
+    let digest = hex::encode(Sha256::digest(format!("{branch}\0{tip}").as_bytes()));
+    let flat = format!("refs/tuic-archive/{digest}");
+    [primary, suffixed, flat]
 }
 
 /// Preserve a force-deleted branch tip without replacing an earlier archive.
@@ -3595,8 +3597,8 @@ fn preserve_archive_tip(repo: &Path, branch: &str, tip: &str) -> Result<(), Stri
         });
         if !created {
             return Err(format!(
-                "Cannot preserve '{branch}' at {} or {}: {failure}",
-                archives[0], archives[1]
+                "Cannot preserve '{branch}' at {}: {failure}",
+                archives.join(" or ")
             ));
         }
     }
@@ -5090,6 +5092,19 @@ pub fn sweep_archived_worktrees(
             }
             if !available(path) {
                 return Err("live session uses this archive".into());
+            }
+            // Status and non-force removal both overlook files hidden by index flags.
+            let index = git_cmd(path)
+                .args(["ls-files", "-v", "-z"])
+                .run()
+                .map_err(|error| format!("Cannot inspect archived index: {error}"))?;
+            if index.stdout.split('\0').any(|entry| {
+                entry
+                    .as_bytes()
+                    .first()
+                    .is_some_and(|tag| *tag == b'S' || tag.is_ascii_lowercase())
+            }) {
+                return Err("index flags hide possible uncommitted files (skip-worktree or assume-unchanged)".into());
             }
             let status = git_cmd(path)
                 .args([
@@ -8124,31 +8139,40 @@ mod tests {
         ));
     }
 
-    // Catches: status and non-force removal both overlooking skip-worktree local edits.
+    // Catches: status and non-force removal both overlooking skip-worktree/assume-unchanged local edits.
     #[test]
     fn archive_retention_keeps_local_edits_hidden_by_skip_worktree() {
-        let repo = setup_test_repo();
-        let checkout =
-            crate::test_fixtures::worktree_with(repo.path(), "retention-hidden-edits", false);
-        git_cmd(&checkout)
-            .args(["update-index", "--skip-worktree", "README.md"])
-            .run()
-            .unwrap();
-        fs::write(checkout.join("README.md"), "precious local configuration").unwrap();
-        let archived = PathBuf::from(
-            archive_worktree_at(repo.path(), "retention-hidden-edits", None, || Ok(100)).unwrap(),
-        );
+        for flag in ["--skip-worktree", "--assume-unchanged"] {
+            let repo = setup_test_repo();
+            let checkout =
+                crate::test_fixtures::worktree_with(repo.path(), "retention-hidden-edits", false);
+            git_cmd(&checkout)
+                .args(["update-index", flag, "README.md"])
+                .run()
+                .unwrap();
+            fs::write(checkout.join("README.md"), "precious local configuration").unwrap();
+            let archived = PathBuf::from(
+                archive_worktree_at(repo.path(), "retention-hidden-edits", None, || Ok(100))
+                    .unwrap(),
+            );
 
-        let report = sweep_archived_worktrees(repo.path(), 1, 86500, |_| true).unwrap();
+            let report = sweep_archived_worktrees(repo.path(), 1, 86500, |_| true).unwrap();
 
-        assert!(
-            report.deleted.is_empty(),
-            "locally modified checkout was deleted: {report:?}"
-        );
-        assert_eq!(
-            fs::read_to_string(archived.join("README.md")).unwrap(),
-            "precious local configuration"
-        );
+            assert!(
+                report.deleted.is_empty(),
+                "locally modified checkout was deleted: {report:?}"
+            );
+            assert!(
+                report
+                    .kept
+                    .iter()
+                    .any(|reason| reason.contains("index flags"))
+            );
+            assert_eq!(
+                fs::read_to_string(archived.join("README.md")).unwrap(),
+                "precious local configuration"
+            );
+        }
     }
 
     // Catches: a retained parent archive ref preventing archival of a later nested branch.
@@ -8177,7 +8201,15 @@ mod tests {
             result.is_ok(),
             "previous parent archive blocks child archival: {result:?}"
         );
-        assert_eq!(rev_at(Path::new(&result.unwrap()), "HEAD").unwrap(), tip);
+        let archived = PathBuf::from(result.unwrap());
+        assert_eq!(rev_at(&archived, "HEAD").unwrap(), tip);
+        assert!(archived_at_tip(repo.path(), "retention-parent/child", &tip));
+        sweep_archived_worktrees(repo.path(), 1, 86600, |_| true).unwrap();
+        assert!(
+            !archived.exists(),
+            "flat recovery ref was not recognized by retention"
+        );
+        assert!(archived_at_tip(repo.path(), "retention-parent/child", &tip));
     }
 
     // Catches: early expiry, mtime-based age, losing archive refs, and dirty-file loss.
