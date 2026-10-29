@@ -142,7 +142,9 @@ pub(crate) enum RemoteTransport {
         /// never discovered from the remote host, unlike `Local`'s field.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates instance id for the current owner.","operations":["get","set"],"confirmationClass":"execution_authority"}))]
-        #[schemars(description = "TUICommander instance id (a lowercase DNS label) this connection targets.")]
+        #[schemars(
+            description = "TUICommander instance id (a lowercase DNS label) this connection targets."
+        )]
         instance_id: Option<String>,
     },
     Direct {
@@ -183,7 +185,9 @@ pub(crate) enum RemoteTransport {
         #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates port for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
         port: Option<u16>,
         #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates instance id for the current owner.","operations":["get","set"],"confirmationClass":"execution_authority"}))]
-        #[schemars(description = "TUICommander instance id (a lowercase DNS label) this connection targets.")]
+        #[schemars(
+            description = "TUICommander instance id (a lowercase DNS label) this connection targets."
+        )]
         instance_id: Option<String>,
     },
 }
@@ -1891,8 +1895,14 @@ mod tests {
         let second: Vec<RemoteConnection> = serde_json::from_value(written.clone()).unwrap();
 
         assert_eq!(written, serde_json::to_value(&second).unwrap());
-        assert_eq!(written[3]["transport"], serde_json::json!({"type": "Relay"}));
-        assert_eq!(written[1]["transport"]["url"], main_shape[1]["transport"]["url"]);
+        assert_eq!(
+            written[3]["transport"],
+            serde_json::json!({"type": "Relay"})
+        );
+        assert_eq!(
+            written[1]["transport"]["url"],
+            main_shape[1]["transport"]["url"]
+        );
         for (i, entry) in main_shape.as_array().unwrap().iter().enumerate() {
             for key in ["id", "name", "auth_username", "enabled"] {
                 assert_eq!(written[i][key], entry[key], "entry {i} field {key}");

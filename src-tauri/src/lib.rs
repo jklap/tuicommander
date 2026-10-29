@@ -5522,8 +5522,12 @@ mod tests {
 
     #[test]
     fn resolve_connect_target_self_signed_upgrades_plain_lan_ip() {
-        let (scheme, host) =
-            resolve_connect_target(&tailscale::TailscaleState::NotRunning, true, true, "192.168.1.50");
+        let (scheme, host) = resolve_connect_target(
+            &tailscale::TailscaleState::NotRunning,
+            true,
+            true,
+            "192.168.1.50",
+        );
         assert_eq!(scheme, "https");
         assert_eq!(host, "192.168.1.50");
     }
