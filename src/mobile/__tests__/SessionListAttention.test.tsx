@@ -37,8 +37,8 @@ describe("mobile session attention", () => {
 		expect(banner.textContent).toContain("Approve?");
 	});
 
-	// Catches: moving the counter action opens an idle session or drops waiting-session navigation.
-	it.each([1, 3])("opens the first of %i waiting sessions from the AWAITING tile", async (count) => {
+	// Catches: selecting Awaiting navigates away instead of keeping all waiting rows visible.
+	it.each([1, 3])("filters to all %i waiting sessions without opening one", async (count) => {
 		const onNavigate = vi.fn();
 		const view = render(() => (
 			<SessionsScreen
@@ -57,7 +57,11 @@ describe("mobile session attention", () => {
 			/>
 		));
 		await fireEvent.click(view.getByRole("button", { name: new RegExp(`^${count}\\s*Awaiting$`) }));
-		expect(onNavigate).toHaveBeenCalledWith("review");
+		expect(onNavigate).not.toHaveBeenCalled();
+		expect(view.getAllByRole("button", { name: "Open session Wiz-Pr" })).toHaveLength(count);
+		expect(view.getByRole("button", { name: new RegExp(`^${count}\\s*Awaiting$`) }).getAttribute("aria-pressed")).toBe(
+			"true",
+		);
 	});
 
 	it("calls the active state Working", () => {

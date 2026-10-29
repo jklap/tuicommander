@@ -6,6 +6,7 @@ import { rpc } from "../../transport";
 import { HeroMetrics } from "../components/HeroMetrics";
 import { NewSessionSheet } from "../components/NewSessionSheet";
 import { SessionCard } from "../components/SessionCard";
+import type { SessionStatus } from "../components/StatusBadge";
 import type { SessionInfo } from "../useSessions";
 import {
 	readRecentSessionIds,
@@ -30,6 +31,9 @@ interface SessionsScreenProps {
 
 const PULL_THRESHOLD = 60;
 
+// The Working counter already includes delegated work; filtering must use that same group.
+const counterStatus = (status: SessionStatus) => (status === "sub-tasks" ? "busy" : status);
+
 export function SessionsScreen(props: SessionsScreenProps) {
 	// Key by session id: polling replaces session objects, but must not reset the busy hold.
 	const sessionsById = createMemo(() => new Map(props.sessions.map((session) => [session.session_id, session])));
@@ -41,9 +45,8 @@ export function SessionsScreen(props: SessionsScreenProps) {
 	const counts = createMemo(() => {
 		const totals = { busy: 0, idle: 0, question: 0 };
 		for (const { status } of sessionStatuses()) {
-			const value = status();
-			if (value === "sub-tasks") totals.busy++;
-			else if (value === "busy" || value === "idle" || value === "question") totals[value]++;
+			const value = counterStatus(status());
+			if (value === "busy" || value === "idle" || value === "question") totals[value]++;
 		}
 		return totals;
 	});
@@ -52,6 +55,15 @@ export function SessionsScreen(props: SessionsScreenProps) {
 	const [showNewSession, setShowNewSession] = createSignal(false);
 	const [searchOpen, setSearchOpen] = createSignal(false);
 	const [searchQuery, setSearchQuery] = createSignal("");
+	const [selectedStates, setSelectedStates] = createSignal<ReadonlySet<SessionStatus>>(new Set());
+	function toggleState(status: SessionStatus) {
+		setSelectedStates((previous) => {
+			const next = new Set(previous);
+			if (next.has(status)) next.delete(status);
+			else next.add(status);
+			return next;
+		});
+	}
 	const [repos, setRepos] = createSignal<string[]>([]);
 	// Memoized so the sort runs on a real list change, not on every render.
 	// `reconcileSessions` hands back the same array reference for an idle poll,
@@ -65,16 +77,20 @@ export function SessionsScreen(props: SessionsScreenProps) {
 	);
 	const visibleSessions = createMemo(() => {
 		const query = searchQuery().trim().toLowerCase();
-		if (!query) return ordered();
-		return ordered().filter((session) =>
-			[
-				session.display_name,
-				session.cwd,
-				session.worktree_path,
-				session.worktree_branch,
-				session.state?.agent_type,
-			].some((value) => value?.toLowerCase().includes(query)),
-		);
+		return ordered().filter((session) => {
+			const status = statusById().get(session.session_id)?.();
+			if (selectedStates().size > 0 && (!status || !selectedStates().has(counterStatus(status)))) return false;
+			return (
+				!query ||
+				[
+					session.display_name,
+					session.cwd,
+					session.worktree_path,
+					session.worktree_branch,
+					session.state?.agent_type,
+				].some((value) => value?.toLowerCase().includes(query))
+			);
+		});
 	});
 	// Nest after filtering: a child whose parent was filtered out stays a visible top-level row.
 	const rows = createMemo(() => nestUnderParents(visibleSessions()));
@@ -268,10 +284,8 @@ export function SessionsScreen(props: SessionsScreenProps) {
 					workingCount={counts().busy}
 					idleCount={counts().idle}
 					awaitingCount={counts().question}
-					onAwaitingClick={() => {
-						const waiting = props.sessions.find((session) => statusById().get(session.session_id)?.() === "question");
-						if (waiting) props.onSelectSession(waiting.session_id);
-					}}
+					selectedStates={selectedStates()}
+					onToggleState={toggleState}
 				/>
 			</Show>
 
@@ -302,10 +316,16 @@ export function SessionsScreen(props: SessionsScreenProps) {
 				</div>
 			</Show>
 
-			<Show when={searchQuery().trim() && visibleSessions().length === 0 && props.sessions.length > 0}>
+			<Show
+				when={
+					(searchQuery().trim() || selectedStates().size > 0) &&
+					visibleSessions().length === 0 &&
+					props.sessions.length > 0
+				}
+			>
 				<div class={styles.noMatch}>
 					<span class={styles.emptyTitle}>No matching sessions</span>
-					<span class={styles.emptyHint}>Try another name, repository, branch or agent</span>
+					<span class={styles.emptyHint}>Try another state, name, repository, branch or agent</span>
 				</div>
 			</Show>
 

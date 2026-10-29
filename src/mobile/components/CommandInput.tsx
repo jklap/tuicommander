@@ -21,6 +21,8 @@ import { SlashMenuOverlay } from "./SlashMenuOverlay";
 import { type ComposerInputKey, computeInputDelta, isPostSendGuardActive, isSupersetEcho } from "./syncGuards";
 
 interface CommandInputProps {
+	/** Refresh the server-owned FIFO after an accepted enqueue. */
+	onQueued?: (sessionId: string) => void;
 	sessionId: string;
 	serverVoiceRecording?: boolean;
 	onBrowserDictating?: (recording: boolean) => void;
@@ -98,6 +100,7 @@ export function CommandInput(props: CommandInputProps) {
 				expectedDraft: draft,
 			});
 			if (!result.accepted) throw new Error("Queue was not accepted");
+			props.onQueued?.(sessionId);
 			syncedText = "";
 			inputRequest = null;
 			lastSendAt = Date.now();
@@ -143,7 +146,9 @@ export function CommandInput(props: CommandInputProps) {
 	let textareaEl: HTMLTextAreaElement | undefined;
 	// The local draft baseline, including explicitly requested PTY completions
 	// and history replacements. Every edit computes its delta from this text.
-	let syncedText: string | null = restoredPartial ? null : "";
+	// Until the first local edit, the PTY may already hold a desktop draft.
+	// Reconcile that snapshot without importing it into the visible composer.
+	let syncedText: string | null = null;
 	let inputRequest: { kind: "completion" | "history"; armed: boolean } | null = null;
 	// Timestamp of the last Enter (send()). Within POST_SEND_GUARD_MS, all
 	// incoming ptyInputLine updates are ignored to prevent a lagging echo of

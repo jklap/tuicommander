@@ -10,6 +10,12 @@ const mod = isMacOS() ? "Cmd" : "Ctrl";
 
 export const TIPS: Tip[] = [
 	{
+		feature: "Mobile session state filters",
+		description:
+			"Tap Working, Idle or Awaiting on the mobile Sessions screen to filter by those states. Select multiple counters or clear all to show every session; search and sorting still apply.",
+		shortcut: null,
+	},
+	{
 		feature: "Review-only PR automation",
 		description:
 			"Opt in with pull_request_reviews in the host automations.json. The host reviews the latest GitHub head and posts a COMMENT review without pushing branches or creating another PR. Unknown publication is not retried.",
@@ -263,7 +269,7 @@ export const TIPS: Tip[] = [
 	{
 		feature: "Mobile prompt queue",
 		description:
-			"Hold Send and select Queue to submit your current agent draft at its next ready window. Tap Send to submit now.",
+			"Hold Send and select Queue to submit your current agent draft at its next ready window. Chat shows pending text above the input, with Cancel and Clear all. Tap Send to submit now.",
 		shortcut: null,
 	},
 	{
