@@ -890,10 +890,13 @@ form keeps its existing ordered `navigate-enter` choices. The geometry-preservin
 ### ego startup project trust (2461)
 
 The native project-trust modal is a confident text question, not a numbered
-selector. Recognition requires the project offer heading, the native refusal
+selector. Recognition requires the native refusal
 explanation, and a final active `Trust project files in …? [y/N]` prompt.
 The parser joins ego's hard-wrapped path rows as well as terminal soft wraps.
 Answered prompts and retained prompts above newer output do not match.
 The existing mobile key bar sends `y` or `n` followed by Enter for ego.
 `ego-trust-2461.tcap` records ego 0.4.0 at 24 rows by 48 columns in an isolated
 untrusted scratch workspace. The PTY replay checks shared session state.
+`ego-trust-short-2461.tcap` records the 12-row boundary: the offer heading has
+scrolled off-screen, but the refusal explanation and active question remain.
+The heading is not required for detection.

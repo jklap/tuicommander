@@ -77,10 +77,7 @@ fn parse_ego_trust_question(rows: &[String]) -> Option<ParsedEvent> {
         .rposition(|row| row.starts_with(PREFIX))?;
     if !rows[..start]
         .iter()
-        .any(|row| row == "Project files offered for trust:")
-        || !rows[..start]
-            .iter()
-            .any(|row| row == "No: continue without project files.")
+        .any(|row| row == "No: continue without project files.")
     {
         return None;
     }
@@ -328,6 +325,33 @@ mod tests {
                 })
             ),
             "recorded trust modal must expose Yes/No, got {event:?}"
+        );
+    }
+
+    /// Catches: a short mobile viewport clipping the trust heading and hiding Yes/No.
+    #[test]
+    fn captured_ego_trust_survives_short_mobile_viewport() {
+        let capture = crate::pty_capture::decode_capture(include_bytes!(
+            "../../../src/fixtures/agent_prompts/ego-trust-short-2461.tcap"
+        ))
+        .unwrap();
+        let (height, width) = capture.geometry.unwrap();
+        let mut grid = crate::vt_log::VtLogBuffer::new(height, width, 1000);
+        for record in capture.records {
+            if record.direction == crate::pty_capture::CaptureDirection::Output {
+                grid.process(&record.data);
+            }
+        }
+        let event = parse_ego_question(&grid.screen_rows());
+        assert!(
+            matches!(
+                event,
+                Some(ParsedEvent::Question {
+                    confident: true,
+                    ..
+                })
+            ),
+            "active trust prompt in a short mobile viewport must expose Yes/No, got {event:?}"
         );
     }
 
