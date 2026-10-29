@@ -202,6 +202,8 @@ Right-click an HTTP(S) terminal link (including localhost) and choose **Start in
 - **Send to agent** sanitises and fences page evidence in Rust, then uses the same idle gate as Markdown reviews: deliver now when idle, queue when busy. Failed sends retain the cards; retry keys prevent duplicate delivery. See the [pilot guide](user-guide/design-mode.md) for setup and validation limits.
 
 ### 1.1 PTY Sessions
+
+- **Mobile state filters** — Tap Working, Idle or Awaiting counters to select any combination of session states. No selection shows all sessions. Counts stay global; state filters combine with search and sorting, and zero-count states remain selectable.
 - Up to 50 concurrent PTY sessions (configurable in Rust `MAX_SESSIONS`)
 - Each tab runs an independent pseudo-terminal with the user's shell
 - Terminals are never unmounted — hidden tabs stay alive with full scroll history

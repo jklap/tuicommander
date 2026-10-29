@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 
 import { cleanup, fireEvent, render, waitFor } from "@solidjs/testing-library";
+import { createSignal } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { SessionDetailScreen } from "../screens/SessionDetailScreen";
 import type { SessionInfo } from "../useSessions";
@@ -8,7 +9,16 @@ import type { SessionInfo } from "../useSessions";
 const { rpc } = vi.hoisted(() => ({ rpc: vi.fn() }));
 vi.mock("../../transport", () => ({ rpc, subscribeEvents: vi.fn(async () => () => {}) }));
 vi.mock("../../stores/appLogger", () => ({ appLogger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() } }));
-vi.mock("../components/OutputView", () => ({ OutputView: () => <div data-testid="terminal-output">Output</div> }));
+vi.mock("../components/OutputView", () => ({
+	OutputView: (props: { visible: boolean }) => (
+		<div data-testid="terminal-output" hidden={!props.visible}>
+			Output
+		</div>
+	),
+}));
+vi.mock("../../components/Terminal/TerminalChatTranscript", () => ({
+	TerminalChatTranscript: () => <div data-testid="terminal-chat-view">Transcript</div>,
+}));
 vi.mock("../components/CommandInput", () => ({ CommandInput: () => <textarea aria-label="Command" /> }));
 vi.mock("../components/TerminalKeybar", () => ({ TerminalKeybar: () => <div /> }));
 vi.mock("../components/CommandWidget", () => ({
@@ -175,4 +185,71 @@ describe("mobile session header", () => {
 		await waitFor(() => expect(view.getByRole("alert").textContent).toMatch(/no registered repository/i));
 		expect(rpc).not.toHaveBeenCalledWith("progress_list", expect.anything());
 	});
+});
+
+// Catches: action buttons replace the selected-segment primitive, losing its persistent marker.
+it("selects CLI on session entry with the shared selected-segment contract", () => {
+	rpcReplies({});
+	const view = render(() => (
+		<SessionDetailScreen
+			subscribeChatWake={() => () => {}}
+			session={session("mode-entry-2459", "claude", "Entry mode")}
+			sessionExists
+			onBack={() => {}}
+			onOpenFiles={() => {}}
+		/>
+	));
+	expect(view.getByTestId("terminal-output").hidden).toBe(false);
+	expect(view.queryAllByRole("tab", { selected: true }).map((tab) => tab.textContent)).toEqual(["CLI"]);
+});
+
+// Catches: the header drifts from the shown mode on switch, a replacement poll, or remembered entry.
+it("keeps the selected segment and visible view together across switches and reconnect snapshots", async () => {
+	rpcReplies({});
+	const [current, setCurrent] = createSignal(session("mode-reconnect-2459", "claude", "Reconnect mode"));
+	const screen = () => (
+		<SessionDetailScreen
+			subscribeChatWake={() => () => {}}
+			session={current()}
+			sessionExists
+			onBack={() => {}}
+			onOpenFiles={() => {}}
+		/>
+	);
+	const view = render(screen);
+	await fireEvent.click(view.getByRole("tab", { name: "Chat" }));
+	expect(view.getByRole("tab", { selected: true }).textContent).toBe("Chat");
+	expect(view.getByTestId("terminal-output").hidden).toBe(true);
+	expect(view.getByTestId("terminal-chat-view")).toBeTruthy();
+	setCurrent(session("mode-reconnect-2459", "claude", "Reconnected mode"));
+	expect(view.getByRole("tab", { selected: true }).textContent).toBe("Chat");
+	expect(view.getByTestId("terminal-output").hidden).toBe(true);
+	view.unmount();
+	const entered = render(screen);
+	expect(entered.getByRole("tab", { selected: true }).textContent).toBe("Chat");
+	expect(entered.getByTestId("terminal-chat-view")).toBeTruthy();
+	await fireEvent.click(entered.getByRole("tab", { name: "CLI" }));
+	expect(entered.getByRole("tab", { selected: true }).textContent).toBe("CLI");
+	expect(entered.getByTestId("terminal-output").hidden).toBe(false);
+	expect(entered.queryByTestId("terminal-chat-view")).toBeNull();
+});
+
+// Catches: a remembered Chat choice leaves a CLI-only session hidden behind an unavailable view.
+it("shows only CLI when a session loses Chat support", async () => {
+	rpcReplies({});
+	const [current, setCurrent] = createSignal(session("mode-cli-only-2459", "claude", "CLI-only mode"));
+	const view = render(() => (
+		<SessionDetailScreen
+			subscribeChatWake={() => () => {}}
+			session={current()}
+			sessionExists
+			onBack={() => {}}
+			onOpenFiles={() => {}}
+		/>
+	));
+	await fireEvent.click(view.getByRole("tab", { name: "Chat" }));
+	setCurrent(session("mode-cli-only-2459", "gemini", "CLI-only mode"));
+	expect(view.queryByRole("tablist", { name: "Terminal view" })).toBeNull();
+	expect(view.getByTestId("terminal-output").hidden).toBe(false);
+	expect(view.queryByTestId("terminal-chat-view")).toBeNull();
 });

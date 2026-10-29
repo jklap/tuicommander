@@ -1,3 +1,7 @@
+## Mobile Sessions state filters (2458-ba9d)
+
+- [x] Worktree Vite and agent-browser at 390×844: toggle Working/Idle/Awaiting, combine states, select zero Awaiting without changing counter bounds, and intersect Working with API search. Five screenshots and browser assertions: `~/Gits/.tmp/results/tuic-2458-evidence/`. No daily app or backend was used.
+
 ## Windows monitoring directory metadata (2310-6e76, round l) — Rust rebuild/restart required
 
 - [ ] Coordinator: confirm complete native Windows-x64 CI success after the directory-metadata repair. The raw-event replay proves the recorded event no longer rejects an unchanged status load; rb is not native Windows GREEN. Keep the original unchanged-sibling and tracked `target/tracked.txt` assertions and 20-second deadlines.
