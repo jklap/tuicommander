@@ -3,6 +3,7 @@ import { render, waitFor } from "@solidjs/testing-library";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { CodeEditorTab } from "../../components/CodeEditorPanel/CodeEditorTab";
 import { uiStore } from "../../stores/ui";
+import { nextAnimationFrame } from "../helpers/animationFrame";
 
 vi.hoisted(() => {
 	Object.defineProperty(navigator, "platform", { configurable: true, value: "MacIntel" });
@@ -23,7 +24,9 @@ beforeEach(() => {
 	uiStore._testCancelPendingSave();
 });
 
-afterEach(() => {
+afterEach(async () => {
+	// As in the other mounted editor tests, finish measurement/focus frames.
+	await nextAnimationFrame();
 	uiStore._testCancelPendingSave();
 	document.body.innerHTML = "";
 });

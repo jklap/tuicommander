@@ -2,7 +2,13 @@ import { cleanup, fireEvent, render } from "@solidjs/testing-library";
 import { afterEach, expect, it, vi } from "vitest";
 import { VariableInputDialog } from "../../components/SmartPromptsDropdown/VariableInputDialog";
 
-afterEach(cleanup);
+import { nextAnimationFrame } from "../helpers/animationFrame";
+
+afterEach(async () => {
+	// The control/submit assertions finish before the initial focus frame.
+	await nextAnimationFrame();
+	cleanup();
+});
 // Catches: shared inputs stop forwarding values or Run loses native submit semantics.
 it("keeps suggestions, whitespace validation and submitted values through shared controls", () => {
 	const onSubmit = vi.fn();

@@ -2,6 +2,7 @@ import { render, waitFor } from "@solidjs/testing-library";
 import { afterEach, expect, it, vi } from "vitest";
 import { CodeEditorTab } from "../../components/CodeEditorPanel/CodeEditorTab";
 import { editorTabsStore } from "../../stores/editorTabs";
+import { nextAnimationFrame } from "../helpers/animationFrame";
 
 vi.mock("../../invoke", () => ({
 	invoke: vi.fn(async (command: string) => {
@@ -13,7 +14,9 @@ vi.mock("../../invoke", () => ({
 }));
 vi.mock("../../hooks/useFileBrowser", () => ({ useFileBrowser: () => ({ writeFile: vi.fn() }) }));
 
-afterEach(() => {
+afterEach(async () => {
+	// Let real editor measurement/focus frames settle after the test unmounts.
+	await nextAnimationFrame();
 	editorTabsStore.clearAll();
 	document.body.innerHTML = "";
 });
