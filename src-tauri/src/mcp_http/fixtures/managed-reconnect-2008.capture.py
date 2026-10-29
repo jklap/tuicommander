@@ -1,4 +1,4 @@
-import os, json, socket, subprocess, time, urllib.request, urllib.error, pathlib, uuid, http.client, hashlib, sys
+import os, json, socket, subprocess, time, urllib.request, urllib.error, pathlib, uuid, http.client, hashlib, sys, tempfile
 root=pathlib.Path(__file__).resolve().parents[4]
 home=pathlib.Path(sys.argv[1]).resolve()
 # Scratch HOME under the host temp dir, never inside the real HOME.

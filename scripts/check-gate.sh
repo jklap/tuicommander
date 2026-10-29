@@ -12,9 +12,10 @@
 #   1. `make check 2>&1 | tee somelog` reports the exit code of `tee` (almost
 #      always 0), not `make`'s — a real failure partway through the chain
 #      (`make check`'s steps are joined with `&&`) goes unnoticed if you only
-#      look at the pipeline's own exit status. This script uses process
-#      substitution (`> >(tee ...)`) instead of a trailing pipe, so `$?` here
-#      is `make`'s own exit code.
+#      look at the pipeline's own exit status. This script runs make in the
+#      background with its output in a log file (no pipe and no process
+#      substitution, which needs /dev/fd and sandboxes deny), streams that
+#      log as it grows, and takes `make`'s own exit code from `wait`.
 #   2. `src-tauri/target/debug/tuic-hook` — which `agent_hook.rs`'s
 #      `golden_wire_output` tests execute directly and assert on the real
 #      output of — can transiently read as 0 bytes even right after a
@@ -85,7 +86,8 @@ if git submodule status plugins 2>/dev/null | grep -q '^-'; then
 	echo "      reported below, the gate is effectively green."
 fi
 
-LOG="$(mktemp --tmpdir="${TMPDIR:-/tmp}" tuic-check-gate.XXXXXX)"
+# A full template path: BSD and GNU mktemp both take it (--tmpdir is GNU-only).
+LOG="$(mktemp "${TMPDIR:-/tmp}/tuic-check-gate.XXXXXX")"
 
 echo
 echo "==> Running make check (several minutes: clippy --release + full nextest run)"
@@ -94,20 +96,43 @@ echo "==> Running make check (several minutes: clippy --release + full nextest r
 # pass through the tested command's real status. Capture `$?` directly
 # instead, with `set -e` off around just this one command since a nonzero
 # status here is expected and handled explicitly below, not a script bug.
-# No `> >(tee "$LOG")`: process substitution needs /dev/fd/*, which sandboxes
-# deny. make writes straight to the log; a background `tail -f` shows it live
-# and `wait` returns make's own exit status.
+# No `> >(tee "$LOG")` and no `| tee`: process substitution needs /dev/fd/*,
+# which sandboxes deny, and a pipe hangs when a leaked grandchild keeps it
+# open. make writes straight to the log; this shell prints each new chunk of
+# it until make exits, then drains whatever is left (no sleep-and-hope), and
+# `wait` returns make's own exit status. A background job of a script ignores
+# SIGINT, so the trap forwards INT/TERM (and an early EXIT) to make itself;
+# GNU make passes SIGTERM on to the recipe it is running.
+printed=0
+print_new_log() {
+	local size
+	size=$(wc -c <"$LOG" | tr -d ' ')
+	if [ "$size" -gt "$printed" ]; then
+		tail -c "+$((printed + 1))" "$LOG" | head -c "$((size - printed))"
+		printed=$size
+	fi
+}
+make_pid=
+stop_make() {
+	if [ -n "$make_pid" ] && kill -0 "$make_pid" 2>/dev/null; then
+		kill -TERM "$make_pid" 2>/dev/null || true
+		wait "$make_pid" 2>/dev/null || true
+	fi
+}
+trap 'stop_make' EXIT
+trap 'stop_make; print_new_log; echo; echo "check-gate: interrupted; log kept at $LOG" >&2; exit 130' INT
+trap 'stop_make; print_new_log; echo; echo "check-gate: terminated; log kept at $LOG" >&2; exit 143' TERM
 set +e
-make check > "$LOG" 2>&1 &
+make check >"$LOG" 2>&1 &
 make_pid=$!
-tail -n +1 -f "$LOG" &
-tail_pid=$!
-trap 'kill "$tail_pid" 2>/dev/null || true' EXIT
+while kill -0 "$make_pid" 2>/dev/null; do
+	print_new_log
+	sleep 1
+done
 wait "$make_pid"
 status=$?
-sleep 1 # let tail print the last lines before it is stopped
-kill "$tail_pid" 2>/dev/null || true
-wait "$tail_pid" 2>/dev/null
+make_pid=
+print_new_log
 set -e
 
 if [ "$status" -eq 0 ]; then

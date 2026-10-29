@@ -10,6 +10,7 @@ import os
 from pathlib import Path
 import subprocess
 import sys
+import tempfile
 import threading
 
 root = Path(__file__).resolve().parents[4]

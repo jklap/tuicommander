@@ -7,7 +7,8 @@ vi.mock("../invoke", () => ({ invoke: vi.fn().mockResolvedValue([]) }));
 vi.mock("../stores/settings", () => ({
 	DEFAULT_THEME: "commander",
 	FONT_FAMILIES: {},
-	settingsStore: { state: { theme: "commander" } },
+	// applyAppTheme re-applies the indicator overrides after rewriting the inline style block.
+	settingsStore: { state: { theme: "commander", indicatorOverrides: [] } },
 }));
 vi.mock("../stores/appLogger", () => ({ appLogger: { warn: vi.fn() } }));
 const environment = vi.hoisted(() => ({ desktop: true }));

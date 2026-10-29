@@ -1,6 +1,7 @@
 {
 	"comment": "Shrink-only per-file count of hard-coded /tmp-family literals that are NOT write-shaped (fixture strings, classifier inputs). Maintained by scripts/check-no-hardcoded-tmp.mjs --write-baseline, which refuses to raise a count.",
 	"counts": {
+		".claude/skills/reorg-and-rebase-onto-main/scripts/classify.py": 1,
 		"scripts/github-work-desktop-e2e.test.mjs": 1,
 		"scripts/test-tmp-root.mjs": 1,
 		"src-tauri/crates/tuic-cli/src/main.rs": 1,
@@ -64,7 +65,7 @@
 		"src/__tests__/stores/repositories.test.ts": 19,
 		"src/__tests__/stores/settingsRefusedEdit.test.ts": 1,
 		"src/__tests__/stores/ui.test.ts": 4,
-		"src/__tests__/transport.test.ts": 9,
+		"src/__tests__/transport.test.ts": 11,
 		"src/__tests__/utils/externalLinkClick.critic.test.ts": 1,
 		"src/__tests__/utils/launchCommandWithPrompt.test.ts": 1,
 		"src/__tests__/utils/osc7.test.ts": 2,

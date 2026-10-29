@@ -49,7 +49,12 @@ describe("Activity Dashboard repository labels", () => {
 		session("outside-session", "/scratch/notes");
 		const rows = mode === "detached" ? snapshotToRows(buildActivitySnapshot()) : undefined;
 		const view = render(() => <ActivityDashboard embedded terminals={rows ? () => rows : undefined} />);
-		const labelFor = (name: string) => view.getByText(name).parentElement?.textContent;
+		// The visible label, without the aria-hidden 1-9 shortcut badge in front of it.
+		const labelFor = (name: string) => {
+			const cell = view.getByText(name).parentElement?.cloneNode(true) as HTMLElement | undefined;
+			for (const hidden of cell?.querySelectorAll('[aria-hidden="true"]') ?? []) hidden.remove();
+			return cell?.textContent;
+		};
 		expect.soft(labelFor("main-session")).toBe("main-sessionBackend API");
 		expect.soft(labelFor("worktree-session")).toBe("worktree-sessionBackend API · feat/auth");
 		expect.soft(labelFor("outside-session")).toBe("outside-sessionnotes");

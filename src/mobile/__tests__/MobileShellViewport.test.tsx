@@ -6,7 +6,11 @@ import { cleanup, render, waitFor } from "@solidjs/testing-library";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import MobileApp from "../MobileApp";
 
-vi.mock("../../transport", () => ({ rpc: vi.fn(async () => ({ repos: {} })) }));
+// The shell subscribes to backend events (ptyOpenUrl's open-url listener).
+vi.mock("../../transport", () => ({
+	rpc: vi.fn(async () => ({ repos: {} })),
+	subscribeEvents: vi.fn(async () => () => {}),
+}));
 vi.mock("../../invoke", () => ({ invoke: vi.fn() }));
 vi.mock("../../stores/appLogger", () => ({ appLogger: { debug: vi.fn(), warn: vi.fn(), error: vi.fn() } }));
 vi.mock("../../stores/settings", () => ({
@@ -30,10 +34,6 @@ vi.mock("../useVersionCheck", () => ({
 	useVersionCheck: () => ({ updateAvailable: () => false, serverDown: () => false, applyUpdate: vi.fn() }),
 }));
 vi.mock("../../components/McpConfirmHost/McpConfirmHost", () => ({ McpConfirmHost: () => <div /> }));
-vi.mock("../../stores/agentWrapPrompt", () => ({
-	subscribeAgentWrapPrompt: () => Promise.resolve(() => {}),
-	pendingAgentWrapPrompts: () => [],
-}));
 
 // iPhone standalone PWA (Boss, 2026-10-12): 874 CSS px tall, 62 px top inset.
 const SCREEN = 874;

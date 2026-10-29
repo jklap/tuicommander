@@ -687,7 +687,7 @@ mod tests {
             .session_maps
             .session_states
             .entry("s1".to_string())
-            .or_insert_with(crate::state::SessionState::default);
+            .or_default();
         state
             .session_maps
             .session_states
@@ -720,7 +720,7 @@ mod tests {
             .session_maps
             .session_states
             .entry("s1".to_string())
-            .or_insert_with(crate::state::SessionState::default);
+            .or_default();
         state
             .session_maps
             .session_states
