@@ -150,14 +150,9 @@
 .pillBtn {
   display: flex;
   align-items: center;
-  height: 20px;
-  padding: 0 10px;
-  border-radius: 10px;
-  border: 1px solid var(--accent);
   background: var(--bg-primary);
   color: var(--accent);
   font-size: var(--font-xs);
-  cursor: pointer;
 }
 
 .pillBtn:hover {

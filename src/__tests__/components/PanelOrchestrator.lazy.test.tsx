@@ -41,6 +41,9 @@ vi.mock("../../stores/terminals", () => ({
 	terminalsStore: {
 		getIds: () => ["terminal-1"],
 		get: () => ({ cwd: "/repo" }),
+		// The suggest-overlay container is always mounted (no longer gated on
+		// settingsStore.state.suggestFollowups), so it reads the active terminal.
+		getActive: () => undefined,
 		isDetached: () => false,
 		state: { activeId: "terminal-1" },
 	},

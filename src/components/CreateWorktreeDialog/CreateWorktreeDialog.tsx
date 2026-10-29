@@ -348,7 +348,8 @@ const BaseRefDropdown: Component<{
 						class={`${s.dropdownList} ${placement().upward ? s.dropdownListUp : s.dropdownListDown}`}
 						style={{ "max-height": `${placement().maxHeight}px` }}
 					>
-						<input
+						<Input
+							compact
 							ref={searchRef}
 							type="text"
 							class={s.dropdownSearch}

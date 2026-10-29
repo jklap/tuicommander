@@ -504,6 +504,28 @@ describe("globalWorkspaceStore", () => {
 				expect(tabIds).toEqual([id1, id2].sort());
 			});
 		});
+
+		it("keeps terminalsStore.state.activeId in sync with whichever tab the rebuilt layout shows — a code review finding", () => {
+			testInScope(() => {
+				// resetActiveLayout rebuilds strictly from ws.promoted (Set-iteration
+				// order), which does not necessarily match whatever was focused before
+				// the reset — a stale activeId would point keyboard input/focus at a
+				// terminal that isn't the one visibly active in the rebuilt pane.
+				const id1 = terminalsStore.add(makeTerminal({ name: "T1" }));
+				const id2 = terminalsStore.add(makeTerminal({ name: "T2" }));
+				store.promote(id1);
+				store.promote(id2);
+				store.activate();
+				terminalsStore.setActive(id1);
+
+				store.resetActiveLayout();
+
+				const [g0] = paneLayoutStore.getAllGroupIds();
+				const activeTabId = paneLayoutStore.state.groups[g0]?.activeTabId;
+				expect(activeTabId).toBeDefined();
+				expect(terminalsStore.state.activeId).toBe(activeTabId);
+			});
+		});
 	});
 
 	describe("focus reconciliation keeps a non-terminal active tab", () => {
@@ -551,6 +573,52 @@ describe("globalWorkspaceStore", () => {
 				expect(diffTabsStore.state.activeId).toBe(diff);
 				expect(terminalsStore.state.activeId).toBeNull();
 				expect(paneLayoutStore.state.groups.g20?.activeTabId).toBe(diff);
+			});
+		});
+	});
+
+	describe("focus reconciliation keeps a non-terminal active tab", () => {
+		it("resetActiveLayout keeps the already-active promoted terminal active (CodeRabbit finding)", () => {
+			testInScope(() => {
+				const id1 = terminalsStore.add(makeTerminal({ name: "T1" }));
+				const id2 = terminalsStore.add(makeTerminal({ name: "T2" }));
+				store.promote(id1);
+				store.promote(id2);
+				store.activate();
+				terminalsStore.setActive(id1);
+
+				store.resetActiveLayout();
+
+				expect(terminalsStore.state.activeId).toBe(id1);
+				const [g0] = paneLayoutStore.getAllGroupIds();
+				expect(paneLayoutStore.state.groups[g0]?.activeTabId).toBe(id1);
+			});
+		});
+
+		it("activate does not steal selection from a docked non-terminal active tab", () => {
+			testInScope(() => {
+				const term = terminalsStore.add(makeTerminal({ name: "T1" }));
+				store.promote(term);
+				store.setLayout({
+					root: { type: "leaf", id: "g20" },
+					groups: {
+						g20: {
+							id: "g20",
+							tabs: [
+								{ id: term, type: "terminal" },
+								{ id: "md-1", type: "markdown" },
+							],
+							activeTabId: "md-1",
+						},
+					},
+					activeGroupId: "g20",
+				});
+				terminalsStore.setActive(null);
+
+				store.activate();
+
+				expect(terminalsStore.state.activeId).toBeNull();
+				expect(paneLayoutStore.state.groups.g20?.activeTabId).toBe("md-1");
 			});
 		});
 	});

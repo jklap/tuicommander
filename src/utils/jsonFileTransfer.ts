@@ -13,21 +13,22 @@ export interface SaveJsonResult {
 /**
  * Save arbitrary JSON to disk, letting the user name the file and pick where it goes.
  *
- * Desktop (Tauri): opens the native Save dialog (`@tauri-apps/plugin-dialog`'s `save()`), then
- * writes through the existing `write_external_file` command — already path-validated
- * (`src-tauri/src/fs.rs`'s `validate_external_write_path`: absolute path required, no `..`
- * traversal, parent directory must already exist) and already has full IPC/HTTP parity, so no
- * new backend surface is needed here. `save()` resolves `null` when the user cancels the dialog;
- * that's reported as `{ saved: false }` with no error thrown.
+ * Desktop (Tauri): opens the native Save dialog through `utils/nativeDialog`'s `saveDialog()`
+ * (our own `pick_path` command — never `@tauri-apps/plugin-dialog`'s `save()`, whose
+ * NSSavePanel can crash the whole app after standby), then writes through the existing
+ * `write_external_file` command — already path-validated (`src-tauri/src/fs.rs`'s
+ * `validate_external_write_path`: absolute path required, no `..` traversal, parent directory
+ * must already exist) and already has full IPC/HTTP parity, so no new backend surface is needed
+ * here. `saveDialog()` resolves `null` when the user cancels the dialog; that's reported as
+ * `{ saved: false }` with no error thrown.
  *
  * Browser mode (`isTauri()` false): the native dialog isn't available, so this falls back to the
  * existing Blob + synthetic `<a download>` flow (`downloadText`) — the user gets the OS's normal
  * "Downloads" behavior instead of a location picker.
  *
- * `@tauri-apps/plugin-dialog` is imported dynamically (matching the pattern already used at
- * `src/plugins/pluginRegistry.ts` and `UpstreamMcpPanel.tsx`) so the browser-mode path never pulls
- * the plugin in, and so the shared test mock (`src/__tests__/mocks/tauri.ts`, which is a static
- * `vi.mock` factory) is honored rather than bypassed by a hoisted static import.
+ * `utils/nativeDialog` is imported dynamically (matching `pluginRegistry.ts`'s `pickFile`) so the
+ * browser-mode path never pulls it in; the shared test mock (`src/__tests__/mocks/tauri.ts`)
+ * stubs `saveDialog`.
  */
 export async function saveJsonFile(suggestedFilename: string, value: unknown, title: string): Promise<SaveJsonResult> {
 	const json = JSON.stringify(value, null, 2);
@@ -37,10 +38,10 @@ export async function saveJsonFile(suggestedFilename: string, value: unknown, ti
 		return { saved: true };
 	}
 
-	const { save } = await import("@tauri-apps/plugin-dialog");
-	const target = await save({
+	const { saveDialog } = await import("./nativeDialog");
+	const target = await saveDialog({
 		title,
-		defaultPath: suggestedFilename,
+		fileName: suggestedFilename,
 		filters: [{ name: "JSON", extensions: ["json"] }],
 	});
 	if (typeof target !== "string") return { saved: false };
