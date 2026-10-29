@@ -19,7 +19,7 @@ vi.mock("../useMobileVoice", () => ({
 }));
 vi.mock("../../stores/toasts", () => ({ toastsStore: { add: vi.fn() } }));
 
-import { rpc } from "../../transport";
+import { HttpRpcError, rpc } from "../../transport";
 
 let queue: QueuedCommand[];
 let nextId = 1;
@@ -171,4 +171,50 @@ it("keeps queued text when cancellation fails and explains the failure", async (
 	fireEvent.click(cancel);
 	await waitFor(() => expect(view.getByRole("alert").textContent).toContain("Could not remove queued prompts"));
 	expect(view.getByText("Keep this task")).toBeTruthy();
+});
+
+// Catches: an older desktop's missing queue endpoint adds a permanent alert to every empty session.
+it("does not alert for an unsupported queue endpoint without pending queue evidence", async () => {
+	vi.mocked(rpc).mockRejectedValue(new HttpRpcError("list_queued_agent_commands", 404, "no such endpoint"));
+	const view = mount();
+	await waitFor(() =>
+		expect(vi.mocked(rpc).mock.settledResults.some((result) => result.type === "rejected")).toBe(true),
+	);
+	expect(view.queryByRole("region", { name: "Queued prompts" })).toBeNull();
+	expect(view.queryByRole("alert")).toBeNull();
+});
+
+// Catches: treating authentication, server and network failures as unsupported queue capability.
+it.each([401, 500, "offline"] as const)("keeps queue read failure %s visible and retryable", async (failure) => {
+	vi.mocked(rpc).mockRejectedValue(
+		typeof failure === "number"
+			? new HttpRpcError("list_queued_agent_commands", failure, "request failed")
+			: new Error(failure),
+	);
+	const view = mount();
+	expect((await view.findByRole("alert")).textContent).toContain("Could not load queued prompts.");
+	vi.mocked(rpc).mockResolvedValue([]);
+	fireEvent.click(view.getByRole("button", { name: "Retry" }));
+	await waitFor(() => expect(view.queryByRole("alert")).toBeNull());
+});
+
+// Catches: hiding a missing queue read endpoint even though the host reports undelivered work.
+it("keeps a missing endpoint visible when the session reports pending prompts", async () => {
+	vi.mocked(rpc).mockRejectedValue(new HttpRpcError("list_queued_agent_commands", 404, "no such endpoint"));
+	const view = mount();
+	view.updateCount(1);
+	expect((await view.findByRole("alert")).textContent).toContain("Could not load queued prompts.");
+	expect(view.getByRole("status").textContent).toBe("Queued · 1");
+});
+
+// Catches: hiding a queued prompt after local acceptance but before the lifecycle count arrives.
+it("keeps a missing endpoint visible after a successful local enqueue", async () => {
+	vi.mocked(rpc).mockImplementation(async (command) => {
+		if (command === "list_queued_agent_commands") throw new HttpRpcError(command, 404, "no such endpoint");
+		if (command === "enqueue_agent_command") return { accepted: true, typed: false };
+		return undefined;
+	});
+	const view = mount();
+	await enqueue(view, "Do not lose this task");
+	expect((await view.findByRole("alert")).textContent).toContain("Could not load queued prompts.");
 });

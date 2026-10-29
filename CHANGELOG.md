@@ -25,6 +25,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Avoid a queue-load alert in every empty mobile terminal session when an older host has no queue-read endpoint; retain errors for known pending work and other read failures (#2481-024a).
+
 - Align the Smart Prompt editor on one label/control grid, use readable placement names, and add a shortcut clear action (#2479-4866).
 
 - Reserve one in-flow slot for Git Changes row stats and actions, prevent long paths and focused-row overlap, simplify section headers, and align compact commit controls (#2478-456b).

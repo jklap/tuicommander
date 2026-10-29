@@ -1,7 +1,7 @@
 import { createResource, createSignal, For, onCleanup, Show } from "solid-js";
 import { Button } from "../../components/ui";
 import type { QueuedCommand } from "../../hooks/usePty";
-import { rpc } from "../../transport";
+import { HttpRpcError, rpc } from "../../transport";
 import styles from "./QueuedPrompts.module.css";
 
 /** A view of the existing PTY FIFO, not a second client-side queue. */
@@ -12,7 +12,7 @@ export function QueuedPrompts(props: { sessionId: string; count: number; revisio
 	const [actionError, setActionError] = createSignal<string | null>(null);
 	const [snapshot, { refetch }] = createResource(
 		() => ({ sessionId: props.sessionId, count: props.count, revision: props.revision }),
-		async ({ sessionId }) => {
+		async ({ sessionId, count, revision }) => {
 			read?.abort();
 			read = new AbortController();
 			try {
@@ -21,7 +21,12 @@ export function QueuedPrompts(props: { sessionId: string; count: number; revisio
 					items: await rpc<QueuedCommand[]>("list_queued_agent_commands", { sessionId }, undefined, read.signal),
 					error: null,
 				};
-			} catch {
+			} catch (error) {
+				// Older hosts may not expose queue reads. With no pending count or
+				// accepted local enqueue, that optional capability is not a session error.
+				if (error instanceof HttpRpcError && error.status === 404 && count === 0 && revision === 0) {
+					return { items: [], error: null };
+				}
 				return { items: [], error: "Could not load queued prompts." };
 			}
 		},

@@ -68,6 +68,7 @@ beforeEach(() => {
 	mockRepos.current = { "/repo": {}, "/repo/nested": {} };
 	rpc.mockReset();
 	rpc.mockImplementation(async (command: string, args?: { repoPath?: string }) => {
+		if (command === "list_queued_agent_commands") return [];
 		if (command === "load_repositories") return { repos: mockRepos.current };
 		if (command === "list_directory") {
 			if (args?.repoPath === "/refused") throw new Error("Permission denied");

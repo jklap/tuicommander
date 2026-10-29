@@ -271,7 +271,7 @@ Tap the attachment icon to the left of the session input to choose a photo or fi
 file name appears while uploading, then its path is added to the draft. Queue
 is unavailable until the upload finishes. Smaller mic and Send controls sit inside the input border on the right.
 
-Hold Send with a finger or mouse, then select **Queue** to hold your current agent prompt until its next ready window. A normal tap still sends immediately. Queue clears the input after acceptance and shows a notice. If the result is uncertain, check the agent session before trying again.
+Hold Send with a finger or mouse, then select **Queue** to hold your current agent prompt until its next ready window. A normal tap still sends immediately. Queue clears the input after acceptance and shows a notice. If the result is uncertain, check the agent session before trying again. The pending list is shared by CLI and Chat. If an older host has no queue-read endpoint and there is no pending count or accepted local enqueue, the session does not show a queue error. Other read failures remain visible with Retry; a pending count or accepted local enqueue also keeps a missing-endpoint error visible.
 
 
 - **Sessions list** — See all running agents with status (idle, busy, question, rate-limited, error). Tap the Working, Idle and Awaiting counters to filter by one or more states. Tap an active counter again to clear it; no active counters shows every session. Counts always include all sessions. A zero-count state shows an empty result. State filters combine with the search field and the Default/Recent sort menu.
