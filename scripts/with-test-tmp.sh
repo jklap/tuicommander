@@ -77,7 +77,10 @@ if [[ -n "${TUIC_TEST_TMP_ROOT:-}" ]]; then
   mkdir -p "$test_tmp"
   prune_stale_runs "$test_tmp"
 else
-  test_tmp="$(mktemp -d "$test_tmp_base/tuic-run.XXXXXX")"
+  # Physical spelling (macOS /var -> /private/var): paths a test builds from
+  # TMPDIR then compare equal to the canonical paths code under test stores
+  # or an FSEvents watcher reports.
+  test_tmp="$(cd "$(mktemp -d "$test_tmp_base/tuic-run.XXXXXX")" && pwd -P)"
   # Real permission tests may leave unreadable directories or read-only files.
   # This root is disposable; physical traversal never changes symlink targets.
   cleanup_test_tmp() {
