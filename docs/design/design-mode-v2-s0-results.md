@@ -32,8 +32,9 @@ The raw event log redacts the ephemeral fixture Vite WebSocket token; timestamps
 nonces and event content are preserved. The final MAIN probe omits URL query
 strings to avoid recording that token in subsequent runs.
 
-Evidence paths below are relative to `spike/design-mode-v2-s0/`. The exact Edge
-argv and server commands are in [launch.json](../../spike/design-mode-v2-s0/evidence/launch.json).
+Evidence paths below are relative to `spike/design-mode-v2-s0/`, which is no
+longer in the tree; it is preserved at commit [895ed2b4ea](https://github.com/sstraus/tuicommander/tree/895ed2b4eaa9c4dbd91df4acd354f845731e07ad/spike/design-mode-v2-s0). The exact Edge
+argv and server commands are in [launch.json](https://github.com/sstraus/tuicommander/blob/895ed2b4eaa9c4dbd91df4acd354f845731e07ad/spike/design-mode-v2-s0/evidence/launch.json).
 
 | Item | Browser and exact version | Result | Command / step | Evidence and limits |
 |---|---|---|---|---|
@@ -51,7 +52,7 @@ argv and server commands are in [launch.json](../../spike/design-mode-v2-s0/evid
 **BLOCKED before browser launch.** Boss reported that MacControl already has its
 permissions. The new live checks still refuse capture. The exact help and error
 responses are preserved in
-[maccontrol-round2.txt](../../spike/design-mode-v2-s0/evidence/maccontrol-round2.txt).
+[maccontrol-round2.txt](https://github.com/sstraus/tuicommander/blob/895ed2b4eaa9c4dbd91df4acd354f845731e07ad/spike/design-mode-v2-s0/evidence/maccontrol-round2.txt).
 
 - Screen state was checked first: `ioreg -n Root -d1` reports
   `"IOConsoleLocked" = No`, with an active, logged-in console session.
@@ -91,8 +92,8 @@ capability failure. Windows/Linux remain untested.
 - **No automation banner mechanism on Edge:** exact argv has neither
   `--enable-automation` nor a debugging flag. Edge reports `webdriver:false`.
   Visual absence of the banner was not captured; it is not marked visually passed.
-- **GUI evidence:** [CFT extensions screenshot](../../spike/design-mode-v2-s0/evidence/cft-extensions.png)
-  and [attempt log](../../spike/design-mode-v2-s0/evidence/gui-attempts.txt).
+- **GUI evidence:** [CFT extensions screenshot](https://github.com/sstraus/tuicommander/blob/895ed2b4eaa9c4dbd91df4acd354f845731e07ad/spike/design-mode-v2-s0/evidence/cft-extensions.png)
+  and [attempt log](https://github.com/sstraus/tuicommander/blob/895ed2b4eaa9c4dbd91df4acd354f845731e07ad/spike/design-mode-v2-s0/evidence/gui-attempts.txt).
   MacControl reports both Screen Recording and Accessibility permissions missing.
   `ioreg` returned no locked=true entry and the CFT screenshot succeeded; these
   failures are permission failures, not evidence of a locked display.
@@ -971,7 +972,7 @@ missing native-install/no-load-restart persistence requirement, in contrast to
 the empty inventory after the earlier flag/test-API installs.
 
 The decisive argv, before/after inventories and PID cleanup are committed in
-[round16-persistence.json](../../spike/design-mode-v2-s0/evidence/round16-persistence.json).
+[round16-persistence.json](https://github.com/sstraus/tuicommander/blob/895ed2b4eaa9c4dbd91df4acd354f845731e07ad/spike/design-mode-v2-s0/evidence/round16-persistence.json).
 Raw harnesses and responses remain under
 `~/Gits/.tmp/design-web/s0-native-round16-fixed/`; `chooser.png`, `installed.png`
 and `after-restart.png` capture only the owned chooser/Extensions windows. The
