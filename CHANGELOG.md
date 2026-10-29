@@ -24,6 +24,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Fixed
 
 - Align the answer rule for fully answer-marked Chat lists with the paragraph rule, keeping bullets inside the list gutter and mixed-list siblings unruled (#2477-8ea9).
+- Keep new worktrees clean when shared-store directories use directory-only ignore patterns, without hiding untracked stores in the main checkout (#2476-b3eb).
 
 - Publish relay peer presence with room admission so simultaneous connections do not restart the pairing handshake during a pending stats write (#2470-4d10).
 - Keep parallel worktree rename journal records intact and stop automatic archive from treating a fresh empty start commit as merged work (#2475-ab3a).
