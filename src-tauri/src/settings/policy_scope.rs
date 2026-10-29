@@ -24,7 +24,9 @@ pub(super) fn requires_confirmation(fields: &[&Field], latest: &Value, next: &Va
             .any(|prefix| path.starts_with(prefix)),
             (
                 "tunnels",
-                "/profiles/{id}/ssh/port" | "/profiles/{id}/auto_connect" | "/profiles/{id}/forwards",
+                "/profiles/{id}/ssh/port"
+                | "/profiles/{id}/auto_connect"
+                | "/profiles/{id}/forwards",
             ) => true,
             (
                 "upstreams",

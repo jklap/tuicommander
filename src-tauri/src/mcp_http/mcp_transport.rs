@@ -141,11 +141,13 @@ use super::mcp_transport_peer::TAKEOVER_REJECT_SUMMARY_INTERVAL;
 #[cfg(test)]
 use super::mcp_transport_peer::TASK_POLL_INTERVAL_MS;
 pub(super) use super::mcp_transport_peer::TUIC_SESSION_HEADER;
+pub(super) use super::mcp_transport_peer::apply_initialize_identity;
 pub(super) use super::mcp_transport_peer::client_pid_header;
 use super::mcp_transport_peer::drop_identity_buffers;
 use super::mcp_transport_peer::handle_agent_wait;
 #[cfg(test)]
 use super::mcp_transport_peer::handle_messaging;
+use super::mcp_transport_peer::identity_from_client_ancestry;
 use super::mcp_transport_peer::initialize_session_id;
 pub(crate) use super::mcp_transport_peer::is_pending_parent;
 #[cfg(test)]
@@ -164,8 +166,6 @@ use super::mcp_transport_peer::retire_repaired_phantom_identity;
 use super::mcp_transport_peer::takeover_rejection_report;
 #[cfg(test)]
 use super::mcp_transport_peer::task_owner_identity;
-pub(super) use super::mcp_transport_peer::apply_initialize_identity;
-use super::mcp_transport_peer::identity_from_client_ancestry;
 #[cfg(test)]
 pub(crate) use super::mcp_transport_session_agent::DeferredPromptTimings;
 #[cfg(test)]
