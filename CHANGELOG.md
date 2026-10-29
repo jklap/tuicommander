@@ -23,6 +23,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Keep parallel worktree rename journal records intact and stop automatic archive from treating a fresh empty start commit as merged work (#2475-ab3a).
+
 - Show unavailable Claude enterprise/spend-based utilization instead of a false 0%, while retaining available credit totals and real zero usage (#129, thanks to @jklap).
 - Save automation run output as plain text without terminal escape codes, and retain the newest text within its byte limit after cleaning on a UTF-8 boundary (#2467-5cda).
 

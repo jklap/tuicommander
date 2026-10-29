@@ -1102,8 +1102,26 @@ fn integrated_in_defaults(
     bases: &[String],
     tip: &str,
 ) -> Result<Option<&'static str>, String> {
+    let mut content_targets = Vec::new();
     for base in bases {
         let target = rev_at(repo, base)?;
+        // A fresh empty start commit also produces a no-op merge, but nothing
+        // was integrated. Content heuristics require a delta from the fork;
+        // ancestry and verified PR evidence are handled by the caller.
+        let changes = git_cmd(repo)
+            .args([
+                "diff",
+                "--no-ext-diff",
+                "--no-textconv",
+                "--name-only",
+                &format!("{target}...{tip}"),
+            ])
+            .run()
+            .map_err(|error| format!("could not inspect branch changes: {error}"))?;
+        if changes.stdout.is_empty() {
+            continue;
+        }
+        content_targets.push(target.clone());
         if patches_integrated_in(repo, &target, tip)? {
             return Ok(Some("patch_equivalence"));
         }
@@ -1137,8 +1155,7 @@ fn integrated_in_defaults(
             }));
         }
     }
-    for base in bases {
-        let target = rev_at(repo, base)?;
+    for target in content_targets {
         if same_subject_twins(repo, &target, tip)? || content_superset(repo, &target, tip)? {
             return Ok(Some("content_superset"));
         }
@@ -2327,7 +2344,10 @@ fn record_worktree_rename(repo: &Path, old: &str, new: &str) -> Result<(), Strin
         .open(common.join("tuic-worktree-renames.jsonl"))
         .map_err(|error| format!("Cannot open checkout rename journal: {error}"))?;
     use std::io::Write;
-    writeln!(file, "{}", serde_json::json!({"old": old, "new": new}))
+    // Serialize before appending: Display writes JSON a fragment at a time,
+    // allowing parallel archive/recycle workers to interleave their records.
+    let line = format!("{}\n", serde_json::json!({"old": old, "new": new}));
+    file.write_all(line.as_bytes())
         .and_then(|()| file.sync_all())
         .map_err(|error| format!("Cannot record checkout rename: {error}"))
 }
@@ -5232,6 +5252,31 @@ mod tests {
             assert!(wt.exists());
         }
         assert!(failures.is_empty(), "{}", failures.join("\n"));
+    }
+
+    // Catches: protecting empty-start branches also hides real ancestry/PR proof.
+    #[test]
+    fn integrated_empty_commit_still_has_positive_merge_evidence_2475() {
+        for proof in ["ancestry", "github_pr"] {
+            let (_temp, repo, _) = workspace_fixture();
+            let wt = add_worktree(&repo, "integrated-empty");
+            git_cmd(&wt)
+                .args(["commit", "--allow-empty", "-m", "start agent work"])
+                .run()
+                .unwrap();
+            if proof == "ancestry" {
+                git_cmd(&repo)
+                    .args(["merge", "--ff-only", "integrated-empty"])
+                    .run()
+                    .unwrap();
+            }
+            let verdict = branch_integration_with_pr(&repo, "integrated-empty", |_, _, _| {
+                proof == "github_pr"
+            })
+            .unwrap();
+            assert!(verdict.integrated, "{proof}: {verdict:?}");
+            assert_eq!(verdict.proof.as_deref(), Some(proof));
+        }
     }
 
     // Catches: bare metadata becomes a missing checkout, including through a linked base.

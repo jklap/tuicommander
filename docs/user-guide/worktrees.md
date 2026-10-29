@@ -179,7 +179,7 @@ deletion; incomplete or uncertain changes remain protected. If a branch reflog
 is empty or absent, its origin is unknown. The repository still loads, but that
 branch has no merge proof and safe branch deletion is refused.
 
-The automatic sweep never asks. It archives only a branch whose own commits are merged, when the worktree is clean and has no live sessions. It keeps other worktrees and names the reason in the status line.
+The automatic sweep never asks. It archives only a branch whose own commits are merged, when the worktree is clean and has no live sessions. An empty start commit is not proof of a merge: a fresh agent worktree stays available even before its session starts. Content comparisons require changes from the branch point; actual ancestry or a verified merged PR can still prove integration. The sweep keeps other worktrees and names the reason in the status line.
 
 Removing a worktree without force also refuses uncommitted changes when the
 branch will be kept, including changes inside submodules. It stops if a Git operation is in progress. If an archive
