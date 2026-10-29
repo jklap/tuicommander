@@ -3146,7 +3146,7 @@ the prepared launch prompt, counting escaped stdout bytes before framing/marker.
 
 ### Automation runs view
 
-The Automations **Runs** view shows backend 24h/7d counts, paginated history, distinct needs-you/unknown/interrupted states, and saved output after definition deletion. View run focuses only an available terminal on the owning daemon; otherwise it shows the saved report and workspace details without launching a replacement.
+The Automations **Runs** view shows backend 24h/7d counts, paginated history, distinct needs-you/unknown/interrupted states, and saved output after definition deletion. New PTY run output is plain text with terminal escapes removed before its UTF-8-safe 256 KiB limit; existing snapshots are unchanged. View run focuses only an available terminal on the owning daemon; otherwise it shows the saved report and workspace details without launching a replacement.
 
 ### Reusable setting fields
 

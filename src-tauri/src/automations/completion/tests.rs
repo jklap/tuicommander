@@ -334,6 +334,65 @@ fn native_recovers_durable_progress_and_snapshots_without_receiving_its_event() 
     assert_eq!(saved.stdout.text, "final output");
 }
 
+// Catches: raw escapes, cutting inside an escape before cleaning, or splitting UTF-8.
+#[test]
+fn saved_run_output_has_no_terminal_escapes() {
+    let cases = [
+        (
+            "controls",
+            "\x1b]0;run title\x07\x1b[6G\x1b[38;2;220;90;90mred\x1b[39m\x1b[49m\r\n界\n".to_owned(),
+            "red\n界\n".to_owned(),
+            false,
+        ),
+        (
+            "raw size is not clean size",
+            format!("{}done\n", "\x1b[31m\x1b[0m".repeat(30_000)),
+            "done\n".to_owned(),
+            false,
+        ),
+        (
+            "escape spans old raw cutoff",
+            format!("\x1b]0;{}\x07result", "x".repeat(270_000)),
+            "result".to_owned(),
+            false,
+        ),
+        (
+            "clean UTF-8 boundary",
+            format!("\x1b[32m{}界end\x1b[0m", "a".repeat(262_143)),
+            "a".repeat(262_143),
+            true,
+        ),
+        (
+            "exact clean budget",
+            format!("\x1b[32m{}\x1b[0m", "é".repeat(131_072)),
+            "é".repeat(131_072),
+            false,
+        ),
+    ];
+    let mut failures = Vec::new();
+    for (name, raw, expected, truncated) in cases {
+        let (dir, owner, run) = setup();
+        let _config = crate::config::set_config_dir_override(dir.path().to_owned());
+        let state = std::sync::Arc::new(crate::state::tests_support::make_test_app_state_in(
+            dir.path(),
+        ));
+        let mut buffer = crate::state::OutputRingBuffer::new(2 * 1024 * 1024);
+        buffer.write(raw.as_bytes());
+        state
+            .session_maps
+            .output_buffers
+            .insert("owned".into(), parking_lot::Mutex::new(buffer));
+        state.session_maps.exit_codes.insert("owned".into(), 0);
+        reconcile(owner.store(), &NativeCompletion(&state), 300).unwrap();
+        let saved = owner.store().get(&run.id).unwrap();
+        assert_eq!(saved.status, RunStatus::Completed);
+        if saved.stdout.text != expected || saved.stdout.truncated != truncated {
+            failures.push(format!("{name}: got {} bytes, truncated={}, prefix={:?}; expected {} bytes, truncated={truncated}", saved.stdout.text.len(), saved.stdout.truncated, saved.stdout.text.chars().take(70).collect::<String>(), expected.len()));
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
 // Catches synchronous publication git/config work starving a one-worker runtime.
 #[cfg(unix)]
 #[tokio::test(flavor = "current_thread")]

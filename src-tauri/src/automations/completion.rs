@@ -2,7 +2,7 @@
 use super::{
     definitions::DefinitionStore,
     model::Workspace,
-    run::{AutomationRun, OUTPUT_LIMIT, RunDetails, RunStatus, RunTrigger},
+    run::{AutomationRun, RunDetails, RunStatus, RunTrigger},
     store::RunStore,
 };
 use crate::{
@@ -191,8 +191,10 @@ impl CompletionEffects for NativeCompletion<'_> {
                 .output_buffers
                 .get(session)
                 .map(|buffer| {
-                    String::from_utf8_lossy(&buffer.lock().read_last(OUTPUT_LIMIT + 4).0)
-                        .into_owned()
+                    // Strip the retained stream before RunStore applies its UTF-8-safe
+                    // byte budget; cutting raw bytes can start inside an escape.
+                    let bytes = buffer.lock().read_last(usize::MAX).0;
+                    String::from_utf8_lossy(&tuic_ansi::strip(bytes)).into_owned()
                 }),
         }
     }

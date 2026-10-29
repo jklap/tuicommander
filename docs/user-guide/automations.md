@@ -119,7 +119,7 @@ saved definition's profile picker, not an editable copy of historical settings.
 Deleted definitions retain read-only history. **Previous runs** and **Next runs**
 page through grouped rows; summaries still count individual runs. Each row retains its original automation name, repository and status. `needs_you`, `unknown` and `interrupted` are distinct; none implies success.
 
-**View run** focuses the owning live terminal when it is present in this client. If the terminal is absent, suspended, exited or belongs to another daemon, the dialog shows saved stdout/stderr, truncation warnings, the recorded workspace and run configuration. A missing or removed workspace is not recreated. Viewing a run never starts another run. History and output retention remain backend-controlled.
+**View run** focuses the owning live terminal when it is present in this client. If the terminal is absent, suspended, exited or belongs to another daemon, the dialog shows saved stdout/stderr, truncation warnings, the recorded workspace and run configuration. A missing or removed workspace is not recreated. Viewing a run never starts another run. History and output retention remain backend-controlled. New PTY run snapshots remove terminal escapes (including colours and cursor moves) before saving up to 256 KiB of UTF-8 text. This is plain text, not a terminal screen replay. Older saved output is not rewritten.
 
 Agents and scripts can use MCP `automations` or `tuic automations '<action JSON>'`
 for the same operations. List returns definition rows with next-run/last-status

@@ -3285,3 +3285,5 @@ Isolated Chrome screenshot capture timed out after 35 seconds; visual rendering 
 
 - [ ] Mobile dictation after opening a session with an existing desktop slash-command draft: confirm the spoken sentence replaces the unseen prefix and submits as plain text. Browser fixture verifies the composer path with synthetic Web Speech callbacks, not iPhone audio or native Claude keystroke handling (#2460-5a96).
 - [ ] Mobile terminal CLI and Chat: queue a prompt with + > Queue or a long press on Send; verify the queued text remains above the input until delivery, and check Cancel / Clear all. Prompts queued in CLI or desktop must appear after switching to Chat (#2463-ad1c).
+
+- [ ] After rebuilding/restarting the Rust backend, complete a coloured automation run and check Automations > Recent runs: no raw terminal escapes, readable Unicode, and a truncation warning only when the cleaned output exceeds 256 KiB (#2467-5cda). Existing saved runs are not rewritten.
