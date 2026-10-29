@@ -170,6 +170,7 @@ mod native_notification;
 pub(crate) mod notification_sound;
 #[cfg(feature = "desktop")]
 pub(crate) mod release_install;
+pub(crate) mod osc_interleave;
 pub(crate) mod osc_title;
 pub(crate) mod secrets;
 pub(crate) use tuic_terminal::output_parser;

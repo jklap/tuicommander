@@ -140,8 +140,10 @@ async function open(query = "f", terminalId = "search-flicker") {
 	await ref.searchFind(query);
 	// The search repaint is scheduled on the next frame, like every repaint of the base canvas.
 	await vi.advanceTimersByTimeAsync(32);
-	const canvas = view.container.querySelectorAll("canvas").item(2);
-	const output = canvases.get(canvas);
+	// The overlay (cursor, selection, search highlights) is the LAST canvas in the stage;
+	// the layers before it (overscan, base, below-text image, glyph, image) have grown over time.
+	const canvas = Array.from(view.container.querySelectorAll("canvas")).at(-1);
+	const output = canvas && canvases.get(canvas);
 	if (!output) throw new Error("overlay canvas unavailable");
 	const highlights = () => output.fills.filter((fill) => fill.colour === "rgba(255, 180, 50, 0.2)");
 	return { view, ref, highlights };
