@@ -55,9 +55,9 @@ it("ego mobile chat uses the shared wake and displays the unreadable reason", as
 		);
 	};
 	const view = render(() => <Harness />);
-	fireEvent.click(view.getByRole("button", { name: "Chat" }));
+	fireEvent.click(view.getByRole("tab", { name: "Chat" }));
 	await waitFor(() => expect(view.getByRole("status").textContent).toContain("ego transcript v1 header missing"));
 	expect(subscribeWake).toHaveBeenCalledOnce();
 	expect(subscribeWake.mock.calls[0][0]).toBe("ego-mobile");
-	expect(view.getByRole("button", { name: "CLI" }).getAttribute("aria-pressed")).toBe("true");
+	expect(view.getByRole("tab", { name: "CLI" }).getAttribute("aria-selected")).toBe("true");
 });
