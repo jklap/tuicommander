@@ -432,6 +432,8 @@ Use this when the remote machine accepts no inbound connection.
 4. Open **Settings** → **Remote Machines**, click **+**, and select **Relay**.
 5. Paste the bundle and save, then click **Connect**.
 
+The relay publishes peer presence in admission order, before pending stats writes. Simultaneous daemon and desktop connections do not create duplicate attachment notifications.
+
 If the status shows `pairing_rejected`, the daemon was paired again: import the new bundle. `daemon_offline` means the daemon is not connected to the relay. After `link_lost` or `relay_unreachable` TUICommander reconnects by itself. Running `--relay-pair` again replaces the pairing.
 
 ### Connect or Install

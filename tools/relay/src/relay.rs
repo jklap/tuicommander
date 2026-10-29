@@ -36,6 +36,21 @@ impl SessionSlot {
     fn peer_count(&self) -> usize {
         self.peers.len()
     }
+
+    /// Publish the admission transition while the room is still locked, before
+    /// stats writes can yield or either peer can forward its first record.
+    fn announce_presence(&self) {
+        let peer = if self.peer_count() == 2 {
+            PeerStatus::Connected
+        } else {
+            PeerStatus::Waiting
+        };
+        let msg = serde_json::to_string(&RelayMessage::Status { peer })
+            .expect("status serialization is infallible");
+        for (_, tx) in &self.peers {
+            let _ = tx.try_send(Message::Text(msg.clone().into()));
+        }
+    }
 }
 
 /// Application state shared across all handlers.
@@ -220,6 +235,7 @@ pub async fn handle_ws(state: Arc<AppState>, session_id: String, mut socket: Web
                 let id = slot.next_peer_id;
                 slot.next_peer_id += 1;
                 slot.peers.push((id, tx.clone()));
+                slot.announce_presence();
                 Ok(id)
             }
         } else {
@@ -233,15 +249,14 @@ pub async fn handle_ws(state: Arc<AppState>, session_id: String, mut socket: Web
             {
                 Err((4002, "max sessions per token exceeded"))
             } else {
-                state.sessions.insert(
-                    session_id.clone(),
-                    SessionSlot {
-                        peers: vec![(0, tx.clone())],
-                        next_peer_id: 1,
-                        token_hash: Some(token_hash.clone()),
-                        last_activity: Instant::now(),
-                    },
-                );
+                let slot = SessionSlot {
+                    peers: vec![(0, tx.clone())],
+                    next_peer_id: 1,
+                    token_hash: Some(token_hash.clone()),
+                    last_activity: Instant::now(),
+                };
+                slot.announce_presence();
+                state.sessions.insert(session_id.clone(), slot);
                 Ok(0)
             }
         }
@@ -263,31 +278,6 @@ pub async fn handle_ws(state: Arc<AppState>, session_id: String, mut socket: Web
         if let Err(e) = crate::db::start_session(conn, &session_id, &token_hash).await {
             warn!(error = %e, "failed to record session start");
         }
-    }
-
-    // Notify this peer of current state
-    let peer_count = state
-        .sessions
-        .get(&session_id)
-        .filter(|s| s.contains_peer(peer_id, &peer))
-        .map(|s| s.peer_count())
-        .unwrap_or(0);
-
-    let status = if peer_count == 2 {
-        PeerStatus::Connected
-    } else {
-        PeerStatus::Waiting
-    };
-
-    let status_msg = serde_json::to_string(&RelayMessage::Status {
-        peer: status.clone(),
-    })
-    .expect("status serialization is infallible");
-    let _ = tx.send(Message::Text(status_msg.into())).await;
-
-    // If we're the second peer, notify the first peer too
-    if peer_count == 2 {
-        notify_other_peers(&state, &session_id, peer_id, &peer, PeerStatus::Connected).await;
     }
 
     // Spawn writer task: reads from channel, writes to WebSocket
@@ -526,29 +516,6 @@ fn evict_room(
     }
 }
 
-/// Notify all peers except the given one of a status change.
-async fn notify_other_peers(
-    state: &AppState,
-    session_id: &str,
-    except_id: u64,
-    peer: &mpsc::WeakSender<Message>,
-    status: PeerStatus,
-) {
-    let msg = serde_json::to_string(&RelayMessage::Status { peer: status })
-        .expect("status serialization is infallible");
-
-    if let Some(slot) = state.sessions.get(session_id) {
-        if !slot.contains_peer(except_id, peer) {
-            return;
-        }
-        for (id, peer_tx) in slot.peers.iter() {
-            if *id != except_id {
-                let _ = peer_tx.try_send(Message::Text(msg.clone().into()));
-            }
-        }
-    }
-}
-
 /// Remove only the admitted channel, never a reused numeric ID in another room.
 async fn remove_peer(
     state: &AppState,
@@ -636,6 +603,108 @@ pub fn spawn_session_reaper(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // Catches delayed stats writes making both admissions publish Connected twice,
+    // which restarts the daemon's handshake after its first record was consumed.
+    #[tokio::test]
+    async fn concurrent_admission_orders_presence_before_records_despite_pending_stats() {
+        use tokio_tungstenite::tungstenite::Message as ClientMessage;
+
+        let db = crate::db::init(":memory:").await.unwrap();
+        let state = AppState::with_db(db.clone());
+        state
+            .token_cache
+            .insert("owner".into(), "owner-hash".into());
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let app = crate::routes::build_router(state.clone());
+        let server = tokio::spawn(async move {
+            axum::serve(
+                listener,
+                app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+            )
+            .await
+            .unwrap();
+        });
+
+        // Hold the real SQLite worker, not the relay: both authenticated peers
+        // can be admitted while their start_session calls remain pending.
+        let (entered, entered_rx) = tokio::sync::oneshot::channel();
+        let (release, release_rx) = std::sync::mpsc::channel::<()>();
+        let blocked_db = tokio::spawn(async move {
+            db.call(move |_| -> tokio_rusqlite::rusqlite::Result<()> {
+                let _ = entered.send(());
+                let _ = release_rx.recv();
+                Ok(())
+            })
+            .await
+            .unwrap();
+        });
+        entered_rx.await.unwrap();
+        let url = format!("ws://{addr}/ws/concurrent-admission");
+        let (mut first, _) = tokio_tungstenite::connect_async(&url).await.unwrap();
+        first
+            .send(ClientMessage::Text("Bearer owner".into()))
+            .await
+            .unwrap();
+        tokio::time::timeout(Duration::from_secs(60), async {
+            while !state.sessions.contains_key("concurrent-admission") {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("first peer admitted while stats are blocked");
+        let (mut second, _) = tokio_tungstenite::connect_async(&url).await.unwrap();
+        second
+            .send(ClientMessage::Text("Bearer owner".into()))
+            .await
+            .unwrap();
+        tokio::time::timeout(Duration::from_secs(60), async {
+            while !state
+                .sessions
+                .get("concurrent-admission")
+                .is_some_and(|slot| slot.peer_count() == 2)
+            {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("both peers admitted while stats are blocked");
+        drop(release);
+        blocked_db.await.unwrap();
+
+        let exchange = async {
+            let waiting = ClientMessage::Text(r#"{"type":"relay:status","peer":"waiting"}"#.into());
+            let connected =
+                ClientMessage::Text(r#"{"type":"relay:status","peer":"connected"}"#.into());
+            assert_eq!(first.next().await.unwrap().unwrap(), waiting);
+            assert_eq!(first.next().await.unwrap().unwrap(), connected);
+            assert_eq!(second.next().await.unwrap().unwrap(), connected);
+            first
+                .send(ClientMessage::Binary(vec![1, 2, 3].into()))
+                .await
+                .unwrap();
+            second
+                .send(ClientMessage::Binary(vec![4, 5, 6].into()))
+                .await
+                .unwrap();
+            // Exact next frames: skipping status frames would hide duplicates.
+            assert_eq!(
+                second.next().await.unwrap().unwrap(),
+                ClientMessage::Binary(vec![1, 2, 3].into())
+            );
+            assert_eq!(
+                first.next().await.unwrap().unwrap(),
+                ClientMessage::Binary(vec![4, 5, 6].into())
+            );
+            first.close(None).await.unwrap();
+            second.close(None).await.unwrap();
+        };
+        tokio::time::timeout(Duration::from_secs(60), exchange)
+            .await
+            .expect("presence and records delivered");
+        server.abort();
+    }
 
     // Catches a stale handler acting on reused peer ID 0 while its old channel
     // is still alive during setup or an in-flight operation.
