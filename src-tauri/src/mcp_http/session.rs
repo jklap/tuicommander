@@ -7109,6 +7109,24 @@ mod tests {
             .map(|v| v.load(std::sync::atomic::Ordering::Relaxed))
     }
 
+    /// The gate held the response: the shell is idle, or the gate waited out
+    /// its whole fail-open bound (a loaded machine can keep a shell in startup
+    /// that long). Without the gate the route returns at once, shell not idle.
+    fn assert_gate_held(
+        state: &AppState,
+        session_id: &str,
+        elapsed: std::time::Duration,
+        what: &str,
+    ) {
+        let bound = std::time::Duration::from_millis(
+            super::super::mcp_transport::SHELL_READINESS_TIMEOUT_MS,
+        );
+        let shell = shell_state_of(state, session_id);
+        assert!(
+            shell == Some(crate::pty::SHELL_IDLE) || elapsed >= bound,
+            "{what} must hold its response until the shell is idle (shell {shell:?} after {elapsed:?})"
+        );
+    }
     /// `POST /sessions` must not return the id before the new shell reaches a
     /// prompt — the caller's very next write (e.g. `tuic new` + `send`) would
     /// otherwise race `.zshrc` startup. Without the gate the route returns the
@@ -7117,9 +7135,11 @@ mod tests {
     #[tokio::test]
     async fn http_create_session_returns_only_after_the_shell_reaches_idle() {
         let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let started = std::time::Instant::now();
         let response = create_session(State(state.clone()), Json(plain_create_request(None)))
             .await
             .into_response();
+        let elapsed = started.elapsed();
         let status = response.status();
         let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
             .await
@@ -7130,11 +7150,7 @@ mod tests {
             return;
         }
         let session_id = body["session_id"].as_str().expect("session_id").to_string();
-        assert_eq!(
-            shell_state_of(&state, &session_id),
-            Some(crate::pty::SHELL_IDLE),
-            "POST /sessions must hold its response until the shell is idle"
-        );
+        assert_gate_held(&state, &session_id, elapsed, "POST /sessions");
         close_session(State(state), axum::extract::Path(session_id)).await;
     }
 
@@ -7271,6 +7287,7 @@ mod tests {
     async fn http_create_session_with_worktree_returns_only_after_the_shell_reaches_idle() {
         let repo = crate::state::tests_support::create_temp_git_repo();
         let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let started = std::time::Instant::now();
         let response = create_session_with_worktree(
             State(state.clone()),
             Json(CreateSessionWithWorktreeRequest {
@@ -7281,6 +7298,7 @@ mod tests {
         )
         .await
         .into_response();
+        let elapsed = started.elapsed();
         let status = response.status();
         let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
             .await
@@ -7291,11 +7309,7 @@ mod tests {
             return;
         }
         let session_id = body["session_id"].as_str().expect("session_id").to_string();
-        assert_eq!(
-            shell_state_of(&state, &session_id),
-            Some(crate::pty::SHELL_IDLE),
-            "POST /sessions/worktree must hold its response until the shell is idle"
-        );
+        assert_gate_held(&state, &session_id, elapsed, "POST /sessions/worktree");
         close_session(State(state), axum::extract::Path(session_id)).await;
     }
 
