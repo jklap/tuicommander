@@ -131,6 +131,7 @@
 {"record":253,"state":{"shell":1,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":null,"choice_sig":null,"fullscreen":false}}
 {"record":254,"state":{"shell":1,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":null,"choice_sig":null,"fullscreen":false}}
 {"record":255,"state":{"shell":1,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":null,"choice_sig":null,"fullscreen":false}}
+{"record":256,"event":{"type":"progress","state":0,"_turn_epoch":0}}
 {"record":256,"state":{"shell":1,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":null,"choice_sig":null,"fullscreen":false}}
 {"record":257,"state":{"shell":1,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":null,"choice_sig":null,"fullscreen":false}}
 {"record":258,"state":{"shell":1,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":null,"choice_sig":null,"fullscreen":false}}
@@ -310,6 +311,7 @@
 {"record":602,"state":{"shell":1,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":null,"choice_sig":null,"fullscreen":false}}
 {"record":604,"state":{"shell":1,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":null,"choice_sig":null,"fullscreen":false}}
 {"record":606,"state":{"shell":1,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":null,"choice_sig":null,"fullscreen":false}}
+{"record":607,"event":{"type":"progress","state":3,"_turn_epoch":0}}
 {"record":607,"state":{"shell":1,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":null,"choice_sig":null,"fullscreen":false}}
 {"record":608,"state":{"shell":1,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":null,"choice_sig":null,"fullscreen":false}}
 {"record":609,"event":{"type":"status-line","task_name":"Incubating","full_line":"✽ Incubating… (","time_info":null,"token_info":null,"_turn_epoch":0}}
@@ -391,12 +393,14 @@
 {"record":676,"state":{"shell":1,"agent":"awaiting_input","awaiting":true,"question":"Claude needs your permission","confident":true,"last_question":"Claude needs your permission","choice_sig":"Choose a test color|↑,↓,↵","fullscreen":false}}
 {"record":677,"state":{"shell":1,"agent":"awaiting_input","awaiting":true,"question":"Claude needs your permission","confident":true,"last_question":"Claude needs your permission","choice_sig":"Choose a test color|↑,↓,↵","fullscreen":false}}
 {"record":678,"state":{"shell":1,"agent":"awaiting_input","awaiting":true,"question":"Claude needs your permission","confident":true,"last_question":"Claude needs your permission","choice_sig":"Choose a test color|↑,↓,↵","fullscreen":false}}
+{"record":679,"event":{"type":"progress","state":0,"_turn_epoch":0}}
 {"record":679,"state":{"shell":1,"agent":"awaiting_input","awaiting":true,"question":"Claude needs your permission","confident":true,"last_question":"Claude needs your permission","choice_sig":"Choose a test color|↑,↓,↵","fullscreen":false}}
 {"record":680,"state":{"shell":1,"agent":"awaiting_input","awaiting":true,"question":"Claude needs your permission","confident":true,"last_question":"Claude needs your permission","choice_sig":"Choose a test color|↑,↓,↵","fullscreen":false}}
 {"record":681,"event":{"type":"question","prompt_text":"Enter to select · ↑/↓ to navigate ·","confident":true,"_turn_epoch":0}}
 {"record":681,"event":{"type":"choice-cleared","_turn_epoch":0}}
 {"record":681,"state":{"shell":1,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":"Enter to select · ↑/↓ to navigate ·","choice_sig":null,"fullscreen":false}}
 {"record":682,"event":{"type":"shell-state","state":"idle","agent_type":"claude"}}
+{"record":682,"event":{"type":"agent-block","action":"end","line":74,"on_alt_screen":false,"from_transcript_dump":false,"new_dump_generation":false,"_turn_epoch":0}}
 {"record":682,"state":{"shell":2,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":"Enter to select · ↑/↓ to navigate ·","choice_sig":null,"fullscreen":false}}
 {"record":683,"state":{"shell":2,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":"Enter to select · ↑/↓ to navigate ·","choice_sig":null,"fullscreen":false}}
 {"record":684,"event":{"type":"choice-prompt","title":"Choose red as the test color.","options":[{"key":"↑","label":"Previous option","highlighted":false,"destructive":false},{"key":"↓","label":"Next option","highlighted":false,"destructive":false},{"key":"↵","label":"Select highlighted option","highlighted":false,"destructive":false}],"selection_mode":"navigate-only","dismiss_key":"cancel","_turn_epoch":0}}

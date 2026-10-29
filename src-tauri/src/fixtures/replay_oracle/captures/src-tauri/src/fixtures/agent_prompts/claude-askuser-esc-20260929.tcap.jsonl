@@ -179,11 +179,11 @@
 {"record":177,"event":{"type":"user-input","content":"","line":-1,"_turn_epoch":0}}
 {"record":177,"state":{"shell":1,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":null,"choice_sig":null,"fullscreen":false}}
 {"record":178,"event":{"type":"question","prompt_text":"","confident":true,"_turn_epoch":0}}
-{"record":178,"state":{"shell":1,"agent":"awaiting_input","awaiting":true,"question":"","confident":true,"last_question":null,"choice_sig":null,"fullscreen":false}}
-{"record":179,"state":{"shell":1,"agent":"awaiting_input","awaiting":true,"question":"","confident":true,"last_question":null,"choice_sig":null,"fullscreen":false}}
-{"record":180,"state":{"shell":1,"agent":"awaiting_input","awaiting":true,"question":"","confident":true,"last_question":null,"choice_sig":null,"fullscreen":false}}
-{"record":181,"state":{"shell":1,"agent":"awaiting_input","awaiting":true,"question":"","confident":true,"last_question":null,"choice_sig":null,"fullscreen":false}}
-{"record":182,"state":{"shell":1,"agent":"awaiting_input","awaiting":true,"question":"","confident":true,"last_question":null,"choice_sig":null,"fullscreen":false}}
+{"record":178,"state":{"shell":1,"agent":"awaiting_input","awaiting":true,"question":"","confident":true,"last_question":"","choice_sig":null,"fullscreen":false}}
+{"record":179,"state":{"shell":1,"agent":"awaiting_input","awaiting":true,"question":"","confident":true,"last_question":"","choice_sig":null,"fullscreen":false}}
+{"record":180,"state":{"shell":1,"agent":"awaiting_input","awaiting":true,"question":"","confident":true,"last_question":"","choice_sig":null,"fullscreen":false}}
+{"record":181,"state":{"shell":1,"agent":"awaiting_input","awaiting":true,"question":"","confident":true,"last_question":"","choice_sig":null,"fullscreen":false}}
+{"record":182,"state":{"shell":1,"agent":"awaiting_input","awaiting":true,"question":"","confident":true,"last_question":"","choice_sig":null,"fullscreen":false}}
 {"record":183,"event":{"type":"question","prompt_text":"Enter to select · ↑/↓ to navigate · Esc to cancel","confident":true,"_turn_epoch":0}}
 {"record":183,"event":{"type":"choice-prompt","title":"Which color do you prefer?","options":[{"key":"1","label":"Red","highlighted":true,"destructive":false},{"key":"2","label":"Green","highlighted":false,"destructive":false},{"key":"3","label":"Blue","highlighted":false,"destructive":false},{"key":"4","label":"Type something.","highlighted":false,"destructive":false},{"key":"5","label":"Chat about this","highlighted":false,"destructive":false}],"selection_mode":"navigate-enter","dismiss_key":"cancel","_turn_epoch":0}}
 {"record":183,"state":{"shell":1,"agent":"awaiting_input","awaiting":true,"question":"Which color do you prefer?","confident":true,"last_question":"Enter to select · ↑/↓ to navigate · Esc to cancel","choice_sig":"Which color do you prefer?|1,2,3,4,5","fullscreen":false}}
