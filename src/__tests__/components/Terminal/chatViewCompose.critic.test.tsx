@@ -1,5 +1,6 @@
 import { EditorView } from "@codemirror/view";
 import { cleanup, fireEvent, render, waitFor } from "@solidjs/testing-library";
+import { createSignal } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("../../../stores/appLogger", () => ({
@@ -37,7 +38,20 @@ vi.mock("../../../components/Terminal/glyphCache", async (importOriginal) => ({
 	getSharedMetrics: () => ({ cellWidth: 8, cellHeight: 16 }),
 }));
 vi.mock("../../../components/Terminal/CanvasTerminal", () => ({
-	default: () => <div data-testid="canvas" />,
+	default: (props: { onRef?: (ref: { focus: () => void; searchClear: () => void }) => void }) => {
+		let input!: HTMLInputElement;
+		return (
+			<div data-testid="canvas" data-terminal-container>
+				<input
+					aria-label="Canvas terminal input"
+					ref={(element) => {
+						input = element;
+						props.onRef?.({ focus: () => input.focus({ preventScroll: true }), searchClear: vi.fn() });
+					}}
+				/>
+			</div>
+		);
+	},
 }));
 vi.mock("../../../invoke", () => ({
 	invoke: vi.fn(async (command: string) => {
@@ -101,6 +115,56 @@ function typeDraft(container: HTMLElement, text: string) {
 }
 
 describe("Chat Compose input", () => {
+	// Catches: the CLI switch reveals the grid but leaves keyboard focus on its tab.
+	it("returns_keyboard_focus_to_canvas_when_switching_from_chat_to_cli", async () => {
+		const id = addTerminal();
+		const view = render(() => <Terminal id={id} cwd="/repo" alwaysVisible />);
+		fireEvent.click(view.getByRole("tab", { name: "Chat" }));
+		expect((await readyEditor(view.container)).hasFocus).toBe(true);
+		const cli = view.getByRole("tab", { name: "CLI" });
+		cli.focus();
+		fireEvent.click(cli);
+		await waitFor(() => expect(document.activeElement).toBe(view.getByLabelText("Canvas terminal input")));
+	});
+
+	// Catches: unavailable Chat returning to a visible grid without a keyboard target.
+	it("focuses_canvas_when_chat_becomes_unavailable", async () => {
+		const id = addTerminal();
+		const view = render(() => <Terminal id={id} cwd="/repo" alwaysVisible />);
+		fireEvent.click(view.getByRole("tab", { name: "Chat" }));
+		await readyEditor(view.container);
+		terminalsStore.update(id, { agentType: null });
+		await waitFor(() => expect(document.activeElement).toBe(view.getByLabelText("Canvas terminal input")));
+	});
+
+	// Catches: fallback in a background Chat tab stealing focus from another terminal.
+	it("does_not_focus_a_hidden_canvas_when_chat_becomes_unavailable", async () => {
+		const id = addTerminal();
+		const [visible, setVisible] = createSignal(true);
+		const view = render(() => (
+			<>
+				<Terminal id={id} cwd="/repo" alwaysVisible={visible()} />
+				<input aria-label="Other terminal input" />
+			</>
+		));
+		fireEvent.click(view.getByRole("tab", { name: "Chat" }));
+		await readyEditor(view.container);
+		const other = terminalsStore.add({
+			sessionId: null,
+			awaitingInput: null,
+			cwd: "/other",
+			name: "other",
+			fontSize: 13,
+		});
+		terminalsStore.setActive(other);
+		setVisible(false);
+		const input = view.getByLabelText("Other terminal input");
+		input.focus();
+		terminalsStore.update(id, { agentType: null });
+		await waitFor(() => expect(terminalsStore.get(id)?.viewMode).toBe("cli"));
+		expect(document.activeElement).toBe(input);
+	});
+
 	// Catches: the real Compose Send path never starts Chat feedback before PTY output.
 	it("shows working immediately from Compose Send until existing terminal state settles", async () => {
 		const id = addTerminal();
@@ -210,6 +274,7 @@ describe("Chat Compose input", () => {
 		fireEvent.keyDown(cm.contentDOM, { key: "Escape" });
 		expect(terminalsStore.get(id)?.viewMode).toBe("cli");
 		expect(view.container.querySelector(".cm-editor")).toBeNull();
+		await waitFor(() => expect(document.activeElement).toBe(view.getByLabelText("Canvas terminal input")));
 		fireEvent.click(view.getByRole("tab", { name: "Chat" }));
 		expect((await readyEditor(view.container)).state.doc.toString()).toBe("Keep on Escape");
 	});

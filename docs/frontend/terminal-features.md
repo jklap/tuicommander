@@ -1,5 +1,7 @@
 # Terminal Features & Keyboard Shortcuts
 
+On desktop, returning from Chat to CLI focuses the terminal input. You can type immediately after using the switch, closing Chat Compose, answering in CLI, or falling back from unavailable Chat. Hidden terminals do not take focus.
+
 Session Chat shows a pulsing **Working…** row after Send and while the terminal reports busy. It disappears when the terminal reports idle or awaits a question or permission answer. Desktop and mobile use the existing session state; Chat does not infer activity from the conversation text.
 
 Consolidated reference for all terminal behaviors, keyboard shortcuts, and configurable features.

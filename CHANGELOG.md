@@ -25,6 +25,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Restore terminal keyboard focus when returning from Chat to CLI, including native-answer and unavailable-Chat paths (#2484-9adb).
+
 - Avoid a queue-load alert in every empty mobile terminal session when an older host has no queue-read endpoint; retain errors for known pending work and other read failures (#2481-024a).
 
 - Align the Smart Prompt editor on one label/control grid, use readable placement names, and add a shortcut clear action (#2479-4866).

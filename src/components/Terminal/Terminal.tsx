@@ -232,10 +232,12 @@ export const Terminal: Component<TerminalProps> = (props) => {
 	const composeVisible = () => chatActive() || composeOpen();
 	const composeDocked = () => chatActive() || composePinned();
 	createEffect(
-		on(chatActive, (active) => {
+		on(chatActive, (active, wasActive) => {
 			closeSearchBar();
 			chatSearchRef?.close();
 			if (active) setComposeFocusRequest((n) => n + 1);
+			// One return path for the switch, native answers and unavailable Chat.
+			else if (wasActive && isVisible()) canvasTerminalRef()?.focus();
 		}),
 	);
 	/** After a send, an unpinned composer is done; a pinned one keeps the caret. */
@@ -1597,8 +1599,10 @@ export const Terminal: Component<TerminalProps> = (props) => {
 						}}
 						onClose={() => {
 							if (chatActive()) terminalsStore.setViewMode(props.id, "cli");
-							else if (!composePinned()) setComposeOpen(false);
-							canvasTerminalRef()?.focus();
+							else {
+								if (!composePinned()) setComposeOpen(false);
+								canvasTerminalRef()?.focus();
+							}
 						}}
 						onSend={async (text) => {
 							const rollback = sessionId ? chatViewStore.beginSubmission(sessionId) : () => {};
