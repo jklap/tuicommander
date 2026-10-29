@@ -23,6 +23,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Show "Unavailable" instead of 0% in the Claude usage Extra Usage card when `extra_usage.utilization` is null (PR #129, #2468-94c1).
 - Align the answer rule for fully answer-marked Chat lists with the paragraph rule, keeping bullets inside the list gutter and mixed-list siblings unruled (#2477-8ea9).
 - Keep new worktrees clean when shared-store directories use directory-only ignore patterns, without hiding untracked stores in the main checkout (#2476-b3eb).
 
@@ -405,7 +406,6 @@ Earlier contributions not credited before:
 - Read the rich sidebar's subagent flow at once, and refresh a repo's git state at once, when the system clock was set back, instead of waiting out the skew (a skew past 2^31-1 ms made the sidebar flow re-arm a 1 ms timer in a busy loop).
 - Keep the File Browser and Git Panel available while a per-repo auto-consolidated worktree workspace is active; only the manual cross-repo global workspace suppresses them.
 - Quantize the mouse wheel forwarded to mouse-reporting apps (Claude Code, vim, lazygit, htop) to one SGR notch per line height, capped at 3 per event, with `deltaMode` line/page normalization, so a macOS momentum flick no longer sends hundreds of notches; Shift+wheel (reported on `deltaX` by macOS) now reaches TUIC scrollback. Cap scrollback gesture acceleration at 2x and restart it on direction reversal. SGR mouse reports (`ESC [ < ... M`) no longer leak into the reconstructed input line used for busy detection and prompt capture.
-- Show Claude usage for enterprise and spend-based plans: when no windowed rate bucket is populated, the status-bar ticker and Rate Limits section fall back to `extra_usage` instead of "no data", without masking a populated hidden bucket.
 - Handle denied clipboard writes (NotAllowedError, common in browser/PWA mode) in the Branches "Copy Name" menu, Remote QR "copy URL", Generators copy buttons and the terminal "Copy Block Output" item: they now log instead of raising an unhandled rejection, and no longer show a false "Copied" state.
 - Warn (without failing) when a frontend entry reaches 98% of its gzip budget in `scripts/report-frontend-bundles.mjs --check`, so shrinking headroom is visible before the hard cap breaks the build.
 - Explain a named instance's Unix socket path that cannot fit `sun_path`: one error names the length, the host limit (103 bytes on macOS, 107 on Linux) and the longest `TMPDIR` that would hold it; `TUIC_SOCKET` is client-only and does not move the listener, and the doomed bind retries are skipped.
