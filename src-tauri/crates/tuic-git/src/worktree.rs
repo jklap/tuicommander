@@ -15488,8 +15488,11 @@ branch refs/heads/feat
             .find(|root| root.ends_with("Gits/.tmp"))
             .expect("tooling scratch root");
         assert!(is_temporary_path(&home.join("review-r5-wt")));
-        assert!(!is_temporary_path(
-            &home.with_file_name(".tmp-other").join("review")
+        // Ask the Gits/.tmp root alone: under TUIC_TEST_FAKE_HOME the fake HOME
+        // lives inside the test temp root, so the sibling is temporary anyway.
+        assert!(!tuic_core::temp_paths::is_under_temp_roots(
+            &home.with_file_name(".tmp-other").join("review"),
+            std::slice::from_ref(&home)
         ));
     }
 
