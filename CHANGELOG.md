@@ -23,6 +23,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Show unavailable Claude enterprise/spend-based utilization instead of a false 0%, while retaining available credit totals and real zero usage (#129, thanks to @jklap).
+
 - Normalize redundant leading slashes in native file-tab URLs before storing the path, so Copy Path uses `~/…` for home files (#2466-7f4f).
 
 - Reconcile the first mobile composer edit with an existing terminal draft so dictated text does not silently append to a hidden slash command. Render Claude slash-command user messages as a command chip and arguments instead of raw XML (#2460-5a96).

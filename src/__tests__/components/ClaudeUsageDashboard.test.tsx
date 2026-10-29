@@ -264,5 +264,79 @@ describe("ClaudeUsageDashboard", () => {
 				expect(container.textContent).toContain("32.5% used");
 			});
 		});
+
+		it.each([true, false])("keeps real zero utilization visible with credit detail=%s", async (withCredits) => {
+			vi.mocked(invoke).mockImplementation(async (cmd: string) => {
+				if (cmd === "get_claude_usage_api") {
+					return {
+						...enterpriseUsageResponse,
+						extra_usage: {
+							...enterpriseUsageResponse.extra_usage,
+							monthly_limit: withCredits ? 500000 : null,
+							used_credits: withCredits ? 0 : null,
+							utilization: 0,
+						},
+					};
+				}
+				if (cmd === "get_claude_session_stats") return mockSessionStats;
+				if (cmd === "get_claude_project_list") return mockProjectList;
+				if (cmd === "get_claude_usage_timeline") return mockTimeline;
+				return undefined;
+			});
+			const { container } = render(() => <ClaudeUsageDashboard />);
+			await vi.waitFor(() => {
+				expect(container.textContent).toContain(withCredits ? "0.0% used" : "0%");
+			});
+			expect(container.textContent).not.toMatch(/unavailable/i);
+		});
+
+		it("shows an unavailable value, not 0%, when extra_usage.utilization is null", async () => {
+			vi.mocked(invoke).mockImplementation(async (cmd: string) => {
+				if (cmd === "get_claude_usage_api") {
+					return {
+						...enterpriseUsageResponse,
+						extra_usage: { ...enterpriseUsageResponse.extra_usage, utilization: null },
+					};
+				}
+				if (cmd === "get_claude_session_stats") return mockSessionStats;
+				if (cmd === "get_claude_project_list") return mockProjectList;
+				if (cmd === "get_claude_usage_timeline") return mockTimeline;
+				return undefined;
+			});
+			const { container } = render(() => <ClaudeUsageDashboard />);
+			await vi.waitFor(() => {
+				expect(container.textContent).toContain("162,709");
+			});
+			expect(container.textContent).toContain("Usage percentage unavailable");
+			expect(container.textContent).not.toContain("0.0% used");
+		});
+
+		it("shows an unavailable value, not 0%, when utilization and credit detail are both missing", async () => {
+			vi.mocked(invoke).mockImplementation(async (cmd: string) => {
+				if (cmd === "get_claude_usage_api") {
+					return {
+						...enterpriseUsageResponse,
+						extra_usage: {
+							is_enabled: true,
+							monthly_limit: null,
+							used_credits: null,
+							utilization: null,
+							resets_at: null,
+							in_use: false,
+						},
+					};
+				}
+				if (cmd === "get_claude_session_stats") return mockSessionStats;
+				if (cmd === "get_claude_project_list") return mockProjectList;
+				if (cmd === "get_claude_usage_timeline") return mockTimeline;
+				return undefined;
+			});
+			const { container } = render(() => <ClaudeUsageDashboard />);
+			await vi.waitFor(() => {
+				expect(container.textContent).toContain("Extra Usage");
+			});
+			expect(container.textContent).toContain("Unavailable");
+			expect(container.textContent).not.toMatch(/(^|[^0-9.])0%/);
+		});
 	});
 });

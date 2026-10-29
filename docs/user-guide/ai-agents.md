@@ -221,7 +221,7 @@ A native feature (not a plugin) that provides detailed analytics for your Claude
 
 When enabled, TUICommander polls the Claude API every 5 minutes and shows:
 
-- **Rate limits** — 5-hour and 7-day utilization bars with reset countdowns. Color-coded: green (OK), yellow (70%+), red (90%+). Enterprise/spend-based plans don't populate these named buckets — the badge and dashboard fall back to that plan's own usage figure instead of showing "no data."
+- **Rate limits** — 5-hour and 7-day utilization bars with reset countdowns. Color-coded: green (OK), yellow (70%+), red (90%+). Enterprise/spend-based plans don't populate these named buckets — the badge and dashboard fall back to that plan's own usage figure instead of showing "no data." Missing usage percentages show as unavailable, not 0%; available credit totals remain visible.
 - **Usage Over Time** — 7-day token usage chart (input vs. output tokens) with hover tooltips.
 - **Insights** — Session count, message counts, input/output/cache token totals.
 - **Activity heatmap** — 52-week GitHub-style heatmap of daily message counts with per-project drill-down on hover.
