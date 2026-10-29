@@ -605,7 +605,11 @@ Per-agent configuration (spawn args, environment overrides).
 Open code editor tabs (CodeEditorTab).
 
 ### activityStore (`activityStore.ts`)
-Session activity history and timeline data.
+Session activity history and timeline data. Mutations before the first successful
+activity load remain pending in memory. After hydration merges stored and live
+items, one save persists the latest merged list without a readiness error. A
+failed load keeps the pending save for a later successful hydration; ordinary
+post-load mutations retain the 300 ms debounce on desktop and browser clients.
 
 ### branchSwitcher (`branchSwitcher.ts`)
 Branch switch state and loading indicators.
