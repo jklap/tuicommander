@@ -74,6 +74,11 @@ async fn sync_root(
     root: &str,
     ids: Vec<IngestVersion>,
 ) -> Result<()> {
+    // The durable ledger outlives checkouts. Keep it for restoration, but do not
+    // send roots mdkb cannot resolve or turn removed projects into user warnings.
+    if !std::path::Path::new(root).is_dir() {
+        return Ok(());
+    }
     let remote: HashMap<_, _> = client
         .external_list(root, SOURCE)
         .await?
@@ -132,4 +137,76 @@ async fn sync_root(
         bail!(error);
     }
     Ok(())
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    // Catches: a deleted project repeatedly reaching mdkb instead of waiting for restoration.
+    #[tokio::test]
+    async fn ingest_missing_root_skips_rpc_until_restored() {
+        let dir = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let root = dir.path().join("project");
+        std::fs::create_dir(&root).unwrap();
+        let store = Arc::new(StoryStore::open_at(&dir.path().join("stories.sqlite3")).unwrap());
+        let (stream, mut server) = tokio::net::UnixStream::pair().unwrap();
+        let mut client = MdkbClient::from_stream(stream, Duration::from_secs(30));
+        let replies = tokio::spawn(async move {
+            let mut requests = Vec::new();
+            loop {
+                let mut header = [0; 4];
+                if server.read_exact(&mut header).await.is_err() {
+                    break;
+                }
+                let mut body = vec![0; u32::from_le_bytes(header) as usize];
+                server.read_exact(&mut body).await.unwrap();
+                let request: serde_json::Value = serde_json::from_slice(&body).unwrap();
+                let response = serde_json::to_vec(&serde_json::json!({
+                    "id": request["id"], "result": {"documents": []}
+                }))
+                .unwrap();
+                requests.push(request);
+                server
+                    .write_all(&(response.len() as u32).to_le_bytes())
+                    .await
+                    .unwrap();
+                server.write_all(&response).await.unwrap();
+            }
+            requests
+        });
+        let root_str = root.to_str().unwrap();
+        sync_root(store.clone(), &mut client, root_str, vec![])
+            .await
+            .unwrap();
+        std::fs::remove_dir(&root).unwrap();
+        for _ in 0..2 {
+            sync_root(store.clone(), &mut client, root_str, vec![])
+                .await
+                .unwrap();
+        }
+        // A file at the old path is not a restored project directory.
+        std::fs::write(&root, "not a directory").unwrap();
+        sync_root(store.clone(), &mut client, root_str, vec![])
+            .await
+            .unwrap();
+        std::fs::remove_file(&root).unwrap();
+        std::fs::create_dir(&root).unwrap();
+        sync_root(store, &mut client, root_str, vec![])
+            .await
+            .unwrap();
+        drop(client);
+        let requests = replies.await.unwrap();
+        assert_eq!(
+            requests.len(),
+            2,
+            "only existing and restored roots reach mdkb"
+        );
+        assert!(
+            requests
+                .iter()
+                .all(|request| request["method"] == "external.list")
+        );
+    }
 }
