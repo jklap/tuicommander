@@ -493,6 +493,7 @@ Full-screen overlay. All pages share `width: min(1136px, calc(100vw - 48px))`, `
 - `SettingPageHeader`: 20px title, optional subtitle, scope badge and optional source. Omit subtitles that only repeat card headings. A header without a subtitle or source reserves no subtitle space.
 - `SectionCard`: semantic `<h3>`, 15px heading, 16px padding/gap, 8px radius, `--bg-primary`.
 - `SettingRow`: persistent label/hint left, existing shared control right (up to 260px, 36px high), 12px vertical padding. Reuse `SettingField` IDs; errors go below the field and join `aria-describedby`.
+- `SectionCard layout="aligned"`: approved dense structured editor layout. Use a 120px label column and one shared control column. It sets shared form tokens to 28px; controls keep the 44px mobile minimum. Named child grids retain their own layout. The Smart Prompt editor uses this layout with two placement columns and one row per conditional setting.
 - `StatusSummary`: visible status words and existing `StatusBadge` semantic tone, source and freshness. Unknown is neutral; saved sign-in is not a live connection.
 - `ListRow`: wrapping name/subtitle, source/version/access badges and named actions. `EmptyState` explains absence and offers one valid action; do not conflate loading, failed or unsupported state.
 - `DangerZone`: explicit scope and consequence for destructive/disconnecting actions only; caller retains confirmation. Ordinary reset is not automatically destructive.

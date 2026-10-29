@@ -25,6 +25,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Align the Smart Prompt editor on one label/control grid, use readable placement names, and add a shortcut clear action (#2479-4866).
+
 - Reserve one in-flow slot for Git Changes row stats and actions, prevent long paths and focused-row overlap, simplify section headers, and align compact commit controls (#2478-456b).
 - Show "Unavailable" instead of 0% in the Claude usage Extra Usage card when `extra_usage.utilization` is null (PR #129, #2468-94c1).
 - Align the answer rule for fully answer-marked Chat lists with the paragraph rule, keeping bullets inside the list gutter and mixed-list siblings unruled (#2477-8ea9).

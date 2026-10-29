@@ -19,15 +19,15 @@ import { DangerZone, ListRow, SectionCard, SettingPageHeader, SettingRow } from 
 import sp from "./SmartPromptsTab.module.css";
 
 // All placements for the checkbox grid
-const ALL_PLACEMENTS: SmartPlacement[] = [
-	"toolbar",
-	"git-changes",
-	"git-branches",
-	"pr-popover",
-	"issue-popover",
-	"terminal-context",
-	"command-palette",
-	"file-context",
+const ALL_PLACEMENTS: { value: SmartPlacement; label: string }[] = [
+	{ value: "toolbar", label: "Toolbar" },
+	{ value: "command-palette", label: "Command palette" },
+	{ value: "git-changes", label: "Git · Changes" },
+	{ value: "git-branches", label: "Git · Branches" },
+	{ value: "pr-popover", label: "PR popover" },
+	{ value: "issue-popover", label: "Issue popover" },
+	{ value: "terminal-context", label: "Terminal menu" },
+	{ value: "file-context", label: "File menu" },
 ];
 
 // Categories extracted from smart prompt tags
@@ -304,7 +304,7 @@ const PromptEditor: Component<{
 
 	return (
 		<>
-			<SectionCard title={`Edit ${props.prompt.name}`}>
+			<SectionCard title={`Edit ${props.prompt.name}`} layout="aligned">
 				{/* Name */}
 				<SettingRow label="Name *">
 					{(id, descriptionId) => (
@@ -367,10 +367,10 @@ const PromptEditor: Component<{
 											<input
 												data-setting-id="prompts.prompts.{id}.text"
 												type="checkbox"
-												checked={props.prompt.placement?.includes(placement) ?? false}
-												onChange={() => handlePlacementToggle(placement)}
+												checked={props.prompt.placement?.includes(placement.value) ?? false}
+												onChange={() => handlePlacementToggle(placement.value)}
 											/>
-											<span>{placement}</span>
+											<span>{placement.label}</span>
 										</label>
 									)}
 								</For>
@@ -379,94 +379,84 @@ const PromptEditor: Component<{
 					)}
 				</SettingRow>
 
-				{/* Execution Mode + Auto-execute row */}
-				<div>
-					<SettingRow label="Execution Mode">
+				{/* Execution and its conditional target each keep one shared row. */}
+				<SettingRow label="Execution">
+					{(id, descriptionId) => (
+						<div>
+							<Select
+								data-setting-id="prompts.prompts.{id}.text"
+								id={id}
+								aria-describedby={descriptionId()}
+								value={props.prompt.executionMode ?? "inject"}
+								onChange={(e) => {
+									const mode = e.currentTarget.value as "inject" | "headless" | "api" | "shell";
+									const update: Partial<SavedPrompt> = { executionMode: mode };
+									if (mode === "inject") {
+										update.outputTarget = undefined;
+										update.systemPrompt = undefined;
+									}
+									if (mode === "shell") {
+										update.systemPrompt = undefined;
+									}
+									promptLibraryStore.updatePrompt(props.prompt.id, update);
+								}}
+							>
+								<option value="inject">Inject into terminal</option>
+								<option value="shell">Shell script (direct run)</option>
+								<option value="headless">Headless (one-shot CLI)</option>
+								<option value="api">API (via ego)</option>
+							</Select>
+						</div>
+					)}
+				</SettingRow>
+
+				<Show when={(props.prompt.executionMode ?? "inject") === "inject"}>
+					<SettingRow label="Target">
 						{(id, descriptionId) => (
 							<div>
 								<Select
 									data-setting-id="prompts.prompts.{id}.text"
 									id={id}
 									aria-describedby={descriptionId()}
-									value={props.prompt.executionMode ?? "inject"}
+									value={props.prompt.injectTarget ?? "compose"}
 									onChange={(e) => {
-										const mode = e.currentTarget.value as "inject" | "headless" | "api" | "shell";
-										const update: Partial<SavedPrompt> = { executionMode: mode };
-										if (mode === "inject") {
-											update.outputTarget = undefined;
-											update.systemPrompt = undefined;
+										const val = e.currentTarget.value;
+										if (val === "terminal" || val === "compose") {
+											promptLibraryStore.updatePrompt(props.prompt.id, { injectTarget: val });
 										}
-										if (mode === "shell") {
-											update.systemPrompt = undefined;
-										}
-										promptLibraryStore.updatePrompt(props.prompt.id, update);
 									}}
 								>
-									<option value="inject">Inject into terminal</option>
-									<option value="shell">Shell script (direct run)</option>
-									<option value="headless">Headless (one-shot CLI)</option>
-									<option value="api">API (via ego)</option>
+									<option value="compose">Compose box (review)</option>
+									<option value="terminal">Terminal (send to agent)</option>
 								</Select>
 							</div>
 						)}
 					</SettingRow>
+				</Show>
 
-					<Show when={(props.prompt.executionMode ?? "inject") === "inject"}>
-						<SettingRow
-							label="Target"
-							hint="Compose fills the input for review; Terminal sends to the agent and waits for idle"
-						>
-							{(id, descriptionId) => (
-								<div>
-									<Select
-										data-setting-id="prompts.prompts.{id}.text"
-										id={id}
-										aria-describedby={descriptionId()}
-										value={props.prompt.injectTarget ?? "compose"}
-										onChange={(e) => {
-											const val = e.currentTarget.value;
-											if (val === "terminal" || val === "compose") {
-												promptLibraryStore.updatePrompt(props.prompt.id, { injectTarget: val });
-											}
-										}}
-									>
-										<option value="compose">Compose box (review)</option>
-										<option value="terminal">Terminal (send to agent)</option>
-									</Select>
-								</div>
-							)}
-						</SettingRow>
-					</Show>
-
-					<Show
-						when={
-							(props.prompt.executionMode ?? "inject") === "inject" &&
-							(props.prompt.injectTarget ?? "compose") === "terminal"
-						}
-					>
-						<SettingRow label="Auto-execute" hint="Uncheck to review before sending">
-							{(id, descriptionId) => (
-								<div>
-									<label class={sp.autoExecLabel}>
-										<Switch
-											data-setting-id="prompts.prompts.{id}.text"
-											id={id}
-											aria-describedby={descriptionId()}
-											role="switch"
-											checked={props.prompt.autoExecute ?? false}
-											onChange={handleAutoExecuteToggle}
-										/>
-										<span>Send immediately</span>
-									</label>
-								</div>
-							)}
-						</SettingRow>
-					</Show>
-				</div>
+				<Show
+					when={
+						(props.prompt.executionMode ?? "inject") === "inject" &&
+						(props.prompt.injectTarget ?? "compose") === "terminal"
+					}
+				>
+					<SettingRow label="Send immediately">
+						{(id, descriptionId) => (
+							<Switch
+								data-setting-id="prompts.prompts.{id}.text"
+								id={id}
+								aria-describedby={descriptionId()}
+								role="switch"
+								checked={props.prompt.autoExecute ?? false}
+								onChange={handleAutoExecuteToggle}
+							/>
+						)}
+					</SettingRow>
+				</Show>
 
 				{/* Preferred Agent (headless mode only) */}
 				<Show when={props.prompt.executionMode === "headless"}>
-					<SettingRow label="Preferred Agent" hint="Override the global headless agent for this prompt">
+					<SettingRow label="Preferred Agent">
 						{(id, descriptionId) => (
 							<div>
 								<Select
@@ -537,7 +527,7 @@ const PromptEditor: Component<{
 
 				{/* System Prompt (api mode only) */}
 				<Show when={props.prompt.executionMode === "api"}>
-					<SettingRow label="System Prompt" hint="Sent as the system message to the LLM provider">
+					<SettingRow label="System Prompt">
 						{(id, descriptionId) => (
 							<div>
 								<Textarea
@@ -559,10 +549,27 @@ const PromptEditor: Component<{
 				</Show>
 
 				{/* Shortcut */}
-				<SettingRow label="Keyboard Shortcut">
-					{() => (
+				<SettingRow
+					label="Shortcut"
+					actions={
+						props.prompt.shortcut ? (
+							<Button
+								shape="icon"
+								aria-label="Clear shortcut"
+								data-setting-id="prompts.prompts.{id}.text"
+								onClick={() => handleShortcutChange("")}
+							>
+								<svg viewBox="0 0 16 16" width="12" height="12" fill="currentColor" aria-hidden="true">
+									<path d="m4.2 3.2 3.8 3.8 3.8-3.8 1 1L9 8l3.8 3.8-1 1L8 9l-3.8 3.8-1-1L7 8 3.2 4.2z" />
+								</svg>
+							</Button>
+						) : undefined
+					}
+				>
+					{(id) => (
 						<div>
 							<KeyComboCapture
+								id={id}
 								settingId="prompts.prompts.{id}.text"
 								value={props.prompt.shortcut ?? ""}
 								onChange={handleShortcutChange}
