@@ -1,3 +1,12 @@
+## Windows monitoring directory metadata (2310-6e76, round l) — Rust rebuild/restart required
+
+- [ ] Coordinator: confirm complete native Windows-x64 CI success after the directory-metadata repair. The raw-event replay proves the recorded event no longer rejects an unchanged status load; rb is not native Windows GREEN. Keep the original unchanged-sibling and tracked `target/tracked.txt` assertions and 20-second deadlines.
+- [ ] After Boss manually restarts a rebuilt `make dev` or installs `make build`, confirm an unchanged linked checkout retains its sidebar status while sibling Git activity occurs, and a tracked edit inside `target` still updates that checkout. Rust does not hot-reload; the daily app was not restarted.
+
+## Windows CI repairs (2310-6e76, round g) — Rust rebuild/restart required
+
+- [ ] Coordinator: run the exact owner filter in `reports/2310-windows-ci-round-g.md` on native Windows. It covers all 24 failing owners, unchanged assertions/deadlines, profile decoding, workflow HTTP errors and gitconfig process-exit cleanup. rb RED and Linux Clippy are not native Windows GREEN.
+- [ ] After an authorized `make dev` restart or `make build`, verify that a Windows agent resumes from a profile path with spaces/backslashes and that its repository worktree-storage override still applies. Rust does not hot-reload; the daily app was not restarted.
 ## External speech command cleanup (2455-f617) — Rust rebuild/restart required
 
 - [ ] After an authorized manual `make dev` restart or `make build`, confirm that cancelling a shell-wrapped external speech engine stops its subprocess. Rust does not hot-reload; the daily app was not restarted. Unix cleanup is covered on rb; Windows uses `taskkill /T /F` and still needs native Windows execution.
@@ -3263,3 +3272,5 @@ Isolated Chrome screenshot capture timed out after 35 seconds; visual rendering 
 ## Incoming PR review automation (2327-1ca0)
 
 - [ ] After a manual backend restart, opt in only on an authorized disposable GitHub repository and verify the latest pushed head gets one pinned COMMENT review; older in-flight output remains superseded and no branch push or new PR occurs. No live GitHub write was performed during implementation. Rust changes require `make dev` restart or a new release build; Vite hot reload cannot load them.
+
+- [ ] After an authorized rebuild, verify on Windows that a main-only commit or adding a worktree does not rescan unchanged sibling dirty/diff status; editing and staging in that sibling must still update its badges (#2310-6e76, round j).

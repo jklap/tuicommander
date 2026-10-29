@@ -25,7 +25,13 @@ fn resume_verifies_the_launch_profile_and_preserves_quoted_environment() {
     assert!(result.verified);
     let (env, command) = shell_launch(result.cmd.as_deref().unwrap());
     assert_eq!(env["CLAUDE_CONFIG_DIR"], profile.to_str().unwrap());
-    assert_eq!(command, format!("claude --resume '{id}' --model opus"));
+    assert_eq!(
+        command,
+        format!(
+            "claude --resume {} --model opus",
+            crate::prompt::shell_quote(id)
+        )
+    );
     std::fs::remove_file(project.join(format!("{id}.jsonl"))).unwrap();
     assert!(resolve(&request).cmd.is_none());
 }
@@ -89,18 +95,47 @@ fn resume_preserves_agent_selectors_and_custom_binaries() {
         assert!(command.contains(expected), "{agent}: {command}");
         assert!(command.starts_with("wrapper ") && command.ends_with("--model custom"));
     }
-    for (agent, expected) in [
-        ("claude", "--resume 'recorded-id'"),
-        ("gemini", "--resume 'recorded-id'"),
-        ("codex", "resume 'recorded-id'"),
-        ("ego", "resume 'recorded-id'"),
+    let quoted_id = crate::prompt::shell_quote("recorded-id");
+    for (agent, selector) in [
+        ("claude", "--resume"),
+        ("gemini", "--resume"),
+        ("codex", "resume"),
+        ("ego", "resume"),
     ] {
+        let expected = format!("{selector} {quoted_id}");
         let result = resolve(&ResumeRequest {
             agent_type: agent.into(),
             agent_session_id: Some("recorded-id".into()),
             ..Default::default()
         });
-        assert!(result.cmd.unwrap().contains(expected));
+        assert!(result.cmd.unwrap().contains(&expected));
         assert!(!result.verified, "no cwd must never claim verified storage");
+    }
+}
+
+// Catches: decoding every backslash as an escape corrupts quoted profile paths.
+#[test]
+fn shell_launch_preserves_backslashes_in_double_quoted_profile_paths() {
+    let (env, command) =
+        shell_launch(r#"CLAUDE_CONFIG_DIR="D:\profiles\private profile" claude --model opus"#);
+    assert_eq!(env["CLAUDE_CONFIG_DIR"], r"D:\profiles\private profile");
+    assert_eq!(command, "claude --model opus");
+}
+
+// Catches: command/profile decoding drifting from the launch writer's host quoting.
+#[test]
+fn shell_launch_round_trips_native_quoted_profile_values() {
+    for profile in [
+        r"C:\profiles\private profile",
+        r"\\server\share\profile\",
+        "a'b\"c^&|<>%",
+    ] {
+        let input = format!(
+            "CLAUDE_CONFIG_DIR={} claude --model opus",
+            crate::prompt::shell_quote(profile)
+        );
+        let (env, command) = shell_launch(&input);
+        assert_eq!(env["CLAUDE_CONFIG_DIR"], profile, "{input}");
+        assert_eq!(command, "claude --model opus");
     }
 }

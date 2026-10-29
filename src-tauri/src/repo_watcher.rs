@@ -2448,7 +2448,7 @@ mod tests {
             "add",
             "-b",
             "watcher-sibling",
-            sibling.to_str().unwrap(),
+            &tuic_core::path_spelling::portable_spelling(&sibling.to_string_lossy()),
         ]);
 
         let state = Arc::new(crate::state::tests_support::make_test_app_state());

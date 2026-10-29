@@ -686,7 +686,9 @@ mod tests {
         let config = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
         let _guard = crate::config::set_config_dir_override(config.path().to_path_buf());
         let repo = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
-        let project = repo.path().to_str().unwrap();
+        let owner =
+            crate::progress::resolve_owning_project(Some(repo.path().to_str().unwrap())).unwrap();
+        let project = owner.to_str().unwrap();
         let (story, _) = two_stories(project);
         let call = |value| story_action(project, serde_json::from_value(value).unwrap(), None);
         let archived = story_of(call(serde_json::json!({"action":"archive_story","story_id":story.id,"expected_revision":story.revision})).unwrap());
@@ -978,7 +980,9 @@ mod tests {
         let repo = tempfile::tempdir_in(crate::test_support::test_temp_root()).expect("project");
         std::fs::create_dir(repo.path().join("plans")).expect("plans dir");
         std::fs::write(repo.path().join("plans/feature.md"), "# Document title\n").expect("plan");
-        let project = repo.path().to_str().expect("project path");
+        let owner =
+            crate::progress::resolve_owning_project(Some(repo.path().to_str().unwrap())).unwrap();
+        let project = owner.to_str().unwrap();
         let add = || StoryAction::AddPlanSource {
             source: "plans/feature.md".into(),
         };

@@ -4,7 +4,10 @@ fn with_plan(title: &str, test: impl FnOnce(&str, &StoryStore, &Plan)) {
     let config = tempfile::tempdir_in(tuic_test_support::test_temp_root()).expect("config");
     let _guard = crate::config::set_config_dir_override(config.path().to_path_buf());
     let repo = tempfile::tempdir_in(tuic_test_support::test_temp_root()).expect("project");
-    let project = repo.path().to_string_lossy().to_string();
+    let project = crate::progress::resolve_owning_project(Some(repo.path().to_str().unwrap()))
+        .unwrap()
+        .to_string_lossy()
+        .into_owned();
     let store = StoryStore::open().expect("store");
     let plan = store
         .create_plan(NewPlan {

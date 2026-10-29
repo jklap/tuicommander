@@ -4284,7 +4284,9 @@ mod tests {
         let config = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
         let _guard = crate::config::set_config_dir_override(config.path().to_path_buf());
         let project = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
-        let project = project.path().to_str().unwrap();
+        let owner = crate::progress::resolve_owning_project(Some(project.path().to_str().unwrap()))
+            .unwrap();
+        let project = owner.to_str().unwrap();
         let draft = WorkflowStore::open()
             .unwrap()
             .seed_templates(project)
@@ -4312,6 +4314,44 @@ mod tests {
         let body = String::from_utf8(body.to_vec()).unwrap();
         assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
         assert!(body.contains("already been published"), "{body}");
+    }
+
+    // Catches: a caller selecting another project's workflow being reported as HTTP 500.
+    #[tokio::test]
+    async fn workflow_project_scope_refusal_is_a_client_error() {
+        use crate::workflows::{WorkflowAction, WorkflowReply};
+        let config = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let _guard = crate::config::set_config_dir_override(config.path().to_path_buf());
+        let first = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let second = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let WorkflowReply::Drafts(drafts) = crate::workflows::definition_action(
+            first.path().to_str().unwrap(),
+            WorkflowAction::SeedTemplates,
+        )
+        .unwrap() else {
+            panic!("templates");
+        };
+        let response = post_workflow_definition_action(
+            None,
+            None,
+            Query(types::PathQuery {
+                path: second.path().to_string_lossy().into_owned(),
+            }),
+            Json(WorkflowAction::GetDraft {
+                id: drafts[0].id.clone(),
+            }),
+        )
+        .await;
+        let status = response.status();
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let body = String::from_utf8(body.to_vec()).unwrap();
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
+        assert!(
+            body.contains("workflow does not belong to project"),
+            "{body}"
+        );
     }
 
     #[tokio::test]
@@ -8557,7 +8597,12 @@ mod tests {
             .run()
             .unwrap()
             .stdout;
-        assert!(listed.contains(linked.to_str().unwrap()), "{listed}");
+        assert!(
+            listed.contains(&tuic_core::path_spelling::portable_spelling(
+                &linked.to_string_lossy()
+            )),
+            "{listed}"
+        );
     }
 
     #[tokio::test]

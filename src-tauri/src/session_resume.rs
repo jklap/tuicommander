@@ -24,7 +24,7 @@ fn tokens(command: &str) -> Vec<String> {
     let mut quote = None;
     let mut chars = command.chars();
     while let Some(ch) = chars.next() {
-        if ch == '\\' && quote != Some('\'') {
+        if !cfg!(windows) && ch == '\\' && quote != Some('\'') {
             current.push(ch);
             if let Some(next) = chars.next() {
                 current.push(next);
@@ -49,11 +49,26 @@ fn tokens(command: &str) -> Vec<String> {
 fn unquote(value: &str) -> String {
     let mut result = String::new();
     let mut quote = None;
-    let mut chars = value.chars();
+    let mut chars = value.chars().peekable();
     while let Some(ch) = chars.next() {
-        if matches!(ch, '\'' | '"') && (quote.is_none() || quote == Some(ch)) {
+        if cfg!(windows) && ch == '"' && quote == Some('"') && chars.peek() == Some(&'"') {
+            chars.next();
+            result.push('"');
+        } else if matches!(ch, '\'' | '"') && (quote.is_none() || quote == Some(ch)) {
             quote = if quote.is_some() { None } else { Some(ch) };
-        } else if ch == '\\' && quote != Some('\'') {
+        } else if !cfg!(windows)
+            && ch == '\\'
+            && quote != Some('\'')
+            && (quote.is_none()
+                || chars
+                    .peek()
+                    .is_some_and(|next| matches!(next, '\\' | '"' | '$' | '`' | '\n')))
+        {
+            if let Some(next) = chars.next() {
+                result.push(next);
+            }
+        } else if cfg!(windows) && ch == '^' {
+            // prompt::shell_quote escapes cmd metacharacters with a caret.
             if let Some(next) = chars.next() {
                 result.push(next);
             }
