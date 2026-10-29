@@ -27,8 +27,9 @@ architecture-cycle check, plugin-docs-sync, the Makefile guards
 (`check-make-instance-scope.sh`, `check-make-dev-builds-sibling.sh`), a production `vite build`
 followed by the frontend bundle-size budget check (`scripts/report-frontend-bundles.mjs --check`:
 fails over an entry's gzip cap — `mobile.html` is the tight one — and warns at 98% of it),
-`cargo fmt --check`, `cargo clippy --workspace --exclude bm25 --release -D warnings`,
-`cargo nextest run --workspace` + doctests, the full `vitest run --coverage` (which also
+`cargo fmt --check`, `cargo clippy --workspace --exclude bm25 --all-targets --features dictation
+--release -D warnings`, `cargo nextest run --workspace --features dictation` + doctests (the
+`dictation` feature needs Meson and Ninja on PATH), the full `vitest run --coverage` (which also
 enforces the `coverage.thresholds` floors in `vitest.config.ts`), plugin tests, and
 `pnpm audit` / `cargo audit`.
 
@@ -80,5 +81,5 @@ binary can transiently read as 0 bytes even right after a successful build — a
 - Non-zero for any other reason: a real failure. Read the failing step's own output (the script
   prints which steps reported `✓`/`✗` and keeps the full log) and fix it before reporting done.
 
-This takes several minutes (`cargo clippy --release` + a full `cargo nextest run --workspace`
+This takes several minutes (`cargo clippy --release` + a full `cargo nextest run --workspace --features dictation`
 are the slow parts) — run it once near the end of a change, not after every small edit.

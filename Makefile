@@ -176,8 +176,11 @@ check: test-shell check-desktop-embedding
 	@scripts/with-test-tmp.sh $(RTK) pnpm exec vite build && scripts/with-test-tmp.sh $(RTK) node scripts/report-frontend-bundles.mjs --check && echo "  frontend bundle budget ✓"
 	@cd src-tauri && ../scripts/with-test-tmp.sh $(RTK) cargo fmt --check && echo "  rustfmt ✓"
 # bm25 is a vendored third-party patch (patches/bm25): not ours to lint.
-	@cd src-tauri && ../scripts/with-test-tmp.sh $(RTK) cargo clippy --workspace --exclude bm25 --release -- -D warnings && echo "  clippy ✓"
-	@cd src-tauri && ulimit -n 10240 && TUIC_TEST_FAKE_HOME=1 ../scripts/with-test-tmp.sh $(RTK) cargo nextest run --workspace && TUIC_TEST_FAKE_HOME=1 ../scripts/with-test-tmp.sh $(RTK) cargo test --doc --workspace -q && echo "  rust tests ✓"
+# Same scope as CI: test code too, and tuicommander with `dictation` (needs
+# meson + ninja), which Tauri dev/release builds always enable.
+	@cd src-tauri && ../scripts/with-test-tmp.sh $(RTK) cargo clippy --workspace --exclude bm25 --all-targets --features dictation --release -- -D warnings && echo "  clippy ✓"
+# TUIC_FIXTURE_FEATURES makes the nextest fixture setup build the same graph.
+	@cd src-tauri && ulimit -n 10240 && TUIC_TEST_FAKE_HOME=1 TUIC_FIXTURE_FEATURES=dictation ../scripts/with-test-tmp.sh $(RTK) cargo nextest run --workspace --features dictation && TUIC_TEST_FAKE_HOME=1 ../scripts/with-test-tmp.sh $(RTK) cargo test --doc --workspace --features dictation -q && echo "  rust tests ✓"
 # One coverage-instrumented run: it enforces vitest.config.ts's coverage floors
 # (coverage.thresholds) as well as the tests, instead of running vitest twice.
 # The filter keeps failures, threshold errors and the summaries; leak traces

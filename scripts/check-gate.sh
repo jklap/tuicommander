@@ -86,6 +86,14 @@ if git submodule status plugins 2>/dev/null | grep -q '^-'; then
 	echo "      reported below, the gate is effectively green."
 fi
 
+if ! command -v meson >/dev/null 2>&1 || ! command -v ninja >/dev/null 2>&1; then
+	echo
+	echo "NOTE: meson or ninja is not on PATH. make check builds tuicommander with"
+	echo "      the dictation feature, whose bundled WebRTC echo canceller needs"
+	echo "      both, so clippy will fail with 'Failed to execute meson'. Install"
+	echo "      them (macOS: brew install meson ninja) before trusting this run."
+fi
+
 # A full template path: BSD and GNU mktemp both take it (--tmpdir is GNU-only).
 LOG="$(mktemp "${TMPDIR:-/tmp}/tuic-check-gate.XXXXXX")"
 
