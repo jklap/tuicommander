@@ -41,6 +41,7 @@ import { isAbsolutePath, pathStripPrefix } from "../utils/pathUtils";
 import { sameDir, unregisteredRepoRootFor } from "../utils/repoOwnership";
 import { adoptSuspendedSession, type SuspendedSession } from "../utils/suspendedSessions";
 import { isSuspendingOrSuspended } from "../utils/suspendTerminal";
+import { parseTuicFilePath } from "../utils/tuicFilePath";
 import { createRevisionCoalescer } from "./revisionCoalescer";
 
 /** Track PTY sessions created by the browser client so we only close our own on unload */
@@ -863,7 +864,7 @@ export async function initApp(deps: AppInitDeps) {
 			try {
 				const parsed = new URL(url);
 				const cmd = parsed.hostname; // "open", "edit", "terminal"
-				const filePath = decodeURIComponent(parsed.pathname).replace(/^\//, "");
+				const filePath = parseTuicFilePath(parsed.pathname);
 				if (!filePath && cmd !== "terminal") return;
 
 				const activeRepoPath = repositoriesStore.state.activeRepoPath;

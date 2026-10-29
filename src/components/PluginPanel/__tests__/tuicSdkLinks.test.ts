@@ -27,3 +27,15 @@ it("does not send a script URL to the host opener", () => {
 	expect(click.defaultPrevented).toBe(true);
 	expect(postMessage).not.toHaveBeenCalledWith(expect.objectContaining({ type: "tuic:open-url" }), "*");
 });
+
+// Catches: the injected parser diverges from native tabs or retains a duplicate POSIX root.
+it.each([
+	["tuic://open///Users/boss/x.md", "tuic:open", "/Users/boss/x.md"],
+	["tuic://edit///home/boss/x.rs", "tuic:edit", "/home/boss/x.rs"],
+	["tuic://open/docs/x.md", "tuic:open", "docs/x.md"],
+	["tuic://edit/C:/Users/boss/x.rs", "tuic:edit", "C:/Users/boss/x.rs"],
+])("normalizes injected file-link parsing for %s", (href, type, path) => {
+	const { click, postMessage } = clickInPlugin(href);
+	expect(click.defaultPrevented).toBe(true);
+	expect(postMessage).toHaveBeenCalledWith(expect.objectContaining({ type, path }), "*");
+});
