@@ -65,6 +65,7 @@ vi.mock("../../../invoke", () => ({
 
 import { Terminal } from "../../../components/Terminal/Terminal";
 import { appLogger } from "../../../stores/appLogger";
+import { paneLayoutStore } from "../../../stores/paneLayout";
 import { terminalsStore } from "../../../stores/terminals";
 
 beforeEach(() => {
@@ -277,5 +278,68 @@ describe("Chat Compose input", () => {
 		await waitFor(() => expect(document.activeElement).toBe(view.getByLabelText("Canvas terminal input")));
 		fireEvent.click(view.getByRole("tab", { name: "Chat" }));
 		expect((await readyEditor(view.container)).state.doc.toString()).toBe("Keep on Escape");
+	});
+});
+
+describe("Chat fallback focus ownership", () => {
+	// Catches: asynchronous Chat fallback redirects typing from a settings/dialog field to the PTY.
+	it("keeps_another_input_focused_when_active_chat_becomes_unavailable", async () => {
+		const id = addTerminal();
+		terminalsStore.setActive(id);
+		const view = render(() => (
+			<>
+				<Terminal id={id} cwd="/repo" />
+				<input aria-label="Settings input" />
+			</>
+		));
+		fireEvent.click(view.getByRole("tab", { name: "Chat" }));
+		await readyEditor(view.container);
+		const settingsInput = view.getByLabelText("Settings input");
+		settingsInput.focus();
+		terminalsStore.update(id, { agentType: null });
+		await waitFor(() => expect(terminalsStore.get(id)?.viewMode).toBe("cli"));
+		expect(document.activeElement).toBe(settingsInput);
+	});
+
+	// Catches: a visible but inactive split pane steals typing on its own Chat fallback.
+	it("keeps_the_active_pane_input_focused_when_another_visible_pane_falls_back", async () => {
+		const id = addTerminal();
+		const otherId = terminalsStore.add({
+			sessionId: "other-session",
+			cwd: "/repo",
+			repoPath: "/repo",
+			name: "shell",
+			fontSize: 13,
+			awaitingInput: null,
+		});
+		const group = paneLayoutStore.createGroup();
+		paneLayoutStore.addTab(group, { id, type: "terminal" });
+		const otherGroup = paneLayoutStore.split(group, "horizontal");
+		if (!otherGroup) throw new Error("split setup failed");
+		paneLayoutStore.addTab(otherGroup, { id: otherId, type: "terminal" });
+		terminalsStore.setActive(id);
+		const view = render(() => (
+			<>
+				<Terminal id={id} cwd="/repo" />
+				<div data-terminal-id={otherId}>
+					<input aria-label="Other pane input" />
+				</div>
+			</>
+		));
+		try {
+			fireEvent.click(view.getByRole("tab", { name: "Chat" }));
+			await readyEditor(view.container);
+			terminalsStore.setActive(otherId);
+			paneLayoutStore.setActiveGroup(otherGroup);
+			const otherInput = view.getByLabelText("Other pane input");
+			otherInput.focus();
+			terminalsStore.update(id, { agentType: null });
+			await waitFor(() => expect(terminalsStore.get(id)?.viewMode).toBe("cli"));
+			expect(document.activeElement).toBe(otherInput);
+		} finally {
+			cleanup();
+			paneLayoutStore.reset();
+			paneLayoutStore.flushSave();
+		}
 	});
 });
