@@ -39,14 +39,14 @@ describe("HeroMetrics", () => {
 	});
 });
 
-// Catches: an empty awaiting tile remains actionable after header navigation moves.
-it("disables the awaiting action when no session is waiting", async () => {
-	const onAwaitingClick = vi.fn();
+// Catches: zero-count states cannot be selected to inspect an empty result.
+it("allows the zero Awaiting counter to toggle", async () => {
+	const onToggleState = vi.fn();
 	const view = render(() => (
-		<HeroMetrics workingCount={2} idleCount={1} awaitingCount={0} onAwaitingClick={onAwaitingClick} />
+		<HeroMetrics workingCount={2} idleCount={1} awaitingCount={0} onToggleState={onToggleState} />
 	));
 	const tile = view.getByRole("button", { name: "0 Awaiting" }) as HTMLButtonElement;
-	expect(tile.disabled).toBe(true);
+	expect(tile.disabled).toBe(false);
 	await fireEvent.click(tile);
-	expect(onAwaitingClick).not.toHaveBeenCalled();
+	expect(onToggleState).toHaveBeenCalledWith("question");
 });
