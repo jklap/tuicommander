@@ -1493,13 +1493,12 @@ mod tests {
             &backend,
         );
         assert_eq!(o.exit, 0);
-        let writes = backend
+        backend
             .writes
             .borrow()
             .iter()
             .map(|(_, d)| d.clone())
-            .collect();
-        writes
+            .collect()
     }
 
     #[test]

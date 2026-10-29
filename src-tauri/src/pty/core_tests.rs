@@ -15051,8 +15051,8 @@ fn make_parkable(state: &crate::state::AppState, sid: &str, now_ms: u64, idle_fo
         .insert(sid.to_string(), Arc::new(Mutex::new(silence)));
     // Hidden: a viewer asserted it, then withdrew. A session nobody ever reported on counts as
     // visible, so this step is what makes it a candidate.
-    crate::background_mode::hidden::set_visible(&state, sid, true, true);
-    crate::background_mode::hidden::set_visible(&state, sid, false, true);
+    crate::background_mode::hidden::set_visible(state, sid, true, true);
+    crate::background_mode::hidden::set_visible(state, sid, false, true);
     state.config.write().standby_timeout_minutes = 5;
 }
 
