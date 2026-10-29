@@ -422,8 +422,9 @@ describe("independent CLI focus guard conditions", () => {
 });
 
 describe("Compose focus lifecycle", () => {
-	// Catches: Chat does not request focus when it reuses an already-open CLI editor.
-	it("focuses_the_existing_cli_editor_when_entering_chat", async () => {
+	// Catches: missing or constant Chat focus requests leave the next keystroke
+	// outside an already-open editor until its deferred opening frames run.
+	it("immediately_focuses_the_existing_editor_on_each_chat_entry", async () => {
 		const id = addTerminal();
 		const view = render(() => (
 			<>
@@ -436,7 +437,14 @@ describe("Compose focus lifecycle", () => {
 		view.getByRole("button", { name: "Other control" }).focus();
 		expect(cm.hasFocus).toBe(false);
 		fireEvent.click(view.getByRole("tab", { name: "Chat" }));
-		await waitFor(() => expect(document.activeElement).toBe(cm.contentDOM));
+		expect(document.activeElement).toBe(cm.contentDOM);
+		expect(editor(view.container)).toBe(cm);
+		await readyEditor(view.container);
+		fireEvent.click(view.getByRole("tab", { name: "CLI" }));
+		view.getByRole("button", { name: "Other control" }).focus();
+		expect(cm.hasFocus).toBe(false);
+		fireEvent.click(view.getByRole("tab", { name: "Chat" }));
+		expect(document.activeElement).toBe(cm.contentDOM);
 		expect(editor(view.container)).toBe(cm);
 	});
 
