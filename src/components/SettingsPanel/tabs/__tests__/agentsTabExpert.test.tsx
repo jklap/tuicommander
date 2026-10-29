@@ -15,7 +15,8 @@ vi.mock("../../../../stores/ui", async () => {
 	};
 });
 
-const remoteRpc = vi.hoisted(() => vi.fn());
+// Resolves by default: appLogger mirrors entries through rpc("push_log") and chains `.then`.
+const remoteRpc = vi.hoisted(() => vi.fn((_cmd: string, _args?: unknown) => Promise.resolve(undefined as unknown)));
 vi.mock("../../../../transport", async (importOriginal) => ({
 	...(await importOriginal<typeof import("../../../../transport")>()),
 	rpc: remoteRpc,

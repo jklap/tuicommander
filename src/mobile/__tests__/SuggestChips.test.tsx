@@ -11,7 +11,9 @@ vi.mock("../../transport", () => ({
 	rpc: vi.fn().mockResolvedValue(undefined),
 }));
 
-vi.mock("../../stores/appLogger", () => ({ appLogger: { warn: vi.fn() } }));
+vi.mock("../../stores/appLogger", () => ({
+	appLogger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+}));
 
 import { rpc } from "../../transport";
 
