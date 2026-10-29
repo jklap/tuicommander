@@ -133,10 +133,6 @@
   top: 0;
   z-index: 1;
   width: 100%;
-  padding: 6px 10px;
-  border: none;
-  border-bottom: 1px solid var(--border);
-  border-radius: var(--radius-sm) var(--radius-sm) 0 0;
   background: var(--bg-secondary);
   color: var(--fg-primary);
   font-size: var(--font-md);

@@ -283,9 +283,6 @@
 
 /* The prompt body itself — wider dialog (see .editor) plus a taller default
  * than the other textarea on this form (system prompt), which stays compact. */
-.editorContentTextarea {
-  min-height: 180px;
-}
 
 .editorActions {
   display: flex;

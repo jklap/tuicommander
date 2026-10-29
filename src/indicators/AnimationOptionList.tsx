@@ -28,6 +28,8 @@ export const AnimationOptionList: Component<AnimationOptionListProps> = (props) 
 			<For each={options()}>
 				{(animationId) => (
 					<button
+						type="button"
+						data-control-layout="row"
 						class={s.row}
 						classList={{ [s.active]: animationId === props.currentAnimationId }}
 						onClick={() => props.onSelect(animationId)}

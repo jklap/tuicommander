@@ -22,6 +22,7 @@ import { DomSearchEngine } from "../shared/DomSearchEngine";
 import { DomSearchOverview } from "../shared/DomSearchOverview";
 import type { DiffListNavHandle } from "../shared/diffListNav";
 import { createSearchVisibility, SearchBar } from "../shared/SearchBar";
+import { Button } from "../ui/Button";
 import { buildRows, rowIndexForStepIndex, type SessionReviewMode } from "./buildRows";
 import { SessionDiffList } from "./SessionDiffList";
 import s from "./SessionDiffTab.module.css";
@@ -768,22 +769,24 @@ export const SessionDiffTab: Component<SessionDiffTabProps> = (props) => {
 					onRefresh={() => void loadSessions(true)}
 				/>
 				<div class={s.toolbarSpacer} />
-				<button
-					type="button"
+				<Button
+					variant="ghost"
+					size="compact"
 					class={cx(s.modeBtn, viewMode() === "file" && s.modeBtnActive)}
 					onClick={() => changeViewMode("file")}
 					title="Group by file"
 				>
 					By file
-				</button>
-				<button
-					type="button"
+				</Button>
+				<Button
+					variant="ghost"
+					size="compact"
 					class={cx(s.modeBtn, viewMode() === "chronological" && s.modeBtnActive)}
 					onClick={() => changeViewMode("chronological")}
 					title="Flat chronological order"
 				>
 					Chronological
-				</button>
+				</Button>
 				<Show when={viewMode() === "chronological"}>
 					<TurnPicker turns={review()?.turns ?? []} steps={review()?.steps ?? []} onSelect={handleJumpToStep} />
 					<label class={s.checkboxLabel} title="Auto-scroll to new changes as they arrive">
@@ -791,8 +794,10 @@ export const SessionDiffTab: Component<SessionDiffTabProps> = (props) => {
 						Follow
 					</label>
 				</Show>
-				<button
-					type="button"
+				<Button
+					shape="icon"
+					variant="ghost"
+					aria-label={viewMode() === "chronological" ? "Previous change" : "Previous file"}
 					class={s.iconBtn}
 					onClick={() => goToAdjacentRow(-1)}
 					disabled={rows().length === 0 || (listHandle()?.currentIndex() ?? 0) <= 0}
@@ -801,9 +806,11 @@ export const SessionDiffTab: Component<SessionDiffTabProps> = (props) => {
 					<svg width="11" height="11" viewBox="0 0 16 16" fill="currentColor">
 						<path d="M10 3l-5 5 5 5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
 					</svg>
-				</button>
-				<button
-					type="button"
+				</Button>
+				<Button
+					shape="icon"
+					variant="ghost"
+					aria-label={viewMode() === "chronological" ? "Next change" : "Next file"}
 					class={s.iconBtn}
 					onClick={() => goToAdjacentRow(1)}
 					disabled={rows().length === 0 || (listHandle()?.currentIndex() ?? 0) >= rows().length - 1}
@@ -812,7 +819,7 @@ export const SessionDiffTab: Component<SessionDiffTabProps> = (props) => {
 					<svg width="11" height="11" viewBox="0 0 16 16" fill="currentColor">
 						<path d="M6 3l5 5-5 5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
 					</svg>
-				</button>
+				</Button>
 				<label class={s.checkboxLabel}>
 					<input
 						type="checkbox"
@@ -821,29 +828,35 @@ export const SessionDiffTab: Component<SessionDiffTabProps> = (props) => {
 					/>
 					Subagent edits
 				</label>
-				<button type="button" class={s.modeBtn} onClick={handleCopyAll} title="Copy the whole session's combined diff">
+				<Button
+					variant="ghost"
+					size="compact"
+					class={s.modeBtn}
+					onClick={handleCopyAll}
+					title="Copy the whole session's combined diff"
+				>
 					Copy all
-				</button>
+				</Button>
 				<DiffOptionsMenu />
 			</div>
 			<Show when={viewMode() === "chronological" && !followLive() && unseenStepIds().size > 0}>
 				<div class={s.liveUpdateBar}>
-					<button type="button" class={s.pillBtn} onClick={jumpToFirstUnseenStep}>
+					<Button size="compact" class={s.pillBtn} onClick={jumpToFirstUnseenStep}>
 						{unseenStepIds().size} new change{unseenStepIds().size > 1 ? "s" : ""}
-					</button>
+					</Button>
 				</div>
 			</Show>
 			<Show when={viewMode() === "file" && (hasNewFilesBelow() || pendingHiddenCount() > 0)}>
 				<div class={s.liveUpdateBar}>
 					<Show when={hasNewFilesBelow()}>
-						<button type="button" class={s.pillBtn} onClick={jumpToNewContentBelow}>
+						<Button size="compact" class={s.pillBtn} onClick={jumpToNewContentBelow}>
 							New content below
-						</button>
+						</Button>
 					</Show>
 					<Show when={pendingHiddenCount() > 0}>
-						<button type="button" class={s.pillBtn} onClick={applyPendingHiddenUpdates}>
+						<Button size="compact" class={s.pillBtn} onClick={applyPendingHiddenUpdates}>
 							Refresh ({pendingHiddenCount()})
-						</button>
+						</Button>
 					</Show>
 				</div>
 			</Show>
@@ -863,9 +876,9 @@ export const SessionDiffTab: Component<SessionDiffTabProps> = (props) => {
 						{review()?.warnings.length} issue{(review()?.warnings.length ?? 0) > 1 ? "s" : ""} while reading this
 						session's transcript — some steps may be incomplete.
 					</span>
-					<button type="button" class={s.linkBtn} onClick={() => setWarningsDismissed(true)}>
+					<Button variant="ghost" size="compact" class={s.linkBtn} onClick={() => setWarningsDismissed(true)}>
 						Dismiss
-					</button>
+					</Button>
 				</div>
 			</Show>
 			<div class={s.body}>
