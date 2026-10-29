@@ -2074,12 +2074,24 @@ mod tests {
             .unwrap()
             .to_string();
 
-        let idle_topology = body_json(
-            get_topology(State(state.clone()), label_query(label))
-                .await
-                .into_response(),
-        )
-        .await;
+        // Both waits below are setup, not the behaviour under test: a loaded
+        // machine (the full suite) can keep the shell in its startup, or delay
+        // the job's exec, past a few seconds. Size them so they cannot fail on
+        // a slow start; a real regression still fails, just after 20 s.
+        const SETUP_POLLS: usize = 400; // x 50 ms = 20 s
+        let mut idle_topology = serde_json::Value::Null;
+        for _ in 0..SETUP_POLLS {
+            idle_topology = body_json(
+                get_topology(State(state.clone()), label_query(label))
+                    .await
+                    .into_response(),
+            )
+            .await;
+            if pane_of(&idle_topology)["foreground_is_shell"] == serde_json::Value::Bool(true) {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
         assert_eq!(
             pane_of(&idle_topology)["foreground_is_shell"],
             serde_json::Value::Bool(true),
@@ -2091,7 +2103,7 @@ mod tests {
         crate::mcp_http::session::write_pty_input_parts(&state, &session_id, &["sleep 30\n"])
             .expect("write the job into the pane's shell");
         let mut job_topology = serde_json::Value::Null;
-        for _ in 0..100 {
+        for _ in 0..SETUP_POLLS {
             job_topology = body_json(
                 get_topology(State(state.clone()), label_query(label))
                     .await
