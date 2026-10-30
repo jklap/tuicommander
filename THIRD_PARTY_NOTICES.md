@@ -248,9 +248,9 @@ Counts below collapse equivalent SPDX expressions (`MIT OR Apache-2.0` ≡ `Apac
 <!-- BEGIN GENERATED:summary -->
 | License | Count |
 |---------|-------|
-| MIT OR Apache-2.0 | 82 |
-| MIT | 70 |
-| Apache-2.0 | 8 |
+| MIT OR Apache-2.0 | 87 |
+| MIT | 71 |
+| Apache-2.0 | 10 |
 | Unlicense OR MIT | 7 |
 | Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT | 4 |
 | BSD-3-Clause | 4 |

@@ -9953,7 +9953,7 @@ dependencies = [
 
 [[package]]
 name = "tuic-hook"
-version = "2.0.0-beta.3"
+version = "2.0.0-beta.5"
 dependencies = [
  "libc",
  "serde_json",
@@ -9972,7 +9972,7 @@ dependencies = [
 
 [[package]]
 name = "tuic-streamdock"
-version = "2.0.0-beta.3"
+version = "2.0.0-beta.5"
 dependencies = [
  "ab_glyph",
  "clap",

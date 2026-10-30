@@ -6,6 +6,7 @@ acp-notice
 agent-edit-observed
 agent-wrap-prompt
 agent-wrap-prompt-resolved
+ai-chat-selection-changed
 automation-run-changed
 background-mode-changed
 chat-view-changed
