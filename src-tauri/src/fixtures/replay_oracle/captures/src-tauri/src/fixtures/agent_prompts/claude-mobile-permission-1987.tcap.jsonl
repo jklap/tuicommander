@@ -2,12 +2,14 @@
 {"record":0,"state":{"shell":0,"agent":"starting","awaiting":false,"question":null,"confident":false,"last_question":null,"choice_sig":null,"fullscreen":false}}
 {"record":1,"state":{"shell":0,"agent":"starting","awaiting":false,"question":null,"confident":false,"last_question":null,"choice_sig":null,"fullscreen":false}}
 {"record":2,"state":{"shell":0,"agent":"starting","awaiting":false,"question":null,"confident":false,"last_question":null,"choice_sig":null,"fullscreen":false}}
+{"record":3,"event":{"type":"progress","state":0,"_turn_epoch":0}}
 {"record":3,"state":{"shell":0,"agent":"starting","awaiting":false,"question":null,"confident":false,"last_question":null,"choice_sig":null,"fullscreen":false}}
 {"record":4,"state":{"shell":0,"agent":"starting","awaiting":false,"question":null,"confident":false,"last_question":null,"choice_sig":null,"fullscreen":false}}
 {"record":7,"event":{"type":"shell-state","state":"busy","agent_type":"claude"}}
 {"record":7,"state":{"shell":1,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":null,"choice_sig":null,"fullscreen":false}}
 {"record":8,"state":{"shell":1,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":null,"choice_sig":null,"fullscreen":false}}
 {"record":9,"state":{"shell":1,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":null,"choice_sig":null,"fullscreen":false}}
+{"record":10,"event":{"type":"progress","state":3,"_turn_epoch":0}}
 {"record":10,"state":{"shell":1,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":null,"choice_sig":null,"fullscreen":false}}
 {"record":11,"state":{"shell":1,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":null,"choice_sig":null,"fullscreen":false}}
 {"record":12,"event":{"type":"status-line","task_name":"Recombobulating","full_line":"✳ Recombobulating…","time_info":null,"token_info":null,"_turn_epoch":0}}
@@ -60,7 +62,7 @@
 {"record":57,"state":{"shell":1,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":null,"choice_sig":null,"fullscreen":false}}
 {"record":58,"state":{"shell":1,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":null,"choice_sig":null,"fullscreen":false}}
 {"record":59,"event":{"type":"intent","text":"Creating the proof file","title":"Touch File","_turn_epoch":0}}
-{"record":59,"event":{"type":"agent-block","action":"start","line":12,"_turn_epoch":0}}
+{"record":59,"event":{"type":"agent-block","action":"start","line":12,"on_alt_screen":false,"from_transcript_dump":false,"new_dump_generation":false,"_turn_epoch":0}}
 {"record":59,"state":{"shell":1,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":null,"choice_sig":null,"fullscreen":false}}
 {"record":60,"state":{"shell":1,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":null,"choice_sig":null,"fullscreen":false}}
 {"record":61,"state":{"shell":1,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":null,"choice_sig":null,"fullscreen":false}}

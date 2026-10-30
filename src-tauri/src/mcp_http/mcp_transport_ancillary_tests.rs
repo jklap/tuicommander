@@ -334,11 +334,7 @@ async fn mcp_worktree_remove_refuses_a_worktree_with_a_live_session() {
     let worktree = tuic_git::test_fixtures::worktree_with(repo.path(), "busy", false);
     let state = test_state();
     crate::state::tests_support::insert_dummy_session(&state, "pty-mcp");
-    crate::state::tests_support::set_session_cwd(
-        &state,
-        "pty-mcp",
-        &worktree.to_string_lossy(),
-    );
+    crate::state::tests_support::set_session_cwd(&state, "pty-mcp", &worktree.to_string_lossy());
     let repo_path = repo.path().to_string_lossy().into_owned();
 
     let refused = handle_worktree(

@@ -27,7 +27,10 @@ pub(super) fn assert_runs(executable: &std::path::Path) {
     #[cfg(unix)]
     command.args(["--print", "tuic-native-fixture"]);
     #[cfg(windows)]
-    command.args([crate::test_support::host_shell().1, "echo tuic-native-fixture"]);
+    command.args([
+        crate::test_support::host_shell().1,
+        "echo tuic-native-fixture",
+    ]);
     let output = command.output().unwrap();
     assert!(
         output.status.success(),

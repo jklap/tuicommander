@@ -58,7 +58,7 @@ const COMPARED_FIELDS = [
 /** Arrays (e.g. `placement`) compare order-insensitively; a copy is sorted so the store's
  *  own array is never mutated. */
 function normalizeField(value: unknown): unknown {
-	if (Array.isArray(value)) return [...value].sort();
+	if (Array.isArray(value)) return value.toSorted();
 	return value;
 }
 

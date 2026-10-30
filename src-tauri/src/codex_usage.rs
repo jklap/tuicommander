@@ -521,6 +521,7 @@ mod tests {
     /// Catches: CLI overrides resolving profile-relative instructions from the process cwd.
     #[cfg(unix)]
     #[tokio::test]
+    #[allow(clippy::float_cmp)]
     async fn codex_profile_quota_preserves_relative_instruction_path_at_process_boundary() {
         // Codex 0.166 live config/read evidence: explicit -c model selects the layer.
         let script = crate::test_support::fake_ssh_script(
