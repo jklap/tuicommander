@@ -344,8 +344,7 @@ const PromptEditor: Component<{
 
 				<Show
 					when={
-						(props.prompt.executionMode ?? "inject") === "inject" &&
-						(props.prompt.injectTarget ?? "auto") !== "compose"
+						(props.prompt.executionMode ?? "inject") === "inject" && (props.prompt.injectTarget ?? "auto") !== "compose"
 					}
 				>
 					<SettingRow label="Send immediately">

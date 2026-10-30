@@ -526,7 +526,6 @@ describe("Compose focus lifecycle", () => {
 		}
 	});
 });
-||||||| base
 
 describe("Smart Prompt into CLI Compose", () => {
 	// Catches: a prompt fired into an open Compose wiping the draft the user is writing.

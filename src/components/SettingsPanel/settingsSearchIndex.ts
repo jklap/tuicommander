@@ -1093,7 +1093,12 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
 		configKey: "repo_defaults.auto_archive_merged",
 		hint: "Move worktree to archive directory when its PR is merged",
 	},
-	{ tab: "github", section: "Worktree Defaults", label: "Archived worktree retention (days)" },
+	{
+		tab: "github",
+		section: "Worktree Defaults",
+		label: "Archived worktree retention (days)",
+		hint: "0 is Off. Delete eligible archives on repository refresh; keep dirty archives.",
+	},
 	{
 		tab: "github",
 		section: "Worktree Defaults",

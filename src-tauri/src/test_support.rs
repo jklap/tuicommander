@@ -12,7 +12,7 @@ fn install_test_tls_provider() {
 pub(crate) use crate::fs::system32_exe;
 pub(crate) use tuic_test_support::{
     fail_with_stderr_script, fake_ssh_script, host_shell, normalize_newlines, print_var_script,
-    replay_file_command, slashed, sleep_script, test_temp_root,
+    replay_file_command, short_socket_test_temp_root, slashed, sleep_script, test_temp_root,
 };
 
 /// A listening owner that resets every connection instead of serving a protocol.
@@ -119,43 +119,6 @@ pub(crate) fn assert_fake_ssh_stopped(pids: Vec<i32>) {
         surviving.is_empty(),
         "fake SSH processes survived shutdown: {surviving:?}"
     );
-}
-
-/// Wait (up to 15s) for a fake SSH script to write a forked child's PID to
-/// `marker`.
-#[cfg(unix)]
-pub(crate) async fn wait_for_pid_marker(marker: &std::path::Path) -> i32 {
-    tokio::time::timeout(std::time::Duration::from_secs(15), async {
-        loop {
-            if let Ok(text) = std::fs::read_to_string(marker)
-                && let Ok(pid) = text.trim().parse::<i32>()
-            {
-                return pid;
-            }
-            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
-        }
-    })
-    .await
-    .expect("fake SSH wrote its child's PID")
-}
-
-/// Assert `pid` is gone, allowing ~2s only for init reaping the orphan (the
-/// group signal itself must already have been delivered). A failed test
-/// still SIGKILLs it, so a red run leaks nothing.
-#[cfg(unix)]
-pub(crate) fn assert_pid_gone(pid: i32, message: &str) {
-    let mut alive = true;
-    for _ in 0..40 {
-        alive = unsafe { libc::kill(pid, 0) } == 0;
-        if !alive {
-            break;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(50));
-    }
-    if alive {
-        unsafe { libc::kill(pid, libc::SIGKILL) };
-    }
-    assert!(!alive, "{message}: {pid}");
 }
 
 /// Feed everything a PTY master produces to `sink`, in the small chunks the

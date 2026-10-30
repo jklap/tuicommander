@@ -199,7 +199,7 @@ describe("RemoteMachinesPanel", () => {
 				build: { version: "1.8.0", target: "x86_64-unknown-linux-gnu", sha256: "recorded-digest" },
 				error: "HTTP 403 Untrusted Host",
 			};
-			const view = render(() => <RemoteMachinesPanel />);
+			const view = render(() => <RemoteMachinesPanel onEdit={() => {}} onAddFromHost={() => {}} />);
 			expect(view.getByText("tuic-remote 1.8.0")).toBeTruthy();
 			expect(view.getByText("Install the current tuic-remote and restart the service.")).toBeTruthy();
 			expect(!!view.queryByRole("button", { name: "Update & restart remote" })).toBe(status === "connected");

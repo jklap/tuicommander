@@ -202,14 +202,16 @@ describe("NotificationsTab", () => {
 			expect(mockSetAudioDevice).toHaveBeenCalledWith(null);
 		});
 
-		it("falls back to an empty (System Default-only) list when enumeration fails, instead of throwing", async () => {
+		// Main's contract (a failed scan can be the microphone prompt still waiting): a failure keeps
+		// the previous list, never "no devices", and one more try picks up a late answer.
+		it("retries once when enumeration fails and never replaces the picker with an empty list", async () => {
+			mockInvoke.mockRejectedValueOnce(new Error("mic permission denied"));
 			mockInvoke.mockRejectedValueOnce(new Error("mic permission denied"));
 			const { getByText } = render(() => <NotificationsTab />);
 			fireEvent.click(getByText("Choose output device…"));
 
-			const select = await waitFor(() => findDeviceSelect(getByText));
-			expect(select.querySelectorAll("option")).toHaveLength(1);
-			expect(select.querySelector("option")?.textContent).toBe("System Default");
+			await waitFor(() => expect(mockInvoke).toHaveBeenCalledTimes(2));
+			expect(document.querySelector('select[data-setting-id="notifications.audio_device"]')).toBeNull();
 		});
 	});
 

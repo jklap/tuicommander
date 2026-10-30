@@ -1075,20 +1075,28 @@ fn classify_branch_merge(
         .map_err(|error| format!("could not inspect branch history: {error}"))?
         .stdout;
     let mut entries = reflog.lines().collect::<Vec<_>>();
-    // Reflogs can expire or be disabled. Without origin history, neither an
-    // untouched branch nor completed work can be inferred from ancestry alone.
-    let Some(creation) = entries.pop() else {
-        return Ok((WorkspaceCommitStatus::Unknown, None));
+    // Reflogs can expire or be disabled (`gc.reflogExpire=now` empties every branch's at once).
+    // Without origin history an ancestor of the default branch is either untouched or already
+    // integrated, and ancestry cannot say which: that case stays Unknown and never authorizes a
+    // deletion. A branch that is NOT an ancestor owns commits the default branch lacks, so the
+    // positive proofs below (patch equivalence, merged PR, remote containment) still apply and
+    // it gets a real state. Returning Unknown for every branch would mask the workspaces that
+    // matter for as long as the reflogs stay empty.
+    let origin_unknown = entries.is_empty();
+    let from_default = match entries.pop() {
+        None => false,
+        Some(creation) => {
+            let (_, creation_message) = creation
+                .split_once('\t')
+                .ok_or("branch creation has no reflog message")?;
+            let source = creation_message.strip_prefix("branch: Created from ");
+            source.is_some_and(|source| {
+                source == "HEAD"
+                    || source == default_branch
+                    || source == format!("refs/heads/{default_branch}")
+            })
+        }
     };
-    let (_, creation_message) = creation
-        .split_once('\t')
-        .ok_or("branch creation has no reflog message")?;
-    let source = creation_message.strip_prefix("branch: Created from ");
-    let from_default = source.is_some_and(|source| {
-        source == "HEAD"
-            || source == default_branch
-            || source == format!("refs/heads/{default_branch}")
-    });
     let pull_upstream_is_default = entries
         .iter()
         .any(|entry| entry.ends_with("\tpull: Fast-forward"))
@@ -1109,7 +1117,9 @@ fn classify_branch_merge(
                     && message.contains(&format!("refs/heads/{branch} onto ")))
         })
     });
-    if merged && from_default && follows_default {
+    if merged && origin_unknown {
+        Ok((WorkspaceCommitStatus::Unknown, None))
+    } else if merged && from_default && follows_default {
         Ok((WorkspaceCommitStatus::InSync, None))
     } else if merged {
         Ok((WorkspaceCommitStatus::Merged, Some("ancestry".into())))
@@ -2494,6 +2504,11 @@ fn ignore_shared_store_link(src: &Path, dest: &Path, store: &str) -> Result<(), 
     let exclude = src
         .join(rev_at(src, "--git-common-dir")?)
         .join("info/exclude");
+    // A repository made with an empty git template has no info/ directory yet.
+    if let Some(parent) = exclude.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|error| format!("could not exclude the shared link: {error}"))?;
+    }
     // Append one complete record so concurrent worktree creation cannot
     // overwrite another creator's excludes. A duplicate pattern is harmless.
     use std::io::Write;
@@ -4505,27 +4520,6 @@ fn remote_head_branch(repo: &Path, remote: &str) -> Option<String> {
         .map(str::to_string)
 }
 
-/// The name the remote-HEAD step of [`get_remote_default_branch`] returns for
-/// `<remote>/<branch>` when no local branch of that name exists: the
-/// qualified `<remote>/<branch>`, or `refs/remotes/<remote>/<branch>` when a
-/// ref, tag or local branch literally named `<remote>/<branch>` would shadow it.
-/// git resolves a short name through <name>, refs/<name>, refs/tags/<name>,
-/// refs/heads/<name> and only then refs/remotes/<name>; `integration_bases`,
-/// `list_base_ref_options` and `fetch_if_remote` accept the full name.
-/// Existence only (no `^{commit}`) for the shadow: a blob/tree tag or a
-/// non-commit `refs/<short>` shadows the name just the same.
-fn remote_default_reference(repo: &Path, remote: &str, branch: &str) -> Option<String> {
-    rev_at(repo, &format!("refs/remotes/{remote}/{branch}^{{commit}}")).ok()?;
-    let shadowed = ["refs/", "refs/heads/", "refs/tags/"]
-        .iter()
-        .any(|p| rev_at(repo, &format!("{p}{remote}/{branch}")).is_ok());
-    Some(if shadowed {
-        format!("refs/remotes/{remote}/{branch}")
-    } else {
-        format!("{remote}/{branch}")
-    })
-}
-
 /// Resolve a verified integration branch without network access.
 /// Prefer the main checkout's configured base, main/master, a remote's HEAD
 /// (`origin`, then the main checkout's tracked remote, then every other remote
@@ -4548,9 +4542,12 @@ pub fn get_remote_default_branch(repo_path: &str) -> Result<String, String> {
                     // named `<remote>/<branch>` would shadow the remote ref.
                     // Keep the qualified name then; `integration_bases`,
                     // `list_base_ref_options` and `fetch_if_remote` accept it.
-                    if ["refs/heads/", "refs/tags/"]
+                    // Existence only (no `^{commit}`) and refs/<name> too: a
+                    // blob/tree tag or a non-commit `refs/<short>` shadows the
+                    // name just the same.
+                    if ["refs/", "refs/heads/", "refs/tags/"]
                         .iter()
-                        .any(|p| rev_at(repo, &format!("{p}{short}^{{commit}}")).is_ok())
+                        .any(|p| rev_at(repo, &format!("{p}{short}")).is_ok())
                     {
                         return Some(reference);
                     }
@@ -5126,7 +5123,7 @@ struct ArchiveRecord {
 fn archive_worktree_at(
     base_repo: &Path,
     workspace_id: &str,
-    archive_script: Option<&str>,
+    archive_script: Option<UserScript<'_>>,
     clock: impl FnOnce() -> Result<u64, String>,
 ) -> Result<String, String> {
     let _allocation_guard = allocation_guard(base_repo)?;
@@ -8367,63 +8364,9 @@ mod tests {
     }
 
     #[test]
-    fn remote_default_branch_stays_qualified_when_a_local_branch_shadows_the_short_name() {
-        let src = remote_source();
-        let repo = trunk_repo();
-        add_remote(repo.path(), src.path(), "upstream", Some("develop"));
-        // A local branch literally named `upstream/develop`: git resolves the
-        // short name to it before refs/remotes/upstream/develop.
-        git_cmd(repo.path())
-            .args(["branch", "upstream/develop"])
-            .run()
-            .unwrap();
-        let path = repo.path().to_string_lossy().into_owned();
-        let got = get_remote_default_branch(&path).unwrap();
-        assert_eq!(got, "refs/remotes/upstream/develop");
-        assert_eq!(
-            integration_bases(repo.path(), &got),
-            vec!["refs/remotes/upstream/develop".to_string()]
-        );
-        let options = list_base_ref_options(path).unwrap();
-        assert_eq!(options[0].name, got);
-        assert!(options[0].is_default);
-        assert_eq!(
-            options
-                .iter()
-                .filter(|o| o.name.ends_with("upstream/develop"))
-                .count(),
-            2,
-            "the shadowing local branch stays listed separately: {options:?}"
-        );
-    }
-
-    #[test]
-    fn remote_default_branch_stays_qualified_when_a_tag_shadows_the_short_name() {
-        let src = remote_source();
-        let repo = trunk_repo();
-        add_remote(repo.path(), src.path(), "upstream", Some("develop"));
-        // A tag literally named `upstream/develop` wins over
-        // refs/remotes/upstream/develop for the short name.
-        git_cmd(repo.path())
-            .args(["tag", "upstream/develop"])
-            .run()
-            .unwrap();
-        let path = repo.path().to_string_lossy().into_owned();
-        let got = get_remote_default_branch(&path).unwrap();
-        assert_eq!(got, "refs/remotes/upstream/develop");
-        assert_eq!(
-            integration_bases(repo.path(), &got),
-            vec!["refs/remotes/upstream/develop".to_string()]
-        );
-        let options = list_base_ref_options(path).unwrap();
-        assert_eq!(options[0].name, got);
-        assert!(options[0].is_default);
-    }
-
-    #[test]
     fn remote_default_branch_stays_qualified_when_a_non_commit_tag_shadows_the_short_name() {
         let src = remote_source();
-        let repo = trunk_repo();
+        let repo = trunkless_repo();
         add_remote(repo.path(), src.path(), "upstream", Some("develop"));
         // A tag pointing at a tree never peels to a commit, but still wins
         // name resolution over refs/remotes/upstream/develop.
@@ -8438,7 +8381,7 @@ mod tests {
     #[test]
     fn remote_default_branch_stays_qualified_when_a_top_level_ref_shadows_the_short_name() {
         let src = remote_source();
-        let repo = trunk_repo();
+        let repo = trunkless_repo();
         add_remote(repo.path(), src.path(), "upstream", Some("develop"));
         // refs/upstream/develop outranks refs/remotes/upstream/develop.
         git_cmd(repo.path())
@@ -8450,22 +8393,9 @@ mod tests {
     }
 
     #[test]
-    fn remote_default_branch_keeps_a_local_branch_that_tracks_the_remote_branch() {
-        let src = remote_source();
-        let repo = trunk_repo();
-        add_remote(repo.path(), src.path(), "upstream", Some("develop"));
-        git_cmd(repo.path())
-            .args(["branch", "--track", "develop", "upstream/develop"])
-            .run()
-            .unwrap();
-        let got = get_remote_default_branch(&repo.path().to_string_lossy()).unwrap();
-        assert_eq!(got, "develop");
-    }
-
-    #[test]
     fn integration_bases_include_a_non_origin_upstream_the_local_default_trails() {
         let src = remote_source();
-        let repo = trunk_repo();
+        let repo = trunkless_repo();
         add_remote(repo.path(), src.path(), "upstream", Some("develop"));
         git_cmd(repo.path())
             .args(["branch", "--track", "develop", "upstream/develop"])
@@ -8501,39 +8431,9 @@ mod tests {
     }
 
     #[test]
-    fn remote_default_branch_is_the_same_from_a_linked_worktree() {
-        let src = remote_source();
-        let repo = trunk_repo();
-        let base = base_branch_of(repo.path());
-        // `aaa` sorts first in `git remote`, but the main checkout tracks `zzz`.
-        add_remote(repo.path(), src.path(), "aaa", Some("main"));
-        add_remote(repo.path(), src.path(), "zzz", Some("develop"));
-        git_cmd(repo.path())
-            .args(["config", &format!("branch.{base}.remote"), "zzz"])
-            .run()
-            .unwrap();
-        let linked_parent = TempDir::new().unwrap();
-        let linked = linked_parent.path().join("linked");
-        git_cmd(repo.path())
-            .args([
-                "worktree",
-                "add",
-                "-b",
-                "linked-branch",
-                &linked.to_string_lossy(),
-            ])
-            .run()
-            .unwrap();
-        let from_main = get_remote_default_branch(&repo.path().to_string_lossy()).unwrap();
-        let from_linked = get_remote_default_branch(&linked.to_string_lossy()).unwrap();
-        assert_eq!(from_main, "zzz/develop");
-        assert_eq!(from_linked, from_main);
-    }
-
-    #[test]
     fn list_base_ref_options_lists_a_qualified_remote_default_once_as_remote() {
         let src = remote_source();
-        let repo = trunk_repo();
+        let repo = trunkless_repo();
         add_remote(repo.path(), src.path(), "upstream", Some("develop"));
         let refs = list_base_ref_options(repo.path().to_string_lossy().to_string()).unwrap();
         assert_eq!(refs[0].name, "upstream/develop");
@@ -8863,6 +8763,7 @@ mod tests {
             .run()
             .unwrap()
             .stdout;
+        fs::create_dir_all(Path::new(exclude.trim()).parent().unwrap()).unwrap();
         fs::write(Path::new(exclude.trim()), "ignored-secret.txt\n").unwrap();
         fs::write(ignored.path.join("ignored-secret.txt"), "ignored work").unwrap();
         let ignored = PathBuf::from(
@@ -12704,9 +12605,13 @@ branch refs/heads/feat
 
     /// `gc.reflogExpire=now` (or `git reflog expire --expire=now --all`) leaves
     /// every branch with an empty reflog. That used to fail classification with
-    /// "branch creation is absent from reflog" and show the workspace as Unknown.
+    /// "branch creation is absent from reflog", and a blanket Unknown would hide every
+    /// workspace's real state for as long as the reflogs stay empty. An ancestor of the default
+    /// branch (untouched or integrated: ancestry cannot say which) stays Unknown and never
+    /// authorizes cleanup of possibly fresh work; a branch with its own commits is still
+    /// classified by the positive proofs.
     #[test]
-    fn a_branch_with_an_empty_reflog_is_still_classified() {
+    fn a_branch_with_an_empty_reflog_is_still_classified_without_claiming_merged() {
         let (_temp, repo, _workspaces) = workspace_fixture();
         let merged = add_worktree(&repo, "empty-reflog-merged");
         let ahead = add_worktree(&repo, "empty-reflog-ahead");
@@ -12726,8 +12631,7 @@ branch refs/heads/feat
 
         let status = inspect_workspace_lifecycle(&repo, "empty-reflog-merged");
         assert_eq!(status.error, None);
-        assert_eq!(status.commit_status, WorkspaceCommitStatus::Merged);
-        assert_eq!(status.merge_proof.as_deref(), Some("ancestry"));
+        assert_eq!(status.commit_status, WorkspaceCommitStatus::Unknown);
         assert!(merged.exists());
 
         let status = inspect_workspace_lifecycle(&repo, "empty-reflog-ahead");

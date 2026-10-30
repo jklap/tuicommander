@@ -508,8 +508,8 @@ describe("PromptDrawer — category cycling, footer, placement, and modal regist
 		fireEvent.click(buttonByText(container, "+ New Prompt"));
 
 		const placementLabels = Array.from(container.querySelectorAll(".placementCheck span")).map((el) => el.textContent);
-		expect(placementLabels).toContain("Toolbar menu");
-		expect(placementLabels).toContain("File right-click menu");
+		expect(placementLabels).toContain("Toolbar");
+		expect(placementLabels).toContain("File menu");
 		expect(placementLabels).not.toContain("toolbar");
 		expect(placementLabels).not.toContain("file-context");
 	});

@@ -2437,7 +2437,7 @@ mod tests {
         .unwrap();
         assert!(!stale);
         assert_eq!(serde_json::to_value(&data.plan).unwrap(), expected);
-        assert_eq!(data.five_hour.unwrap().utilization, 42.0);
+        assert!((data.five_hour.unwrap().utilization - 42.0).abs() < 1e-6);
         // This is the exact fresh-cache read used by the desktop API path.
         assert_eq!(
             serde_json::to_value(try_get_fresh_cache(&profile).unwrap().plan).unwrap(),

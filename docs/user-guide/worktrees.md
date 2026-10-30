@@ -188,7 +188,7 @@ Right-click a worktree branch → **Merge & Archive** to:
    - **Delete**: Removes the worktree and branch entirely. Anything not committed is gone
    - **Ask**: Merge succeeds, then you choose what to do
 
-The merge uses `--no-edit` for a clean fast-forward or merge commit. If conflicts are detected, TUICommander attempts `git merge --abort` and leaves the worktree intact. If that abort fails, the error message tells you the repository may still be conflicted and includes the manual abort command. For this explicit UI request, TUICommander allows a merge commit when histories diverge: it passes `--no-ff` when `merge.ff` is false, otherwise `--ff`. This policy overrides fast-forward flags in `branch.<name>.mergeOptions`; Git still interprets the other options, including commit messages. TUICommander does not parse those options.
+The merge uses `--no-edit` for a clean fast-forward or merge commit. If conflicts are detected, TUICommander attempts `git merge --abort` and leaves the worktree intact. If that abort fails, the error message tells you the repository may still be conflicted and includes the manual abort command. TUICommander merges with your repository's own configuration (`merge.ff`, the target branch's `mergeOptions`) and never passes an override flag. A repository that only allows fast-forward merges (`merge.ff=only` or `--ff-only`) refuses a merge when the target has moved on since the branch was created: Merge & Archive and Update from base then stop with a message to rebase the branch first, change nothing, and keep the worktree and branch.
 
 ### Uncommitted work in the worktree
 

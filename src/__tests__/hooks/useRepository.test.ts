@@ -98,7 +98,7 @@ describe("useRepository", () => {
 
 		it("sends overrideBusy only when the user confirmed the live sessions", async () => {
 			mockInvoke.mockResolvedValueOnce(undefined);
-			await repo.removeWorktree("/repos/my-repo", "busy", true, false, false, undefined, undefined, true);
+			await repo.removeWorktree("/repos/my-repo", "busy", true, false, false, undefined, undefined, undefined, true);
 			expect(mockInvoke).toHaveBeenCalledWith("remove_worktree", {
 				repoPath: "/repos/my-repo",
 				workspaceId: "busy",

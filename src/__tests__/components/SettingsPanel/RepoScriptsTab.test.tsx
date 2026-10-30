@@ -35,6 +35,7 @@ function makeSettings(overrides: Partial<RepoSettings> = {}): RepoSettings {
 		branchLabels: {},
 		devServerUrl: null,
 		copyPaths: [],
+		archiveRetentionDays: null,
 		...overrides,
 	};
 }
@@ -48,6 +49,7 @@ const defaults: RepoDefaults = {
 	runScript: "npm start",
 	archiveScript: "docker compose down -v",
 	worktreeStorage: "sibling",
+	archiveRetentionDays: 0,
 	promptOnCreate: true,
 	deleteBranchOnRemove: false,
 	autoArchiveMerged: false,

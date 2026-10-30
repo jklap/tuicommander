@@ -347,13 +347,20 @@ pub(super) fn render_mcp_instructions(
         if spawn_preferred && !launch_channel {
             out.push_str("- Delegate or parallelize via TUIC `agent action=spawn`/`launch`, not client-native subagents; peers stay visible, mailable and managed.\n");
         }
-        out.push_str(if session_enabled {
-            "- `agent action=list_peers`; `session action=list`.\n"
-        } else {
-            "- `agent action=list_peers`.\n"
-        });
+        let mut lookups: Vec<&str> = Vec::new();
+        if messaging_preferred {
+            lookups.push("`agent action=list_peers`");
+        }
+        if session_enabled {
+            lookups.push("`session action=list`");
+        }
+        if !lookups.is_empty() {
+            out.push_str(&format!("- {}.\n", lookups.join("; ")));
+        }
         if repo_enabled && spawn_preferred {
-            out.push_str("- **Isolated branches:** `repo action=worktree_create spawn_session=true`.\n");
+            out.push_str(
+                "- **Isolated branches:** `repo action=worktree_create spawn_session=true`.\n",
+            );
         }
         if messaging_preferred {
             out.push_str("- **Mail:** default normal; `agent send urgency=urgent` requests a course change before the next step.\n");

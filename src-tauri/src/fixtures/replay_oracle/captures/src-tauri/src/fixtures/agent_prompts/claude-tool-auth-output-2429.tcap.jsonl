@@ -23,7 +23,7 @@
 {"record":20,"state":{"shell":1,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":null,"choice_sig":null,"fullscreen":false}}
 {"record":21,"state":{"shell":1,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":null,"choice_sig":null,"fullscreen":false}}
 {"record":22,"state":{"shell":1,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":null,"choice_sig":null,"fullscreen":false}}
-{"record":24,"event":{"type":"agent-block","action":"start","line":8,"_turn_epoch":0}}
+{"record":24,"event":{"type":"agent-block","action":"start","line":8,"on_alt_screen":true,"from_transcript_dump":false,"new_dump_generation":false,"_turn_epoch":0}}
 {"record":24,"state":{"shell":1,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":null,"choice_sig":null,"fullscreen":false}}
 {"record":25,"state":{"shell":1,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":null,"choice_sig":null,"fullscreen":false}}
 {"ring_len":5306}

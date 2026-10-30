@@ -2967,7 +2967,7 @@ mod tests {
     }
 
     #[test]
-    fn test_get_merged_branches_classifies_a_reflogless_branch_by_ancestry() {
+    fn test_get_merged_branches_leaves_a_reflogless_branch_out_without_failing() {
         let (_dir, repo_root) = history_fixture_repo(3);
         git_in(&repo_root, &["branch", "merged-feature", "main~1"]);
         git_in(&repo_root, &["branch", "no-reflog", "main~2"]);
@@ -2984,9 +2984,11 @@ mod tests {
             merged.contains(&"merged-feature".to_string()),
             "other branches are still classified, got: {merged:?}"
         );
+        // An empty reflog cannot tell a fresh untouched branch from a merged one, so it is
+        // left out of the merged set rather than offered for automatic cleanup.
         assert!(
-            merged.contains(&"no-reflog".to_string()),
-            "a reflog-less ancestor of main is merged by ancestry, got: {merged:?}"
+            !merged.contains(&"no-reflog".to_string()),
+            "a reflog-less branch must not be reported merged, got: {merged:?}"
         );
     }
 
@@ -3005,7 +3007,7 @@ mod tests {
         let set = merged_branch_set(&repo_root);
 
         assert!(set.contains("merged-feature"), "got: {set:?}");
-        assert!(set.contains("no-reflog"), "got: {set:?}");
+        assert!(!set.contains("no-reflog"), "got: {set:?}");
     }
 
     #[test]

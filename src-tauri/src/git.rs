@@ -171,10 +171,12 @@ pub(crate) fn update_from_base_impl(
         "merge" => {
             match git_cmd(&repo_path)
                 .args(["merge", &base, "--no-edit"])
-                .args([crate::git_cli::requested_merge_ff_policy(&repo_path)])
                 .run()
             {
                 Ok(_) => Ok(format!("Merged {base} into {branch_name}")),
+                Err(e) if crate::git_cli::is_fast_forward_refusal(&e) => Err(
+                    crate::git_cli::fast_forward_refusal_message(&base, branch_name),
+                ),
                 Err(crate::git_cli::GitError::NonZeroExit { stderr, .. }) => {
                     let message = finish_failed_git_operation_after_abort(
                         &repo_path,
@@ -1513,11 +1515,11 @@ mod tests {
             stats.last_commit_ts.keys().collect::<Vec<_>>()
         );
     }
-    /// `update_from_base` with the merge strategy must merge a diverged base even
-    /// when `merge.ff=only` and the checked-out branch's `mergeOptions` say
-    /// `--ff-only`: the explicit `--ff` it forwards is the last word.
+    /// `update_from_base` with the merge strategy honors a fast-forward-only repository: a
+    /// diverged base is refused with an actionable message, no merge commit is created and no
+    /// merge state is left behind.
     #[test]
-    fn update_from_base_merge_succeeds_on_diverged_history_under_ff_only() {
+    fn update_from_base_merge_refuses_diverged_history_under_ff_only() {
         let (_dir, path) = setup_test_repo_with_commit();
         let repo = path.to_string_lossy().to_string();
         let git = |args: &[&str]| {
@@ -1535,25 +1537,28 @@ mod tests {
         git(&["checkout", "feat"]);
         git(&["config", "branch.feat.tuicommander-base", "main"]);
         git(&["config", "merge.ff", "only"]);
-        git(&["config", "branch.feat.mergeOptions", "--ff-only"]);
-        let state = Arc::new(crate::state::tests_support::make_test_app_state());
-
-        let msg = update_from_base_impl(&state, &repo, "feat", Some("merge"))
-            .unwrap_or_else(|e| panic!("diverged merge under --ff-only: {e}"));
-        assert_eq!(msg, "Merged main into feat");
-        assert!(path.join("main.txt").exists());
-        assert!(path.join("feat.txt").exists());
-        let parents = git_cmd(&path)
-            .args(["rev-list", "--parents", "-n", "1", "HEAD"])
+        let tip_before = git_cmd(&path)
+            .args(["rev-parse", "HEAD"])
             .run()
             .unwrap()
-            .stdout
-            .split_whitespace()
-            .count()
-            - 1;
-        assert_eq!(parents, 2, "a diverged merge makes a merge commit");
-    }
+            .stdout;
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
 
+        let error = update_from_base_impl(&state, &repo, "feat", Some("merge"))
+            .expect_err("a fast-forward-only repository must refuse the diverged merge");
+        assert!(error.contains("only allows fast-forward merges"), "{error}");
+        assert!(!path.join("main.txt").exists());
+        let tip_after = git_cmd(&path)
+            .args(["rev-parse", "HEAD"])
+            .run()
+            .unwrap()
+            .stdout;
+        assert_eq!(tip_before, tip_after, "HEAD did not move");
+        assert!(
+            !path.join(".git/MERGE_HEAD").exists(),
+            "no merge left in progress"
+        );
+    }
 
     /// One branch whose reflog is gone used to fail the whole snapshot with
     /// "branch creation is absent from reflog", so the frontend never got the

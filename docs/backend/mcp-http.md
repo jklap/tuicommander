@@ -877,12 +877,18 @@ When intent markers are enabled for the connecting agent, initialize instruction
 
 ### Two instruction surfaces, and which one owns a rule
 
-Initialize instruction prose stays within 1,728-byte classic and
-1,792-byte collapsed empty-state budgets. The cross-client delegation rule adds
-one short fallback line for clients without a launch channel; other sections do not grow. Compact wording preserves the answer
-marker, urgent mail and progress reporting rules. The answer marker can start a
-row or the text of a Markdown list item; status, tool and hook/task notices stay
-excluded.
+Initialize instruction prose stays within a 2,496-byte classic and a
+2,560-byte collapsed empty-state budget (main's own caps are 1,728 / 1,792). The
+caps hold wip's richer marker and protocol prose on top of main's compact
+instructions, per the 2026-10-08 user decision to keep that prose rather than
+trim it: measured with the 5-byte release version string, classic empty is
+2,420 B and collapsed empty 2,483 B, plus ~2% rounded up to the next 64 bytes;
+each version-string byte beyond five adds two bytes, since the version appears
+twice. Bring them down by trimming prose, not by raising them again. The
+cross-client delegation rule adds one short fallback line for clients without a
+launch channel. Compact wording preserves the answer marker, urgent mail and
+progress reporting rules. The answer marker can start a row or the text of a
+Markdown list item; status, tool and hook/task notices stay excluded.
 
 TUIC supplies protocol instructions and tool descriptions on different wire
 surfaces. Client receipt does not prove that the model can read either surface

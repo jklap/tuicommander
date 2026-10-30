@@ -216,8 +216,10 @@ describe("StateExplainModal", () => {
 		const props = baseProps();
 		const { getByText } = render(() => <StateExplainModal {...props} />);
 
+		// The button is disabled until the explain resource resolves: wait for content, not just
+		// the (always present) label.
 		await waitFor(() => {
-			expect(getByText("Copy as JSON")).not.toBeNull();
+			expect(getByText("protocol · hook-busy (1.2s ago)")).not.toBeNull();
 		});
 		fireEvent.click(getByText("Copy as JSON"));
 

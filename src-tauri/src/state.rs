@@ -3213,10 +3213,7 @@ impl AppState {
         // state lane for an agent that animates its OSC title (each distinct
         // title is a `PtyTitle` and, once applied, a `SessionRenamed` from
         // `osc_title::apply_osc_title`, which the accumulator ignores anyway).
-        if !matches!(
-            &event,
-            AppEvent::PtyTitle { .. } | AppEvent::SessionRenamed { .. }
-        ) {
+        if !matches!(&event, AppEvent::SessionRenamed { .. }) {
             let parented = self.event_is_parented(&event);
             self.session_maps
                 .session_state_events
@@ -5351,6 +5348,8 @@ pub(crate) enum WorktreeSetupStatus {
         exit_code: Option<i64>,
         error: Option<String>,
     },
+}
+
 /// Bounded, TTL-evicted cache of [`WorktreeSetupStatus`] snapshots, keyed by
 /// `(repo_path, branch)`. Same shape as [`GitCache`] (moka, capacity + TTL
 /// bound) but keyed on a pair rather than a single repo path, so it lives
@@ -5369,6 +5368,8 @@ pub(crate) fn build_worktree_setup_status_cache() -> WorktreeSetupStatusCache {
         .max_capacity(GIT_CACHE_CAPACITY)
         .time_to_live(Duration::from_secs(30 * 60))
         .build()
+}
+
 /// TTL caches for git and GitHub query results, keyed by repo path.
 pub(crate) struct GitCacheState {
     worktree_storage_settings: Mutex<WorktreeStorageSettings>,

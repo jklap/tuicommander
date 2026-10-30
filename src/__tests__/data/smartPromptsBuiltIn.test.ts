@@ -17,9 +17,12 @@ describe("SMART_PROMPTS_BUILTIN", () => {
 		expect(new Set(ids).size).toBe(ids.length);
 	});
 
-	it("shares the same builtInVersion across every built-in", () => {
-		const versions = new Set(SMART_PROMPTS_BUILTIN.map((p) => p.builtInVersion));
-		expect(versions.size).toBe(1);
+	// Main stamps an individual built-in with its own higher version when only that prompt's
+	// content changed, so the versions are no longer all equal. What must hold is that none is
+	// below the shared floor, or an upgraded install would skip re-seeding that prompt.
+	it("never stamps a built-in below the shared builtInVersion floor", () => {
+		const floor = Math.min(...SMART_PROMPTS_BUILTIN.map((p) => p.builtInVersion ?? 0));
+		expect(floor).toBeGreaterThanOrEqual(4);
 	});
 
 	it("every variable referenced by a built-in's content has a VARIABLE_DESCRIPTIONS entry", () => {

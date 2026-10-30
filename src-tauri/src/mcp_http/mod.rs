@@ -4691,6 +4691,11 @@ mod tests {
             None,
             Query(types::PathQuery {
                 path: second.path().to_string_lossy().into_owned(),
+                scope: None,
+                ignore_leading_ws: false,
+                ignore_trailing_ws: false,
+                ignore_ws_amount: false,
+                ignore_case: false,
             }),
             Json(WorkflowAction::GetDraft {
                 id: drafts[0].id.clone(),
@@ -9217,6 +9222,7 @@ mod tests {
             .unwrap();
         // The linked checkout lives inside the main one; hide it from `git status` so
         // the main checkout is clean and only the removal guard can stop the call.
+        std::fs::create_dir_all(repo.path().join(".git/info")).unwrap();
         std::fs::write(repo.path().join(".git/info/exclude"), "caller/\n").unwrap();
         let caller = critic_detached_checkout(repo.path(), "caller");
         let main = repo.path().to_str().unwrap();
@@ -11873,6 +11879,11 @@ mod tests {
     async fn attachment_upload_does_not_write_into_repository() {
         let repo = create_temp_git_repo();
         let exclude = repo.path().join(".git/info/exclude");
+        // An empty git template leaves no .git/info: create it before touching exclude.
+        std::fs::create_dir_all(exclude.parent().unwrap()).unwrap();
+        if !exclude.exists() {
+            std::fs::write(&exclude, b"").unwrap();
+        }
         let before = std::fs::read(&exclude).unwrap();
         let state = test_state();
         crate::state::tests_support::insert_dummy_session(&state, "upload-session");
@@ -12073,6 +12084,11 @@ mod tests {
         std::fs::create_dir_all(legacy.parent().unwrap()).unwrap();
         std::fs::write(&legacy, b"user bytes").unwrap();
         let exclude = repo.path().join(".git/info/exclude");
+        // An empty git template leaves no .git/info: create it before touching exclude.
+        std::fs::create_dir_all(exclude.parent().unwrap()).unwrap();
+        if !exclude.exists() {
+            std::fs::write(&exclude, b"").unwrap();
+        }
         let before = std::fs::read(&exclude).unwrap();
         let state = test_state();
         crate::state::tests_support::insert_dummy_session(&state, "nested-upload");

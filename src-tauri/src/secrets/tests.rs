@@ -745,7 +745,7 @@ async fn task_secret_child_echo_is_masked_on_every_transport_2319() {
                 if let Some(entry) = self.state.session_maps.sessions.get(session) {
                     let _ = entry.lock()._child.kill();
                 }
-                crate::pty::cleanup_session(session, &self.state);
+                crate::pty::cleanup_session(session, &self.state, "test");
             }
             self.server.abort();
         }

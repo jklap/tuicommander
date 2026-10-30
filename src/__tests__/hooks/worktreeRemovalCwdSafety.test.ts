@@ -74,6 +74,7 @@ describe("worktree removal cwd authority", () => {
 		try {
 			const coordinator = createWorktreeRemovalCoordinator({
 				repo: {
+					getInfo: async () => ({ is_git_repo: true }),
 					removeWorktree,
 					finalizeMergedWorktree,
 					getWorkspaceLifecycle: async () => ({

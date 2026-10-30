@@ -1917,20 +1917,21 @@ fn instructions_workflow_header_omitted_when_session_agent_repo_all_disabled() {
 }
 
 #[test]
-fn instructions_peer_count_included_when_peers_registered() {
+fn instructions_carry_no_peer_inventory_when_peers_registered() {
     let state = test_state();
     register_peer(&state, TEST_UUID_A, "worker-1", "mcp-1");
     let out = build_mcp_instructions(&state, None);
 
+    // Main keeps peer inventory out of the cached prefix: the tools serve current peers.
     assert!(
-        out.contains("**1** peer agent(s) connected"),
-        "expected peer count sentence, got: {out}"
+        !out.contains("peer agent(s) connected"),
+        "instructions must not carry a peer inventory, got: {out}"
     );
 }
 
 #[test]
 #[serial_test::serial]
-fn instructions_single_isolated_task_bullet_only_for_claude_code_client() {
+fn instructions_never_carry_the_single_isolated_task_bullet() {
     let state = test_state();
 
     let generic = build_mcp_instructions(&state, Some("some-other-agent"));
@@ -1939,10 +1940,11 @@ fn instructions_single_isolated_task_bullet_only_for_claude_code_client() {
         "CC-only bullet must not appear for non-Claude-Code clients"
     );
 
+    // Main moved the delegation hint into the launch-channel playbook, so no client gets it here.
     let claude = build_mcp_instructions(&state, Some("claude-code"));
     assert!(
-        claude.contains("Single isolated task (CC only)"),
-        "CC-only bullet must appear for Claude Code clients"
+        !claude.contains("Single isolated task (CC only)"),
+        "CC-only bullet lives in the launch playbook now"
     );
 }
 
@@ -1997,16 +1999,16 @@ fn instructions_messaging_disabled_keeps_spawn_but_omits_messaging_guidance() {
     let state = test_state();
     let out = build_mcp_instructions(&state, Some("claude-code"));
 
-    // Spawn guidance stays.
-    assert!(out.contains("- **Prefer TUICommander for peers/teams:**"));
-    assert!(out.contains("- **Same repo:** TUIC `agent action=spawn` peers to work in this repo."));
+    // Spawn guidance stays (Claude Code receives the delegation rule through its launch
+    // channel, so the isolated-branches line is the one every client sees).
     assert!(out.contains("- **Isolated branches:**"));
 
     // Messaging guidance is gone.
     assert!(!out.contains("agent action=register"));
+    assert!(!out.contains("agent action=list_peers"));
     assert!(!out.contains("`agent action=inbox`"));
-    assert!(!out.contains("`agent action=send`"));
-    assert!(!out.contains("- **Identity:**"));
+    assert!(!out.contains("- **Mail:**"));
+    assert!(!out.contains("`agent send"));
 }
 
 // ---- build_mcp_instructions prefer_tuic_spawning gating (independent of
@@ -2065,21 +2067,13 @@ fn instructions_spawning_disabled_keeps_messaging_but_omits_spawn_guidance() {
     let out = build_mcp_instructions(&state, Some("claude-code"));
 
     // Messaging guidance stays.
-    assert!(out.contains("wait with `agent action=wait`, then read `agent action=inbox`"));
-    assert!(out.contains("`agent action=inbox`"));
-    assert!(out.contains(
-        "- **Same repo:** wait with `agent action=wait`, then read `agent action=inbox`. Lifecycle notifications carry state only; workers must report results with `agent action=send`.\n"
-    ));
+    assert!(out.contains("`agent action=list_peers`"));
+    assert!(out.contains("- **Mail:**"));
 
     // Spawn guidance is gone.
-    assert!(!out.contains("`agent action=spawn` (AI)"));
+    assert!(!out.contains("Delegate or parallelize via TUIC"));
     assert!(!out.contains("- **Isolated branches:**"));
-    assert!(!out.contains("Prefer TUICommander for peers/teams"));
     assert!(!out.contains("Single isolated task (CC only)"));
-    // The anomaly-fallback clause is spawn-specific ("a child failed to
-    // send its result" presumes TUIC did the spawning) — must not leak
-    // into the messaging-only Same-repo bullet.
-    assert!(!out.contains("anomaly fallback"));
 }
 
 /// Regression coverage for the 2026-09-04 wording change (see
@@ -2105,16 +2099,15 @@ fn instructions_spawning_disabled_keeps_messaging_but_omits_spawn_guidance() {
 #[serial_test::serial]
 fn instructions_prefer_tuicommander_bullet_uses_the_unhedged_directive() {
     let state = test_state();
-    let out = build_mcp_instructions(&state, Some("claude-code"));
+    // A client without a launch channel gets the rule here; Claude Code gets it from its playbook.
+    let out = build_mcp_instructions(&state, Some("some-other-agent"));
 
     assert!(
         out.contains(
-            "every agent-teams teammate is created with TUIC's `agent action=spawn` MCP tool — do not use your own built-in agent-spawning tool for this"
+            "Delegate or parallelize via TUIC `agent action=spawn`/`launch`, not client-native subagents"
         ),
         "expected the unhedged directive wording, got: {out}"
     );
-    // The label must survive unchanged — other tests grep for it.
-    assert!(out.contains("- **Prefer TUICommander for peers/teams:**"));
     // The old hedged phrasing must not reappear.
     assert!(!out.contains("whenever spawning an AI peer that should be observable"));
 }
@@ -2532,7 +2525,11 @@ fn mcp_instruction_surface_bytes_stay_within_budget() {
     // eight progress actions in the same change. Raising a budget for prose
     // that carries no obligation is not the same trade.
     // #2441-bbcf adds one cross-client delegation duty (137 bytes), not a catalogue.
-    // Reserve only the next 64-byte boundary; other instruction sections stay unchanged.
+    // wip keeps its richer marker/protocol prose on top of main's compact instructions, so the
+    // caps are 2,496 / 2,560: measured at the 5-byte release version (classic empty 2,420 B,
+    // collapsed empty 2,483 B) plus ~2%, rounded up to the next 64 bytes. Main's own caps are
+    // 1,728 / 1,792. The 2026-10-08 USER DECISION ("Increase the budget and keep wip's prose")
+    // still governs: trim prose to lower them, do not raise them again.
     //
     // Both empty-state budgets moved again on 2026-10-08 (classic 1600 ->
     // 3264, collapsed 1664 -> 3328), deliberately, by the user's decision to
@@ -2560,11 +2557,11 @@ fn mcp_instruction_surface_bytes_stay_within_budget() {
     const BASELINE_VER_LEN: usize = 5; // e.g. "1.8.0"
     let ver_overhead = ver.len().saturating_sub(BASELINE_VER_LEN) * 2;
     assert!(
-        instructions_classic_empty <= 1728 + ver_overhead,
+        instructions_classic_empty <= 2496 + ver_overhead,
         "classic instructions grew past their budget — {measured}"
     );
     assert!(
-        instructions_collapsed_empty <= 1792 + ver_overhead,
+        instructions_collapsed_empty <= 2560 + ver_overhead,
         "collapsed instructions grew past their budget — {measured}"
     );
     assert!(

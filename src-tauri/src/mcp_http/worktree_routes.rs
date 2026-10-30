@@ -1696,6 +1696,7 @@ mod survivor_tests {
                 override_lock: None,
                 expected_fingerprint: None,
                 confirm_missing_checkout: None,
+                permanent_delete: None,
                 override_busy,
             })
         };
@@ -1729,6 +1730,7 @@ mod survivor_tests {
             override_lock: None,
             expected_fingerprint: None,
             confirm_missing_checkout: None,
+            permanent_delete: None,
             override_busy: None,
         })
     }

@@ -2498,12 +2498,19 @@ pub(crate) fn merge_and_archive_worktree_impl_with_confirmation(
                 .unwrap_or_else(|| format!("Failed to checkout {target_branch}: {e}"))
         })?;
 
-    // 2. Apply the explicit UI merge policy, not a second parser for mergeOptions.
+    // 2. Merge with whatever the repository's own configuration says (merge.ff, mergeOptions):
+    //    no override flag. A fast-forward-only repository refuses a diverged merge before
+    //    changing anything, and the worktree is then kept as is (nothing is archived).
     if let Err(e) = git_cmd(&base_repo)
         .args(["merge", &branch_name, "--no-edit"])
-        .args([crate::git_cli::requested_merge_ff_policy(&base_repo)])
         .run()
     {
+        if crate::git_cli::is_fast_forward_refusal(&e) {
+            return Err(crate::git_cli::fast_forward_refusal_message(
+                &branch_name,
+                &target_branch,
+            ));
+        }
         return Err(finish_failed_git_operation_after_abort(
             &base_repo,
             "merge",
@@ -3266,6 +3273,7 @@ mod tests {
             false,
             None,
             false,
+            false,
             true,
         );
         assert!(deleted.is_err(), "stale safe dialog authorized deletion");
@@ -3459,6 +3467,7 @@ mod tests {
                     true,
                     false,
                     None,
+                    false,
                     false,
                     true,
                 );
@@ -3757,6 +3766,26 @@ mod tests {
         diverge: bool,
         options: Option<&str>,
     ) -> (TempDir, String, usize) {
+        let (repo, tip, res) = merge_archive_result_with_ff_config(ff, diverge, options);
+        let res = res.unwrap_or_else(|e| panic!("merge.ff={ff} diverge={diverge}: {e}"));
+        assert!(res.merged, "merge.ff={ff} diverge={diverge}");
+        let parents = git_cmd(repo.path())
+            .args(["rev-list", "--parents", "-n", "1", "HEAD"])
+            .run()
+            .unwrap()
+            .stdout
+            .split_whitespace()
+            .count()
+            - 1;
+        (repo, tip, parents)
+    }
+
+    /// Same, but hands back merge-and-archive's own result so a refusal can be asserted.
+    fn merge_archive_result_with_ff_config(
+        ff: &str,
+        diverge: bool,
+        options: Option<&str>,
+    ) -> (TempDir, String, Result<MergeArchiveResult, String>) {
         let (_cfg, _guard) = isolated_config();
         let repo = setup_test_repo();
         let base = base_branch_of(repo.path());
@@ -3796,19 +3825,8 @@ mod tests {
             base,
             "archive".to_string(),
             false,
-        )
-        .unwrap_or_else(|e| panic!("merge.ff={ff} diverge={diverge}: {e}"));
-        assert!(res.merged, "merge.ff={ff} diverge={diverge}");
-
-        let parents = git_cmd(repo.path())
-            .args(["rev-list", "--parents", "-n", "1", "HEAD"])
-            .run()
-            .unwrap()
-            .stdout
-            .split_whitespace()
-            .count()
-            - 1;
-        (repo, tip, parents)
+        );
+        (repo, tip, res)
     }
 
     // Catches: a flag-shaped commit message being mistaken for fast-forward policy.
@@ -3819,12 +3837,54 @@ mod tests {
         assert_eq!(parents, 2, "a message is not a fast-forward policy flag");
     }
 
+    // Catches: a repository that forbids merge commits receiving one anyway (a UI-requested merge
+    // must honor merge.ff=only), and a refused merge archiving or deleting the worktree.
     #[test]
-    fn merge_and_archive_merges_a_diverged_target_under_merge_ff_only() {
-        let (repo, _tip, parents) = merge_archive_with_ff_config("only", true, None);
-        assert_eq!(parents, 2, "a diverged target gets a merge commit");
-        assert!(repo.path().join("work.txt").exists());
-        assert!(repo.path().join("base-only.txt").exists());
+    fn merge_and_archive_refuses_a_diverged_target_under_merge_ff_only() {
+        let (repo, _tip, res) = merge_archive_result_with_ff_config("only", true, None);
+        let error = res
+            .err()
+            .expect("a fast-forward-only repository must refuse a diverged merge");
+        assert!(error.contains("only allows fast-forward merges"), "{error}");
+        assert!(error.contains("Rebase"), "{error}");
+        let parents = git_cmd(repo.path())
+            .args(["rev-list", "--parents", "-n", "1", "HEAD"])
+            .run()
+            .unwrap()
+            .stdout
+            .split_whitespace()
+            .count()
+            - 1;
+        assert_eq!(parents, 1, "no merge commit was created");
+        assert!(
+            !repo.path().join("work.txt").exists(),
+            "target is unchanged"
+        );
+        assert!(
+            git_cmd(repo.path())
+                .args(["rev-parse", "--verify", "refs/heads/feat-ffcfg"])
+                .run()
+                .is_ok(),
+            "the branch is kept"
+        );
+        assert!(
+            git_cmd(repo.path())
+                .args(["worktree", "list"])
+                .run()
+                .unwrap()
+                .stdout
+                .contains("feat-ffcfg"),
+            "the worktree is not archived after a refused merge"
+        );
+    }
+
+    // Catches: the same refusal through the branch's mergeOptions instead of merge.ff.
+    #[test]
+    fn merge_and_archive_refuses_a_diverged_target_under_branch_ff_only_options() {
+        let (_repo, _tip, res) =
+            merge_archive_result_with_ff_config("true", true, Some("--ff-only"));
+        let error = res.err().expect("mergeOptions --ff-only must be honored");
+        assert!(error.contains("only allows fast-forward merges"), "{error}");
     }
 
     #[test]
@@ -4083,6 +4143,7 @@ mod tests {
             false,
             false,
             None,
+            false,
             false,
             false,
         )
@@ -4577,6 +4638,7 @@ mod tests {
                     false,
                     None,
                     false,
+                    false,
                     override_busy,
                 )
             };
@@ -4674,6 +4736,7 @@ mod tests {
                     repo_path.clone(),
                     "ipc".into(),
                     Some(false),
+                    None,
                     None,
                     None,
                     None,

@@ -47,6 +47,7 @@ function makeSettings(overrides: Partial<RepoSettings> = {}): RepoSettings {
 		branchLabels: {},
 		devServerUrl: null,
 		copyPaths: [],
+		archiveRetentionDays: null,
 		...overrides,
 	};
 }
@@ -66,6 +67,7 @@ const defaults: RepoDefaults = {
 	runScript: "",
 	archiveScript: "",
 	worktreeStorage: "sibling",
+	archiveRetentionDays: 0,
 	promptOnCreate: true,
 	deleteBranchOnRemove: false,
 	autoArchiveMerged: true,
