@@ -270,7 +270,17 @@ describe("createWorktreeRemovalCoordinator", () => {
 				}),
 				{ liveSessions: true },
 			);
-			expect(removeWorktree).toHaveBeenLastCalledWith(REPO, WORKSPACE, true, false, false, undefined, undefined, true);
+			expect(removeWorktree).toHaveBeenLastCalledWith(
+				REPO,
+				WORKSPACE,
+				true,
+				false,
+				false,
+				undefined,
+				undefined,
+				false,
+				true,
+			);
 			expect(repositoriesStore.get(REPO)?.workspaces[WORKSPACE]).toBeUndefined();
 		});
 	});
@@ -349,7 +359,17 @@ describe("createWorktreeRemovalCoordinator", () => {
 
 			expect(confirmRemoveBusyWorktree).toHaveBeenCalledTimes(1);
 			expect(confirmRemoveLockedWorktree).toHaveBeenCalledTimes(1);
-			expect(removeWorktree).toHaveBeenLastCalledWith(REPO, WORKSPACE, true, false, true, undefined, undefined, true);
+			expect(removeWorktree).toHaveBeenLastCalledWith(
+				REPO,
+				WORKSPACE,
+				true,
+				false,
+				true,
+				undefined,
+				undefined,
+				false,
+				true,
+			);
 			expect(repositoriesStore.get(REPO)?.workspaces[WORKSPACE]).toBeUndefined();
 		});
 	});

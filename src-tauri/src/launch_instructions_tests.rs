@@ -521,9 +521,11 @@ fn launch_playbook_prevents_invisible_native_subagents() {
                 .nth(1)
                 .and_then(|section| section.split("\n## ").next())
                 .unwrap_or("");
-            if !section.contains("Delegate or parallelize via TUIC `agent action=spawn`/`launch`")
-                || !section.contains("never client-native subagents such as Claude Code Agent/Task")
-                || !section.contains("CC-only `cc_agent_hint` isolated-task")
+            // Wording measured 12/12 spawn across four models (the hedged "Delegate or
+            // parallelize" form scored 4/12): keep the directive and its isolated-task exception.
+            if !section.contains("Every teammate is created with `agent action=spawn`")
+                || !section.contains("do not use your own built-in agent-spawning tool")
+                || !section.contains("single isolated task via `cc_agent_hint`")
             {
                 failures.push(format!("{agent}, child={child}: launch module omits managed delegation or its CC exception"));
             }
@@ -536,7 +538,7 @@ fn launch_playbook_prevents_invisible_native_subagents() {
     }
     agents.launch_modules.insert("git_worktree".into(), false);
     let disabled = effective_text(&app, &agents, "ego");
-    if disabled.contains("Delegate or parallelize") {
+    if disabled.contains("Every teammate is created") {
         failures.push("disabled Git and worktrees module still emits its delegation rule".into());
     }
     assert!(failures.is_empty(), "{}", failures.join("\n"));

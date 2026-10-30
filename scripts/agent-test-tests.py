@@ -2,8 +2,10 @@
 import json
 import os
 import re
+import shutil
 from pathlib import Path
 import subprocess
+import tempfile
 import unittest
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -36,17 +38,31 @@ class AgentTestPlanTests(unittest.TestCase):
         self.assertEqual(binary.stat() if binary.exists() else None, before,
                          "dry run must neither create nor replace an existing warm executable")
 
-    def test_runtime_temp_does_not_overlap_ego_scratch_grant(self):
-        # Bug caught (2364): inherited TMPDIR under the intentional shared
-        # scratch grant prevents ego from proving its negative filesystem probe.
-        scratch_grant = Path.home() / "Gits/.tmp"
+    def test_runtime_temp_lives_under_the_callers_tmpdir(self):
+        # A sandboxed run may only write under its own $TMPDIR, so the socket, pid file and stop
+        # FIFO must be derived from it, never from a broader host-wide temp dir.
+        # A short fixed-length name: the socket path budget (104 bytes) leaves ~56 for the base.
+        # with-test-tmp.sh points TMPDIR at a long per-run root and records the original in
+        # TUIC_TEST_HOST_TMPDIR, which is the short base this test needs.
+        base = Path(os.environ.get("TUIC_TEST_HOST_TMPDIR") or tempfile.gettempdir())
+        scratch = base / f"s{os.getpid() % 10000}"
+        scratch.mkdir()
+        try:
+            self.check_runtime_temp_under(scratch)
+        finally:
+            shutil.rmtree(scratch, ignore_errors=True)
+
+    def check_runtime_temp_under(self, scratch):
         for instance in ["agent-test", "agent-test-2364", "a" * 63]:
             with self.subTest(instance=instance):
-                plan = self.plan(f"AGENT_TEST_INSTANCE={instance}", TMPDIR=str(scratch_grant))
+                # with-test-tmp.sh records the caller's original TMPDIR as TUIC_TEST_HOST_TMPDIR
+                # (the TMPDIR it then replaces with a long per-run root); without that wrapper the
+                # plain TMPDIR is the caller's scratch root.
+                for variable in ("TMPDIR", "TUIC_TEST_HOST_TMPDIR"):
+                    environment = {"TMPDIR": tempfile.gettempdir(), "TUIC_TEST_HOST_TMPDIR": "", variable: str(scratch)}
+                    plan = self.plan(f"AGENT_TEST_INSTANCE={instance}", **environment)
+                    self.assertTrue(Path(plan["environment"]["TMPDIR"]).is_relative_to(scratch), variable)
                 temporary = Path(plan["environment"]["TMPDIR"])
-                self.assertTrue(temporary.is_relative_to(Path.home() / "Gits"))
-                self.assertFalse(temporary.is_relative_to(scratch_grant),
-                                 "ego negative probe must run outside the shared scratch grant")
                 self.assertEqual(Path(plan["socket"]).parent, temporary)
                 self.assertEqual(Path(plan["pid_file"]).parent, temporary)
                 self.assertEqual(Path(plan["stop_fifo"]).parent, temporary)

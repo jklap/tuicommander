@@ -327,6 +327,17 @@ Gotchas:
   an unrelated `main` commit becomes a singleton. Harmless (it just isn't squashed); check the
   singleton list in `blocks.md`.
 
+## Second run, 2026-10-30: Phase B on `wip-squashed` (139 commits) onto a `main` 867 ahead
+
+Phase B took ~140 stops, about 25 of them real design decisions, almost all in files both sides
+had reworked (MCP instructions, remove-worktree flow, Smart Prompts editor, event wire, settings
+search, test-support). The reorg did its job on ledgers (one stop) and singleton upstream commits,
+but it does NOT make upstream-integrated PRs droppable: their commits were folded into feature
+commits, so drop lists keyed by patch-id or subject matched 3 of 46. Plan for hunk-level resolution
+and a final content check against each PR's net diff instead, and see the case study in
+`rebase-onto-main` for the techniques and the gate loop. Budget a final pass for upstream-added
+code that trips our guard scripts, and for tests that encode behavior main has since changed.
+
 ## Re-running later
 
 The tool is idempotent on its own output: every squashed commit carries `Squash-Group:`, which

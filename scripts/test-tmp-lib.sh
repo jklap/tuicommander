@@ -137,7 +137,10 @@ tuic_pin_archiver_for_xcrun_shim() {
 # cannot be read; scripts/test-run-remote-fixture.sh pins the value found.
 tuic_unix_socket_path_max() {
   _tuic_ipc_src=$1/src-tauri/crates/tuic-ipc/src/lib.rs
-  _tuic_path_max=$(sed -n 's/^pub const UNIX_SOCKET_PATH_MAX: usize = \([0-9][0-9]*\);$/\1/p' "$_tuic_ipc_src" 2>/dev/null)
+  # The constant is defined once per host (Linux 107, everything else 103). The
+  # conservative (non-Linux) value is the budget every platform must fit, so it wins
+  # over the Linux one; a single unconditional definition is read as is.
+  _tuic_path_max=$(awk '/^pub const UNIX_SOCKET_PATH_MAX: usize = [0-9]+;$/ { v = $NF; sub(/;/, "", v); if (prev ~ /not\(target_os = "linux"\)/ || !seen) { best = v; seen = 1 } } { prev = $0 } END { print best }' "$_tuic_ipc_src" 2>/dev/null)
   case $_tuic_path_max in
     '' | *[!0-9]*)
       echo "cannot read UNIX_SOCKET_PATH_MAX from $_tuic_ipc_src" >&2

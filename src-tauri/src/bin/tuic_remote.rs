@@ -164,7 +164,7 @@ where
     }
     if set_password && set_password_if_unset {
         anyhow::bail!("--set-password and --set-password-if-unset are mutually exclusive");
-
+    }
     Ok(ParsedArgs {
         instance,
         credential_file,

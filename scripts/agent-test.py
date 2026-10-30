@@ -32,7 +32,10 @@ def runtime_root() -> Path:
     override = os.environ.get("TUIC_AGENT_TEST_ROOT")
     if override:
         return Path(override)
-    return Path(os.environ.get("TUIC_TEST_HOST_TMPDIR") or tempfile.gettempdir()) / "tuic-at"
+    # $TMPDIR is the caller's scratch root (in a sandbox, the only place it may write), so the
+    # runtime files live under it, never under a broader host-wide temp dir.
+    host = Path(os.environ.get("TUIC_TEST_HOST_TMPDIR") or tempfile.gettempdir())
+    return host / "tuic-at"
 
 
 def build_runner() -> list[str]:

@@ -4540,7 +4540,9 @@ async fn mcp_codex_spawn_carries_launch_instructions() {
 }
 
 #[cfg(unix)]
-const MOCK_CODEX_ARGV_SCRIPT: &str = "#!/bin/sh\nprintf '%s\\0' \"$@\" > \"$ARGV_OUTPUT.tmp\" && mv \"$ARGV_OUTPUT.tmp\" \"$ARGV_OUTPUT\"\n";
+// The app also probes the binary (`--help`) without the test's env; with `ARGV_OUTPUT` unset the
+// redirect target would be a bare `.tmp` in the test process's cwd (`src-tauri/.tmp`), outside TMPDIR.
+const MOCK_CODEX_ARGV_SCRIPT: &str = "#!/bin/sh\n[ -n \"$ARGV_OUTPUT\" ] || exit 0\nprintf '%s\\0' \"$@\" > \"$ARGV_OUTPUT.tmp\" && mv \"$ARGV_OUTPUT.tmp\" \"$ARGV_OUTPUT\"\n";
 
 // Catches: a paused mock writer publishes a partial argv prefix before finishing.
 #[cfg(unix)]

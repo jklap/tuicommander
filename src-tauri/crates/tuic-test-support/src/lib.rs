@@ -1240,7 +1240,7 @@ mod tests {
 }
 
 #[cfg(test)]
-mod tests {
+mod ceiling_tests {
     use super::git_ceiling_directories;
     use std::ffi::OsStr;
     use std::path::{Path, PathBuf};

@@ -19,7 +19,7 @@ import {
 	sanitizeIndicatorOverrides,
 } from "../indicators/validate";
 import { invoke } from "../invoke";
-import { settingNumberDefault } from "../services/settingsCatalogue";
+import { settingNumberDefault } from "../services/settingsCatalogueCore";
 import { settingsRefresh } from "../services/settingsRefresh";
 import type { IssueFilterMode } from "../types";
 import { isAcpConfigured } from "../utils/acpAvailability";

@@ -984,6 +984,73 @@ the pre-rebase commits alive, and each needs its own separate
 ready. That's a distinct, separate decision — don't do it as part of this
 task unless explicitly asked.
 
+## Case study: `wip-squashed` (139 feature commits) onto a `main` 867 commits ahead (2026-10-30)
+
+Reorg first, then a commit-by-commit replay (Strategy D shape, one operator, no subagents). It
+took ~140 stops, about 25 of them design-level. What worked and what bit:
+
+**Commit-level dropping does not survive a squash.** The drop list for PRs upstream had integrated
+"with our fixes" matched 46 commits on a flat `wip` but only 3 on `wip-squashed` (the PR commits were
+folded into feature commits, so their patch-ids and subjects changed). Work at hunk level instead:
+at every stop compare `base->HEAD` (what main changed) with `base->replayed` (what we changed) per
+conflict hunk, and keep main's side wherever it is a superset. The per-PR net diffs
+(`gh api .../pulls/N` for `base.sha`, then `git diff base refs/pull/N/head`) are still the right
+yardstick for a final "is our change present, or did upstream's win?" check. If a todo line looks
+like `pick <sha> # <subject> -- 9 weeks ago (author)` (`rebase.instructionFormat`), a sequence
+editor that parses `pick <sha> <subject>` silently matches nothing: strip the `# ` and the age/author tail.
+
+**Resolve each conflict hunk by what each side changed, not by which side is longer.** Dump the three
+sides of the hunk (HEAD / base / replayed) and diff `base->HEAD` and `base->replayed` with
+`difflib` (word level for prose rows): the answer is usually "HEAD plus these three words" or "main
+already has all of ours". `git merge-file -p` run on a hunk's own three sides resolves many
+doc/test hunks outright. Keep a tiny helper per mode (ours/theirs/both). **A `both` that drops lines
+already present on the HEAD side also drops repeated closing braces, `});` and blank lines**: after
+any `both` on code or JSON, compile or parse the file before staging (this lost an enum's closing
+`}` in `state.rs`, an `if`'s in `tuic_remote.rs`, and several `});` in a test file).
+
+**When main already landed the same fix (dual-landed): take main's file wholesale** when its version
+is a superset (tunnels `manager.rs`/`supervisor.rs`, `private_scratch.rs`, the tuic-ipc socket
+budget, `install.sh`), `git show HEAD:<path> > <path>`, then port only our genuine delta, and note
+what was NOT carried over. Check the *behavior* before choosing: main's empty-reflog rule
+(`Unknown`, because an empty reflog cannot tell a fresh branch from a merged one) is safer than our
+"classify by ancestry", so main's won and our tests were rewritten to the new contract. A reorg that
+also *moved* a function out of a file main kept editing (`event_type_name`/`event_payload` ->
+`event_wire.rs`) needs main's new arms ported into the moved copy with a 3-way `git merge-file`
+(current = our moved copy, base = old text, other = main's text).
+
+**Both sides added a parameter to one flat signature** (main `permanent_delete`, ours
+`override_busy`): thread both, in one agreed order, through Rust impl, IPC command, HTTP query,
+`COMMAND_TABLE` mapping, TS wrappers, the coordinator and every test call site. The compiler finds
+the Rust ones; positional TS call sites and `toHaveBeenLastCalledWith` tests are found only by running them.
+
+**Generated files**: take main's at the stop and regenerate once at the end
+(`pnpm notices`, `TUIC_UPDATE_SETTINGS_CATALOGUE=1 cargo test ... generated_typescript_matches_native_catalogue`,
+`vitest transport.test.ts -u`, `TUIC_REGENERATE_ORACLES=1` after reviewing the drift: new event fields and a
+few more events per capture were ours and expected). A union-merged ledger commit can place our
+CHANGELOG entries in the middle of an old released section: move them under `[Unreleased]` and drop
+the ones main already shipped. A ledger file deleted upstream (`todo.md`) stays deleted: say so.
+
+**Guard scripts are ours, not main's.** Code main added after our base trips them
+(`check-no-home-gits`, `check-no-hardcoded-tmp` baseline, `check-no-process-exec`, the mobile eager
+import graph). Fix the code (a catalog-free module for what mobile imports, fixture paths off `/tmp`),
+or allow-list with a `DEFERRED (date)` reason when a port cannot be verified here.
+
+**`make check` stops at the first red step, and nextest fail-fast shows only one failure.** To see
+everything, run the gate's own nextest command with `--no-fail-fast` and EXACTLY its flags
+(`TUIC_TEST_FAKE_HOME=1`, debug profile, `--features dictation`): a `--release` run produced
+false failures (mcp call audit defaults on only in debug builds; no fake HOME breaks info/exclude
+tests). A fresh test repo made with an empty git template has no `.git/info`: production code
+writing `info/exclude` must `create_dir_all` it. Keep the personal commit last while folding fixes:
+commit each fix, then `rebase -i` with a `GIT_SEQUENCE_EDITOR` script that turns it into a `fixup` of
+the "reconcile" commit and moves "personal scripts" to the end.
+
+**Environment**: `repo worktree_create` fetches its `base_ref` and fails when the ssh agent is
+flaky: pass the raw hash. `cargo` rewrites `src-tauri/Cargo.lock`'s version; restore it (or commit it
+in the regen commit) before `rebase --continue`. The `plugins` checkout in a fresh worktree sits at
+an old pin; `git -C plugins checkout --detach <pin>` aligns it so plugin tests mean something. One
+plugin test (`xlsx-preview` date) is timezone-dependent and `mdKanban.test.ts` needs the merged
+plugins commit: neither is the rebase.
+
 ## Rollback
 
 ```bash
