@@ -8252,6 +8252,36 @@ mod tests {
         assert!(archived_at_tip(repo.path(), "retention-parent/child", &tip));
     }
 
+    fn listed_worktree_contains_path(listed: &str, path: &Path) -> bool {
+        // Normalize separators even on Unix so Windows regression cases run on every host.
+        let path = PathBuf::from(path.to_string_lossy().replace('\\', "/"));
+        parse_worktree_entries(listed)
+            .iter()
+            .any(|entry| Path::new(&entry.path.replace('\\', "/")) == path)
+    }
+
+    // Catches: separator mismatches and substring matches hiding wrong retention results.
+    #[test]
+    fn worktree_listing_membership_matches_complete_paths_across_separators() {
+        let listed = "worktree C:/a/b\nHEAD abc\nbranch refs/heads/only-in-branch\n\n\
+                      worktree /unix/archive-longer\nHEAD def\ndetached\n\n";
+        for (path, expected) in [
+            (r"C:\a\b", true),
+            ("C:/a/b", true),
+            ("C:/a", false),
+            ("/unix/archive", false),
+            ("/unix/archive-longer", true),
+            ("only-in-branch", false),
+            ("C:/missing", false),
+        ] {
+            assert_eq!(
+                listed_worktree_contains_path(listed, Path::new(path)),
+                expected,
+                "membership for {path:?}"
+            );
+        }
+    }
+
     // Catches: early expiry, mtime-based age, losing archive refs, and dirty-file loss.
     #[test]
     fn archive_retention_honors_age_and_keeps_unrecoverable_dirty_files() {
@@ -8348,8 +8378,8 @@ mod tests {
             .run()
             .unwrap()
             .stdout;
-        assert!(!listed.contains(&clean.to_string_lossy().into_owned()));
-        assert!(listed.contains(&dirty.to_string_lossy().into_owned()));
+        assert!(!listed_worktree_contains_path(&listed, &clean));
+        assert!(listed_worktree_contains_path(&listed, &dirty));
     }
 
     // Catches: deleting legacy archives, active/locked archives, or a live checkout.
