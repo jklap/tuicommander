@@ -648,7 +648,7 @@ fn agent_tool_definition_omits_spawn_recommendation_when_spawning_not_preferred(
     let agent = agent_tool_definition(false, true);
     let desc = agent["description"].as_str().unwrap();
     assert!(
-        !desc.contains("Spawn a named peer: spawn name=worker"),
+        !desc.contains("Spawn: spawn name=worker"),
         "must not steer toward spawn when spawning is not preferred"
     );
     assert!(
@@ -657,14 +657,14 @@ fn agent_tool_definition_omits_spawn_recommendation_when_spawning_not_preferred(
     );
     // Messaging guidance is untouched by the spawning flag alone.
     assert!(desc.contains("Managed PTYs auto-bind"));
-    assert!(desc.contains("Talk to it: send to=<peer>"));
+    assert!(desc.contains("Send: send to=<peer>"));
     // The action itself remains callable — "prefer" is not "disable".
     let action_enum = agent["inputSchema"]["properties"]["action"]["description"]
         .as_str()
         .unwrap();
     assert!(action_enum.contains("spawn"));
     assert!(
-        desc.contains("- spawn: Launch agent in new PTY"),
+        desc.contains("- spawn: Launch in new PTY"),
         "the spawn action bullet itself must stay documented"
     );
 }
@@ -678,7 +678,7 @@ fn agent_tool_definition_omits_messaging_recommendation_when_messaging_not_prefe
         "must not steer toward register when messaging is not preferred"
     );
     assert!(
-        !desc.contains("Talk to it: send to=<peer>"),
+        !desc.contains("Send: send to=<peer>"),
         "must not steer toward send when messaging is not preferred"
     );
     assert!(
@@ -690,7 +690,7 @@ fn agent_tool_definition_omits_messaging_recommendation_when_messaging_not_prefe
         "must explicitly redirect to the host's own native messaging"
     );
     // Spawning guidance is untouched by the messaging flag alone.
-    assert!(desc.contains("Spawn a named peer: spawn name=worker"));
+    assert!(desc.contains("Spawn: spawn name=worker"));
     // The messaging actions remain callable.
     for action in &["register", "list_peers", "send", "inbox"] {
         assert!(
@@ -840,11 +840,11 @@ fn merged_tool_definitions_agent_description_reflects_the_calling_sessions_prefe
         .unwrap();
     let desc = agent["description"].as_str().unwrap();
     assert!(
-        !desc.contains("Spawn a named peer: spawn name=worker"),
+        !desc.contains("Spawn: spawn name=worker"),
         "tools/list must not recommend spawn for a connection with prefer_tuic_spawning=false"
     );
     assert!(
-        !desc.contains("Talk to it: send to=<peer>"),
+        !desc.contains("Send: send to=<peer>"),
         "tools/list must not recommend messaging for a connection with prefer_tuic_messaging=false"
     );
     // tools/list carries main's compact description; the preference is applied
@@ -1105,7 +1105,7 @@ fn compact_agent_description_redirects_launch_and_drops_send_duty_per_flag_combi
         );
         // Every action stays documented: prefer is never disable.
         assert!(desc.contains("\nlaunch:"), "{combo}");
-        assert!(desc.starts_with("Managed peers and mail. There is no separate swarm action."));
+        assert!(desc.starts_with("Managed peers and mail. send to=orchestrator message=<text> reaches your registered coordinator; no list_peers needed."));
     }
 }
 
@@ -1124,7 +1124,7 @@ fn merged_tool_definitions_without_session_context_stays_fully_permissive() {
     let desc = agent["description"].as_str().unwrap();
     // Main's compact listing text, untouched by any preference redirect.
     assert!(!desc.contains("This host has its own native"), "{desc}");
-    assert!(desc.starts_with("Managed peers and mail. There is no separate swarm action."));
+    assert!(desc.starts_with("Managed peers and mail. send to=orchestrator message=<text> reaches your registered coordinator; no list_peers needed."));
 }
 
 #[test]

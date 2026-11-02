@@ -6672,6 +6672,20 @@ mod tests {
         );
     }
 
+    /// A request as a network (non-loopback) client sends it: `read-external` only enforces its
+    /// repository / additional-readable-directory boundary for those, a loopback caller is the
+    /// desktop user's own browser.
+    fn network_get(uri: impl AsRef<str>) -> Request<Body> {
+        let mut request = Request::get(uri.as_ref()).body(Body::empty()).unwrap();
+        request
+            .extensions_mut()
+            .insert(ConnectInfo(std::net::SocketAddr::from((
+                [192, 168, 0, 1],
+                5000,
+            ))));
+        request
+    }
+
     #[tokio::test]
     async fn test_read_external_allows_a_path_under_an_additional_readable_dir() {
         let dir = tempfile::tempdir().unwrap();
@@ -6682,11 +6696,10 @@ mod tests {
         state.config.write().additional_readable_dirs = vec![dir.path().display().to_string()];
         let app = build_router(state, false, true);
         let resp = app
-            .oneshot(
-                Request::get(format!("/fs/read-external?path={}", file.display()))
-                    .body(Body::empty())
-                    .unwrap(),
-            )
+            .oneshot(network_get(format!(
+                "/fs/read-external?path={}",
+                file.display()
+            )))
             .await
             .unwrap();
         assert_eq!(
@@ -6704,11 +6717,7 @@ mod tests {
         state.config.write().additional_readable_dirs = vec![dir.path().display().to_string()];
         let app = build_router(state, false, true);
         let resp = app
-            .oneshot(
-                Request::get("/fs/read-external?path=/etc/passwd")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
+            .oneshot(network_get("/fs/read-external?path=/etc/passwd"))
             .await
             .unwrap();
         assert_eq!(resp.status(), StatusCode::FORBIDDEN);
@@ -6728,11 +6737,10 @@ mod tests {
         state.config.write().additional_readable_dirs = vec![root.display().to_string()];
         let app = build_router(state, false, true);
         let resp = app
-            .oneshot(
-                Request::get(format!("/fs/read-external?path={}", sibling_file.display()))
-                    .body(Body::empty())
-                    .unwrap(),
-            )
+            .oneshot(network_get(format!(
+                "/fs/read-external?path={}",
+                sibling_file.display()
+            )))
             .await
             .unwrap();
         assert_eq!(
@@ -6854,11 +6862,7 @@ mod tests {
         let state = test_state();
         let app = build_router(state, false, true);
         let resp = app
-            .oneshot(
-                Request::get("/fs/read-external?path=/etc/passwd")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
+            .oneshot(network_get("/fs/read-external?path=/etc/passwd"))
             .await
             .unwrap();
         assert_eq!(resp.status(), StatusCode::FORBIDDEN);
@@ -6897,11 +6901,10 @@ mod tests {
         state.config.write().additional_readable_dirs = vec![];
         let app = build_router(state, false, true);
         let resp = app
-            .oneshot(
-                Request::get(format!("/fs/read-external?path={}", file.display()))
-                    .body(Body::empty())
-                    .unwrap(),
-            )
+            .oneshot(network_get(format!(
+                "/fs/read-external?path={}",
+                file.display()
+            )))
             .await
             .unwrap();
         assert_eq!(
@@ -6917,11 +6920,7 @@ mod tests {
         state.config.write().additional_readable_dirs = vec![String::new(), "  ".to_string()];
         let app = build_router(state, false, true);
         let resp = app
-            .oneshot(
-                Request::get("/fs/read-external?path=/etc/passwd")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
+            .oneshot(network_get("/fs/read-external?path=/etc/passwd"))
             .await
             .unwrap();
         assert_eq!(

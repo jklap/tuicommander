@@ -3294,7 +3294,7 @@ fn long_claude_submission_frames_the_recorded_dictation_payload() {
     write_agent_command_to_pty(&state, "claude-long-dictation", text).unwrap();
     assert_eq!(
         *bytes.lock().unwrap(),
-        format!("\x15\x1b[200~{text}\x1b[201~\r").as_bytes()
+        format!("\x1b[200~{text}\x1b[201~\r").as_bytes()
     );
 }
 
@@ -4814,7 +4814,7 @@ fn chat_pending_send_now_and_idle_drain_deliver_exactly_once() {
         );
         assert_eq!(
             *bytes.lock().unwrap(),
-            b"\x15Review now\r",
+            b"Review now\r",
             "idle_wins={idle_wins}"
         );
         assert!(list_queued_commands(&state, "chat-pending").is_empty());
@@ -4838,7 +4838,7 @@ fn chat_pending_ego_uses_native_ctrl_enter_and_leaves_other_items_queued() {
     enqueue_user_command(&state, "chat-ego", "chosen", None).unwrap();
     let id = list_queued_commands(&state, "chat-ego")[1].id;
     assert_eq!(send_queued_command_now(&state, "chat-ego", id), Ok(true));
-    assert_eq!(*bytes.lock().unwrap(), b"\x15chosen\x1b[13;5u");
+    assert_eq!(*bytes.lock().unwrap(), b"chosen\x1b[13;5u");
     assert_eq!(list_queued_commands(&state, "chat-ego")[0].text, "older");
     assert_eq!(send_queued_command_now(&state, "chat-ego", id), Ok(false));
 }
@@ -4908,9 +4908,9 @@ fn chat_pending_concurrent_turn_end_and_steer_have_one_writer() {
     let sent = send_queued_command_now(&state, "chat-race", id).unwrap();
     idle.join().unwrap();
     let expected: &[u8] = if sent {
-        b"\x15once\x1b[13;5u"
+        b"once\x1b[13;5u"
     } else {
-        b"\x15once\r"
+        b"once\r"
     };
     assert_eq!(&*bytes.lock().unwrap(), expected);
     assert!(list_queued_commands(&state, "chat-race").is_empty());

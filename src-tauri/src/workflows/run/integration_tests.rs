@@ -1032,6 +1032,8 @@ fn prepared_before_publication(t: &Trial) -> super::store::integration::Integrat
 fn canonical_ignored_work_is_not_overwritten_by_native_publication() {
     let mut t = trial();
     enable(&t);
+    // A fixture repo made with an empty git template has no `.git/info` yet.
+    std::fs::create_dir_all(t.project.join(".git/info")).unwrap();
     std::fs::write(t.project.join(".git/info/exclude"), "*.local\n").unwrap();
     std::fs::write(
         t.project.join("valuable.local"),
