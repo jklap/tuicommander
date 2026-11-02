@@ -38,8 +38,8 @@
 //! version also deferred the three OSC 7770 helpers; a user calling one from
 //! their own `.zshrc` then hit "command not found", so they stay eager.)
 //!
-//! The deferred half (the `claude`/`codex`/`grok`/`opencode`/`goose`
-//! auto-injection wrappers) used to load from `.zshenv` too — a real bug
+//! The deferred half (the `grok`/`opencode`
+//! screen-flag wrappers) used to load from `.zshenv` too — a real bug
 //! (2026-09-24): defining `claude` as a shell function before the user's
 //! `.zshrc`/`.zshrc.d/*` run breaks any `command -v claude` "is this a real
 //! binary" guard there (`command -v` on a function returns the bare name, so
@@ -58,30 +58,13 @@
 //!   precmd only runs on the NEXT prompt. The deferred half is sourced as an
 //!   ordinary statement inside the bootstrap's own body instead.
 //!
-//! **A user's own function of the same name is never wrapped without
-//! consent.** Each deferred wrapper checks `(( $+functions[name] ))`. For
-//! `claude`/`codex`/`goose` the decision lives in
-//! `AgentSettings::wrap_user_function` + `wrap_user_function_hash`
-//! (`config.rs`), threaded in by `inject_zsh` as
-//! `TUIC_WRAP_USER_FN_<AGENT>` (`wrap`/`skip`/`ask`) and
-//! `TUIC_WRAP_USER_FN_<AGENT>_HASH` (the fingerprint — `cksum` of the
-//! function body — the decision was made for):
-//!
-//! - `wrap` applies ONLY when the current function's fingerprint equals the
-//!   recorded one; the user's function is copied to `__tuic_user_<agent>` and
-//!   `<agent>()` calls it through the same flag-injecting helper. A changed
-//!   (or unfingerprintable) function is asked about again, never wrapped.
-//! - `skip` leaves the function alone (a fingerprint-less `skip`, set from
-//!   Settings, applies to any function).
-//! - `ask` (undecided) leaves the function alone AND emits OSC 7770
-//!   `userwrap=<agent>:<fingerprint>` (handled in `pty.rs`, which validates
-//!   both halves and calls `agent_wrap_prompt::request`) so the user is asked
-//!   once; the answer is persisted together with that fingerprint.
-//! - unset (the script sourced by hand outside TUIC) behaves as `skip`.
-//!
-//! `grok`/`opencode` have no consent flow: a user's own function is always
-//! left alone. Bash and fish keep eager wrappers (no deferred half), where a
-//! later user redefinition simply wins.
+//! **A user's own function of the same name is never touched.** `claude`, `codex` and `goose`
+//! have no shell function of ours: the PATH agent shim (`AGENT_SHIM`) adds their launch flags
+//! (instructions, Codex's completion hook, Goose's `--name`) at the final `exec`, so a user's own
+//! `claude`/`codex`/`goose` function that ends in `command <agent>` runs as written and still
+//! reaches the shim. There is nothing to consent to. `grok`/`opencode` keep their zsh wrapper
+//! only when the user has no function of that name. Bash and fish keep eager wrappers (no
+//! deferred half), where a later user redefinition simply wins.
 
 use std::path::Path;
 
@@ -119,7 +102,6 @@ tuic_intent()  { printf '\e]7770;intent=%s\a' "$*"; }
 /// binary. See this module's doc comment for the full rationale, and for the
 /// consent rule that governs a user's OWN function of the same name.
 const ZSH_DEFERRED_INTEGRATION: &str = r#"# TUIC Shell Integration — agent auto-injection wrappers (deferred)
-# Auto-inject --name for Goose so tab↔session mapping is deterministic
 if [[ -n "$TUIC_SESSION" ]]; then
 __TUIC_WINDOWS_CLAUDE_ZSH__
   __tuic_screen_arg() {
@@ -128,84 +110,32 @@ __TUIC_WINDOWS_CLAUDE_ZSH__
     for a in "$@"; do [[ "$a" == "$flag" ]] && return 0; done
     printf '%s' "$flag"
   }
-  # Fingerprint of the user's own function $1 (cksum of its body: digits and
-  # '-' only), in REPLY; empty when it can't be computed. An autoload stub is
-  # resolved first so the fingerprint (and a later copy) is of the real body.
-  __tuic_user_fn_fp() {
-    REPLY=
-    [[ $functions[$1] == *'builtin autoload -X'* ]] && { autoload +X "$1" 2>/dev/null || return 0; }
-    local fp; fp=$(print -rn -- "$functions[$1]" | command cksum 2>/dev/null) || return 0
-    fp=${(j:-:)${=fp}}
-    [[ $fp =~ '^[0-9]+-[0-9]+$' ]] && REPLY=$fp
-  }
-  # Decide what to do about a user's own function: $1 = the stored decision
-  # (wrap/skip/ask; empty outside TUIC), $2 = the fingerprint that decision
-  # was made for, $3 = the current fingerprint. Wrapping needs consent for
-  # THIS exact function body; anything else is asked about again.
-  __tuic_user_fn_mode() {
-    case "$1" in
-      wrap) [[ -n "$3" && "$2" == "$3" ]] && REPLY=wrap || REPLY=ask;;
-      skip) [[ -z "$2" || "$2" == "$3" ]] && REPLY=skip || REPLY=ask;;
-      ask) REPLY=ask;;
-      *) REPLY=skip;;
-    esac
-  }
-  __tuic_inject_codex() {
-    local callee=$1; shift
-    local a prev screen
-    screen=$(__tuic_screen_arg "$TUIC_CODEX_SCREEN_FLAG" "$TUIC_CODEX_SCREEN_SKIP" "$@")
-    for a in "$@"; do
-      if [[ "$prev" == "-c" && "$a" == notify=* ]] || [[ "$a" == -cnotify=* || "$a" == --config=notify=* ]]; then "$callee" ${screen:+"$screen"} "$@"; return; fi
-      prev="$a"
-    done
-    if [[ -n "$TUIC_CODEX_NOTIFY" ]]; then "$callee" ${screen:+"$screen"} "$@" -c "notify=[\"$TUIC_CODEX_NOTIFY\"]"; else "$callee" ${screen:+"$screen"} "$@"; fi
-  }
-  __tuic_inject_goose() {
-    local callee=$1; shift
-    local a; for a in "$@"; do
-      case "$a" in --name|--name=*|-n|-n?*|--path|--path=*|--resume|-r|--no-session) "$callee" "$@"; return;; esac
-    done
-    case "$1" in
-      session|run) "$callee" "$1" --name "$TUIC_SESSION" "${@:2}";;
-      *) "$callee" "$@";;
-    esac
-  }
-  # codex/goose: a user's own function is wrapped ONLY with recorded
-  # consent for its exact fingerprint; otherwise it is left alone, and the
-  # app is asked (OSC 7770 userwrap=<agent>:<fingerprint>) when undecided.
-  # The agent names below are literals and the fingerprint is digits and '-'
-  # only, so nothing user-controlled is interpolated into code or the OSC.
-  if (( $+functions[codex] )); then
-    __tuic_user_fn_fp codex; __tuic_fp=$REPLY
-    __tuic_user_fn_mode "$TUIC_WRAP_USER_FN_CODEX" "$TUIC_WRAP_USER_FN_CODEX_HASH" "$__tuic_fp"
-    case $REPLY in
-      wrap)
-        functions[__tuic_user_codex]=$functions[codex]
-        codex() { __tuic_inject_codex __tuic_user_codex "$@"; }
-        ;;
-      ask) [[ -n "$TUIC_CODEX_NOTIFY" && -n "$__tuic_fp" ]] && printf '\e]7770;userwrap=codex:%s\a' "$__tuic_fp";;
-    esac
-  else
-    __tuic_real_codex() { command codex "$@"; }
-    codex() { __tuic_inject_codex __tuic_real_codex "$@"; }
+  # codex/goose: like grok/opencode, a user's own function is left alone (it reaches the PATH
+  # agent shim through `command <agent>`, which injects the same flags); ours is only defined
+  # when there is none, so a bare `codex` also gets them without the shim's help.
+  if (( ! $+functions[codex] )); then
+    codex() {
+      local a prev screen
+      screen=$(__tuic_screen_arg "$TUIC_CODEX_SCREEN_FLAG" "$TUIC_CODEX_SCREEN_SKIP" "$@")
+      for a in "$@"; do
+        if [[ "$prev" == "-c" && "$a" == notify=* ]] || [[ "$a" == -cnotify=* || "$a" == --config=notify=* ]]; then command codex ${screen:+"$screen"} "$@"; return; fi
+        prev="$a"
+      done
+      if [[ -n "$TUIC_CODEX_NOTIFY" ]]; then command codex ${screen:+"$screen"} "$@" -c "notify=[\"$TUIC_CODEX_NOTIFY\"]"; else command codex ${screen:+"$screen"} "$@"; fi
+    }
   fi
-  if (( $+functions[goose] )); then
-    __tuic_user_fn_fp goose; __tuic_fp=$REPLY
-    __tuic_user_fn_mode "$TUIC_WRAP_USER_FN_GOOSE" "$TUIC_WRAP_USER_FN_GOOSE_HASH" "$__tuic_fp"
-    case $REPLY in
-      wrap)
-        functions[__tuic_user_goose]=$functions[goose]
-        goose() { __tuic_inject_goose __tuic_user_goose "$@"; }
-        ;;
-      # --name injection has no separate settings gate, so this always asks.
-      ask) [[ -n "$__tuic_fp" ]] && printf '\e]7770;userwrap=goose:%s\a' "$__tuic_fp";;
-    esac
-  else
-    __tuic_real_goose() { command goose "$@"; }
-    goose() { __tuic_inject_goose __tuic_real_goose "$@"; }
+  if (( ! $+functions[goose] )); then
+    goose() {
+      local a; for a in "$@"; do
+        case "$a" in --name|--name=*|-n|-n?*|--path|--path=*|--resume|-r|--no-session) command goose "$@"; return;; esac
+      done
+      case "$1" in
+        session|run) command goose "$1" --name "$TUIC_SESSION" "${@:2}";;
+        *) command goose "$@";;
+      esac
+    }
   fi
-  unset __tuic_fp
-  # grok/opencode: no consent flow — a user's own function is always left alone.
+  # grok/opencode: a user's own function is always left alone.
   if (( ! $+functions[grok] )); then
     grok() {
       local screen=$(__tuic_screen_arg "$TUIC_GROK_SCREEN_FLAG" "$TUIC_GROK_SCREEN_SKIP" "$@")
@@ -530,6 +460,28 @@ if [ "$name" = claude ]; then
   [ -z "$claude_settings" ] || set -- --settings "$claude_settings" "$@"
   [ -z "$TUIC_ATTACHMENTS_DIR" ] || set -- "--add-dir=$TUIC_ATTACHMENTS_DIR" "$@"
 fi
+# Codex's completion hook and Goose's session name are launch flags too: injecting them here
+# (not in a shell function) means a user's own `codex`/`goose` function that ends in
+# `command codex`/`command goose` is respected as it stands, with nothing to ask about.
+if [ "$name" = codex ] && [ -n "$TUIC_CODEX_NOTIFY" ]; then
+  prev=
+  notify=
+  for arg in "$@"; do
+    [ "$prev" = -c ] && case $arg in notify=*) notify=1;; esac
+    case $arg in -cnotify=*|--config=notify=*) notify=1;; esac
+    prev=$arg
+  done
+  [ -n "$notify" ] || set -- "$@" -c "notify=[\"$TUIC_CODEX_NOTIFY\"]"
+fi
+if [ "$name" = goose ] && [ -n "$TUIC_SESSION" ]; then
+  named=
+  for arg in "$@"; do
+    case $arg in --name|--name=*|-n|-n?*|--path|--path=*|--resume|-r|--no-session) named=1;; esac
+  done
+  if [ -z "$named" ]; then
+    case $1 in session|run) first=$1; shift; set -- "$first" --name "$TUIC_SESSION" "$@";; esac
+  fi
+fi
 [ -n "$file" ] && [ -s "$file" ] || exec "$real" "$@"
 # True when an argument before a bare -- is one of $flags, alone or as flag=value.
 has_flag() {
@@ -646,11 +598,6 @@ const WINDOWS_CLAUDE_FISH: &str = r#"  if not printf '%s\n' "$TUIC_CLAUDE_HELP" 
     end
   end
 "#;
-
-/// Template for the ZDOTDIR `.zshenv` wrapper.  At runtime `{script}` is
-/// replaced with the absolute path to `tuic-integration.zsh`.
-const ZDOTDIR_ZSHENV: &str = r#"# TUIC ZDOTDIR wrapper — sources integration then restores real dotfiles
-source "{script}"
 
 /// Template for the ZDOTDIR `.zshenv` wrapper. At runtime `{eager_script}` and
 /// `{deferred_script}` are replaced with the absolute paths to
@@ -989,56 +936,6 @@ fn inject_zsh(base: &Path, cmd: &mut portable_pty::CommandBuilder) {
         cmd.env("TUIC_ORIGINAL_ZDOTDIR", original);
     }
     cmd.env("ZDOTDIR", zdotdir_path_str(&zdotdir));
-
-    // zsh only — thread each persisted wrap decision (and the fingerprint it
-    // was made for) into the shell, so ZSH_DEFERRED_INTEGRATION can act on it
-    // without a round trip. Always set (never inherited from a parent TUIC
-    // shell): the values are fixed words and `[0-9]+-[0-9]+` fingerprints.
-    let agents_config = crate::config::load_agents_config();
-    for agent in WRAP_USER_FUNCTION_AGENTS {
-        let (mode, hash) = wrap_user_function_env(&agents_config, agent);
-        let key = format!("TUIC_WRAP_USER_FN_{}", agent.to_ascii_uppercase());
-        cmd.env(&key, mode);
-        cmd.env(format!("{key}_HASH"), hash);
-    }
-}
-
-/// Agents whose zsh wrapper may wrap a user's own same-named function after
-/// explicit consent (`agent_wrap_prompt`). Also the allow-list every entry
-/// point (OSC verb, IPC/HTTP setter, prompt resolver) validates against.
-pub(crate) const WRAP_USER_FUNCTION_AGENTS: [&str; 2] = ["codex", "goose"];
-
-/// `(mode, fingerprint)` for `TUIC_WRAP_USER_FN_<AGENT>[_HASH]`: `wrap` /
-/// `skip` / `ask` matching `__tuic_user_fn_mode`'s arms, and the recorded
-/// fingerprint (empty when none). A stored fingerprint that is not well-formed
-/// is dropped, so a hand-edited config can never inject shell text — and a
-/// `wrap` without a valid fingerprint then reads as "ask" in the shell.
-fn wrap_user_function_env(
-    config: &crate::config::AgentsConfig,
-    agent: &str,
-) -> (&'static str, String) {
-    let settings = config.agents.get(agent);
-    let mode = match settings.and_then(|s| s.wrap_user_function) {
-        Some(true) => "wrap",
-        Some(false) => "skip",
-        None => "ask",
-    };
-    let hash = settings
-        .and_then(|s| s.wrap_user_function_hash.as_deref())
-        .filter(|h| is_user_function_fingerprint(h))
-        .unwrap_or_default()
-        .to_string();
-    (mode, hash)
-}
-
-/// A user-function fingerprint as the zsh integration computes it: `cksum`'s
-/// CRC and byte count joined by `-` (digits only on both sides).
-pub(crate) fn is_user_function_fingerprint(value: &str) -> bool {
-    let Some((crc, len)) = value.split_once('-') else {
-        return false;
-    };
-    let digits = |s: &str| !s.is_empty() && s.len() <= 20 && s.bytes().all(|b| b.is_ascii_digit());
-    digits(crc) && digits(len)
 }
 
 /// Single-quote `value` for zsh source text (`'` -> `'\''`), so a path with
@@ -1379,9 +1276,7 @@ mod tests {
 
     /// `off_passthrough` is the exact substring proving the Codex "no notify
     /// configured" path calls the real command with no flag added — this differs
-    /// for zsh, whose deferred wrappers call through a `$callee` (the real
-    /// binary, or a consented user function) instead of a literal `command
-    /// codex`. Claude has no Unix shell wrapper: the PATH agent shim serves it.
+    /// per shell's syntax. Claude has no Unix shell wrapper: the PATH agent shim serves it.
     fn assert_wrapper_paths(shell: &str, script: &str, off_passthrough: &str) {
         let codex_inject = script
             .matches("notify=[\\\"$TUIC_CODEX_NOTIFY\\\"]")
@@ -1411,11 +1306,7 @@ mod tests {
     #[test]
     fn zsh_wrappers_cover_inject_user_override_skip_and_setting_off() {
         // The agent wrappers live in the deferred half — see the module doc.
-        assert_wrapper_paths(
-            "zsh",
-            ZSH_DEFERRED_INTEGRATION,
-            "else \"$callee\" ${screen:+\"$screen\"} \"$@\"",
-        );
+        assert_wrapper_paths("zsh", ZSH_DEFERRED_INTEGRATION, "else command codex");
     }
 
     #[test]
@@ -1539,6 +1430,8 @@ mod tests {
                     .env("PATH", &path)
                     .env_remove("TUIC_AGENT_INSTRUCTIONS_DIR")
                     .env_remove("TUIC_CLAUDE_SETTINGS")
+                    .env_remove("TUIC_CODEX_NOTIFY")
+                    .env_remove("TUIC_SESSION")
                     .env_remove("TUIC_ATTACHMENTS_DIR")
                     .output()
                     .unwrap();
@@ -1897,6 +1790,63 @@ mod tests {
                     "SETTINGS=\nARG=--settings\nARG={CLAUDE_SETTINGS}\nARG=--resume\nARG=safe-id\n"
                 )
             );
+        }
+
+        /// Run `agent` through the shim in front of a probe that echoes its argv.
+        fn shim_argv(agent: &str, args: &[&str]) -> Vec<String> {
+            let root = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+            let probe = crate::test_support::fake_ssh_script(
+                &format!("shim-launch-flags-{agent}"),
+                "for arg do printf 'ARG=%s\\n' \"$arg\"; done",
+                "",
+            );
+            std::os::unix::fs::symlink(probe, root.path().join(agent)).unwrap();
+            let path = format!(
+                "{}:{}:/usr/bin:/bin",
+                shim_dir().display(),
+                root.path().display()
+            );
+            let output = Command::new(shim_dir().join(agent))
+                .args(args)
+                .env("PATH", path)
+                .env("TUIC_SESSION", "shim-session")
+                .env("TUIC_CODEX_NOTIFY", CODEX_NOTIFY)
+                .env_remove("TUIC_AGENT_INSTRUCTIONS_DIR")
+                .env_remove("TUIC_CLAUDE_SETTINGS")
+                .env_remove("TUIC_ATTACHMENTS_DIR")
+                .output()
+                .unwrap();
+            assert!(output.status.success(), "{agent}: {output:?}");
+            String::from_utf8(output.stdout)
+                .unwrap()
+                .lines()
+                .map(|l| l.trim_start_matches("ARG=").to_owned())
+                .collect()
+        }
+
+        // Catches: codex losing its completion hook, or goose its session name, now that the
+        // shim (not a shell function that consented to wrap a user's own function) injects them.
+        #[test]
+        fn shim_injects_codex_notify_and_goose_session_name_once() {
+            let notify = format!("notify=[\"{CODEX_NOTIFY}\"]");
+            assert_eq!(
+                shim_argv("codex", &["--model", "o3"]),
+                ["--model", "o3", "-c", &notify]
+            );
+            // Already configured: left alone.
+            assert_eq!(
+                shim_argv("codex", &["-c", "notify=[\"mine\"]"]),
+                ["-c", "notify=[\"mine\"]"]
+            );
+            assert_eq!(
+                shim_argv("goose", &["session", "--debug"]),
+                ["session", "--name", "shim-session", "--debug"]
+            );
+            assert_eq!(
+                shim_argv("goose", &["session", "--name", "x"]),
+                ["session", "--name", "x"]
+            );
+            assert_eq!(shim_argv("goose", &["info"]), ["info"]);
         }
 
         /// TUIC shell environment with the status signals and the instructions on.
@@ -3108,217 +3058,50 @@ printf 'SESSION=%s\nATTACHMENTS=%s\nINSTRUCTIONS=%s\nISOLATED=%s\nHOSTED=%s\n' "
                  regress — got: {out:?}"
             );
         }
-
-        /// If the user's own `.zshrc.d` already defines `claude` and nothing
-        /// has been consented to (a fresh config: "ask"), that definition
-        /// must win untouched — TUIC's deferred wrapper never wraps a user's
-        /// function without a recorded "yes" for its exact fingerprint. It
-        /// does ask: the `userwrap=claude:<fingerprint>` OSC must be emitted.
-        #[test]
-        #[serial_test::serial]
-        fn users_own_claude_redefinition_still_wins_over_tuic() {
-            let home = tempfile::tempdir().expect("tempdir");
-            let config_dir = tempfile::tempdir().expect("config tempdir");
-            let _guard = crate::config::set_config_dir_override(config_dir.path().to_path_buf());
-
-            write_home_rc_files(
-                home.path(),
-                &[(
-                    "60-user-claude.sh",
-                    "claude() { print -n \"USER_OVERRIDE:$*\" }\n",
-                )],
-            );
-
-            let out = run_real_zsh_session(
-                home.path(),
-                home.path(),
-                Some("test-session"),
-                "claude --model opus\n",
-                "USER_OVERRIDE:",
-                Duration::from_secs(10),
-            );
-
-            assert!(
-                out.contains("USER_OVERRIDE:--model opus"),
-                "the user's own claude() must win over TUIC's deferred \
-                 wrapper — got: {out:?}"
-            );
-            assert!(
-                !out.contains("--settings"),
-                "TUIC's wrapper must not have run at all here (no \
-                 --settings injected) — got: {out:?}"
-            );
-            assert!(
-                out.contains("\u{1b}]7770;userwrap=claude:"),
-                "an undecided user function must raise the consent prompt — got: {out:?}"
-            );
-        }
     }
 
-    /// The consent rule for a user's OWN `claude`/`codex`/`goose` function,
-    /// exercised by sourcing the real deferred script in `zsh -f -c` with the
-    /// exact env `inject_zsh` exports. No PTY needed: the decision logic runs
-    /// at source time.
+    /// Batch 36 review: no test drove a hostile path through the generated
+    /// `.zshenv`. The app-data dir is user-controlled (an instance's config
+    /// dir) and lands inside zsh source text, so a path holding quotes,
+    /// `$(...)`, backticks, `;` and spaces must be taken literally — sourced,
+    /// never executed.
     #[cfg(unix)]
-    mod zsh_consent {
-        use super::super::{ZSH_DEFERRED_INTEGRATION, render_integration};
-        use std::path::Path;
-        use std::process::Command;
+    #[test]
+    #[serial_test::serial]
+    fn a_hostile_app_data_path_is_quoted_in_the_generated_zshenv() {
+        let config_dir = tempfile::tempdir().unwrap();
+        let _guard = crate::config::set_config_dir_override(config_dir.path().to_path_buf());
+        let root = tempfile::tempdir().unwrap();
+        let canary = root.path().join("PWNED");
+        let hostile = root.path().join(format!(
+            "it's $(touch {c}) `touch {c}` ;touch {c}; \"$HOME\"",
+            c = canary.display()
+        ));
+        std::fs::create_dir_all(&hostile).unwrap();
+        let home = root.path().join("home");
+        std::fs::create_dir_all(&home).unwrap();
 
-        const SETTINGS: &str = "/tmp/tuic-consent-test/claude.json";
-        /// A user function that reports exactly what it was called with.
-        const USER_FN: &str = "claude() { print -r -- \"USER:$*\"; }";
+        let mut cmd = portable_pty::CommandBuilder::new("/bin/zsh");
+        super::inject_zsh(&hostile, &mut cmd);
+        let zdotdir = hostile.join("zdotdir");
+        assert!(zdotdir.join(".zshenv").is_file(), "the .zshenv was written");
 
-        fn script() -> std::path::PathBuf {
-            use std::sync::atomic::{AtomicUsize, Ordering};
-            static SEQ: AtomicUsize = AtomicUsize::new(0);
-            let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("target/shell-integration-tests");
-            std::fs::create_dir_all(&dir).expect("create integration script dir");
-            let path = dir.join(format!(
-                "consent-{}-{}.zsh",
-                std::process::id(),
-                SEQ.fetch_add(1, Ordering::Relaxed)
-            ));
-            std::fs::write(&path, render_integration(ZSH_DEFERRED_INTEGRATION))
-                .expect("write deferred script");
-            path
-        }
-
-        /// Define `user_fn`, source the deferred script with the given wrap
-        /// env, then run `claude --model opus`. Returns stdout.
-        fn run(user_fn: &str, wrap_env: &[(&str, &str)]) -> String {
-            let path = script();
-            let mut cmd = Command::new("zsh");
-            cmd.arg("-f")
-                .arg("-c")
-                .arg(format!(
-                    "{user_fn}\nsource '{}'\nclaude --model opus",
-                    path.display()
-                ))
-                .env("TUIC_SESSION", "consent-test")
-                .env("TUIC_CLAUDE_SETTINGS", SETTINGS)
-                .env(
-                    "TUIC_CLAUDE_HELP",
-                    include_str!("../tests/fixtures/agent-help/claude-2026-10-04.txt"),
-                )
-                .env_remove("TUIC_WRAP_USER_FN_CLAUDE")
-                .env_remove("TUIC_WRAP_USER_FN_CLAUDE_HASH");
-            for (k, v) in wrap_env {
-                cmd.env(k, v);
-            }
-            let out = cmd
-                .output()
-                .expect("zsh must be installed (scripts/install-launch-shells.sh)");
-            let _ = std::fs::remove_file(&path);
-            let stderr = String::from_utf8_lossy(&out.stderr);
-            assert!(
-                out.status.success() && stderr.is_empty(),
-                "zsh failed: {stderr}"
-            );
-            String::from_utf8(out.stdout).expect("utf-8")
-        }
-
-        /// The fingerprint the shell reported in its `userwrap` OSC, if any.
-        fn asked_fingerprint(out: &str) -> Option<String> {
-            let start =
-                out.find("\u{1b}]7770;userwrap=claude:")? + "\u{1b}]7770;userwrap=claude:".len();
-            let end = out[start..].find('\u{7}')? + start;
-            Some(out[start..end].to_string())
-        }
-
-        fn ask_env() -> [(&'static str, &'static str); 1] {
-            [("TUIC_WRAP_USER_FN_CLAUDE", "ask")]
-        }
-
-        #[test]
-        fn undecided_leaves_the_function_alone_and_asks_with_a_fingerprint() {
-            let out = run(USER_FN, &ask_env());
-            assert!(
-                out.contains("USER:--model opus\n"),
-                "not wrapped without consent: {out:?}"
-            );
-            assert!(!out.contains(SETTINGS), "no flag without consent: {out:?}");
-            let fp = asked_fingerprint(&out).expect("must ask");
-            assert!(
-                crate::shell_integration::is_user_function_fingerprint(&fp),
-                "fingerprint must be digits-dash-digits: {fp:?}"
-            );
-        }
-
-        #[test]
-        fn wrap_applies_only_to_the_consented_fingerprint() {
-            let fp = asked_fingerprint(&run(USER_FN, &ask_env())).expect("must ask");
-
-            let out = run(
-                USER_FN,
-                &[
-                    ("TUIC_WRAP_USER_FN_CLAUDE", "wrap"),
-                    ("TUIC_WRAP_USER_FN_CLAUDE_HASH", &fp),
-                ],
-            );
-            assert!(
-                out.contains(&format!("USER:--settings {SETTINGS} --model opus\n")),
-                "consented function must be wrapped: {out:?}"
-            );
-            assert!(
-                asked_fingerprint(&out).is_none(),
-                "no prompt once consented: {out:?}"
-            );
-
-            // The user edits the function: the old "yes" must not carry over.
-            let changed = "claude() { print -r -- \"USER:$*\"; : changed; }";
-            let out = run(
-                changed,
-                &[
-                    ("TUIC_WRAP_USER_FN_CLAUDE", "wrap"),
-                    ("TUIC_WRAP_USER_FN_CLAUDE_HASH", &fp),
-                ],
-            );
-            assert!(
-                out.contains("USER:--model opus\n"),
-                "changed function not wrapped: {out:?}"
-            );
-            let new_fp = asked_fingerprint(&out).expect("changed function must be asked about");
-            assert_ne!(new_fp, fp);
-        }
-
-        #[test]
-        fn wrap_without_a_fingerprint_asks_instead_of_wrapping() {
-            let out = run(USER_FN, &[("TUIC_WRAP_USER_FN_CLAUDE", "wrap")]);
-            assert!(out.contains("USER:--model opus\n"), "{out:?}");
-            assert!(asked_fingerprint(&out).is_some(), "{out:?}");
-        }
-
-        #[test]
-        fn skip_and_outside_tuic_never_wrap_or_ask() {
-            for env in [&[("TUIC_WRAP_USER_FN_CLAUDE", "skip")][..], &[][..]] {
-                let out = run(USER_FN, env);
-                assert_eq!(out, "USER:--model opus\n", "env {env:?}");
-            }
-        }
-
-        #[test]
-        fn a_hostile_function_body_is_fingerprinted_not_executed() {
-            let marker =
-                std::env::temp_dir().join(format!("tuic-consent-pwned-{}", std::process::id()));
-            let _ = std::fs::remove_file(&marker);
-            let hostile = format!(
-                // Quotes, `$(...)`, `;` and a BEL inside the body: none of it
-                // may reach the OSC or run while the shell fingerprints it.
-                "claude() {{ print -r -- \"USER:$*\"; : '$(touch {m})' ';\\a'; }}",
-                m = marker.display()
-            );
-            let out = run(&hostile, &ask_env());
-            assert!(out.contains("USER:--model opus\n"), "{out:?}");
-            let fp = asked_fingerprint(&out).expect("must ask");
-            assert!(
-                crate::shell_integration::is_user_function_fingerprint(&fp),
-                "{fp:?}"
-            );
-            assert!(
-                !marker.exists(),
-                "fingerprinting must never run the function body"
-            );
-        }
+        let out = std::process::Command::new("zsh")
+            .arg("-c")
+            .arg("print -r -- \"SOURCED:${+functions[__tuic_precmd]}\"")
+            .env_clear()
+            .env("HOME", &home)
+            .env("PATH", "/usr/bin:/bin")
+            .env("ZDOTDIR", &zdotdir)
+            .current_dir(root.path())
+            .output()
+            .expect("zsh must be installed (scripts/install-launch-shells.sh)");
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(
+            stdout.contains("SOURCED:1"),
+            "the eager script must be sourced from the hostile path: {stdout:?} {stderr:?}"
+        );
+        assert!(!canary.exists(), "path text must never run as code");
     }
 }
