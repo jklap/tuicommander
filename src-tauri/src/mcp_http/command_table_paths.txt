@@ -33,6 +33,7 @@
 /acp/one-shot/x/cancel
 /acp/story-draft
 /acp/workspace
+/agent-wrap-prompt/response
 /agent/claude-project-dir
 /agent/discover-session
 /agent/open-in-custom
@@ -80,6 +81,7 @@
 /config/agents
 /config/agents/x/hook-instrumentation
 /config/agents/x/native-status-signals
+/config/agents/x/wrap-user-function
 /config/branch-label
 /config/clear-caches
 /config/clear-repo-caches
@@ -96,8 +98,11 @@
 /config/project-mcp-upstreams
 /config/prompt-library
 /config/remote-connections
+/config/remote-connections/probe-direct-tls
 /config/remote-connections/status
+/config/remote-connections/test
 /config/remote-connections/x
+/config/remote-connections/x/configure-ssh-password
 /config/remote-connections/x/connect
 /config/remote-connections/x/install
 /config/remote-connections/x/password
@@ -110,6 +115,9 @@
 /config/repo-settings/has-custom
 /config/repositories
 /config/repositories/stale-temp
+/config/ssh-daemon/x/plan
+/config/ssh-daemon/x/start
+/config/ssh-daemon/x/stop
 /config/telegram
 /config/themes
 /config/ui-prefs
@@ -304,6 +312,12 @@
 /repo/remotes
 /repo/remove-orphan
 /repo/run-git
+/repo/session-review
+/repo/session-review/revert-file
+/repo/session-review/revert-step
+/repo/session-review/sessions
+/repo/session-review/unwatch
+/repo/session-review/watch
 /repo/stage
 /repo/stash
 /repo/stash/apply
@@ -318,6 +332,7 @@
 /repo/update-pr-branch
 /repo/working-tree-status
 /repo/worktree-dirty
+/scrollback
 /secrets/forms/submit
 /sessions
 /sessions/agent
@@ -325,7 +340,10 @@
 /sessions/wake
 /sessions/worktree
 /sessions/x
+/sessions/x/accent-color
 /sessions/x/chat-view
+/sessions/x/explain-state
+/sessions/x/focus
 /sessions/x/force-retry
 /sessions/x/foreground
 /sessions/x/has-foreground
@@ -347,6 +365,10 @@
 /sessions/x/submit
 /sessions/x/terminal/cursor-line
 /sessions/x/terminal/hyperlink-span
+/sessions/x/terminal/image
+/sessions/x/terminal/image-meta
+/sessions/x/terminal/image-placements
+/sessions/x/terminal/image-ref
 /sessions/x/terminal/lines
 /sessions/x/terminal/logical-line
 /sessions/x/terminal/request-frame
@@ -368,6 +390,8 @@
 /stats
 /stories/action
 /stories/capabilities
+/streamdock/devices
+/streamdock/status
 /system/check-update
 /system/home-directory
 /system/local-ip
@@ -390,6 +414,7 @@
 /tunnels/start/x
 /tunnels/status/x
 /tunnels/stop/x
+/ui/action
 /watchers/dir
 /watchers/hot-repos
 /watchers/repo
