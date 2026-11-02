@@ -380,11 +380,7 @@ async fn mcp_worktree_remove_refuses_a_worktree_with_a_live_session() {
     let worktree = tuic_git::test_fixtures::worktree_with(repo.path(), "busy", false);
     let state = test_state();
     crate::state::tests_support::insert_dummy_session(&state, "pty-mcp");
-    crate::state::tests_support::set_session_cwd(
-        &state,
-        "pty-mcp",
-        &worktree.to_string_lossy(),
-    );
+    crate::state::tests_support::set_session_cwd(&state, "pty-mcp", &worktree.to_string_lossy());
     let repo_path = repo.path().to_string_lossy().into_owned();
 
     let refused = handle_worktree(
@@ -2685,7 +2681,7 @@ async fn workflow_denial_leaves_automations_independent() {
     state.config.write().mcp_capabilities =
         crate::mcp_capabilities::McpCapabilities::from_legacy(&["story".into()]);
     assert!(
-        !filtered_native_tools(&state)
+        !filtered_native_tools(&state, true, true)
             .iter()
             .any(|tool| tool["name"] == "story")
     );
@@ -3272,7 +3268,7 @@ async fn agent_spawn_defers_claude_prompt_until_mcp_identity_binds() {
     let state = test_state();
     let spawned = handle_mcp_tool_call_with_context(
         &state,
-        "127.0.0.1:0".parse().unwrap(),
+        "127.0.0.1:0".parse::<std::net::SocketAddr>().unwrap().into(),
         "agent",
         &serde_json::json!({
             "action": "spawn",
@@ -3348,7 +3344,7 @@ async fn agent_spawn_does_not_defer_a_print_mode_claude_prompt() {
     let state = test_state();
     let spawned = handle_mcp_tool_call_with_context(
         &state,
-        "127.0.0.1:0".parse().unwrap(),
+        "127.0.0.1:0".parse::<std::net::SocketAddr>().unwrap().into(),
         "agent",
         &serde_json::json!({
             "action": "spawn",
@@ -3487,7 +3483,7 @@ async fn agent_spawn_defers_claude_prompt_via_the_ordinary_no_binary_path_call_s
     let state = test_state();
     let spawned = handle_mcp_tool_call_with_context(
         &state,
-        "127.0.0.1:0".parse().unwrap(),
+        "127.0.0.1:0".parse::<std::net::SocketAddr>().unwrap().into(),
         "agent",
         &serde_json::json!({
             "action": "spawn",
@@ -3666,7 +3662,7 @@ async fn daemon_workflow_worktree_waits_for_the_setup_script_and_fails_on_its_er
     };
     crate::config::save_repo_defaults(crate::config::RepoDefaultsConfig::default(), defaults)
         .unwrap();
-    let ok = create_daemon_workflow_worktree(
+    let ok = create_daemon_worktree(
         &state,
         &repo.path().to_string_lossy(),
         "daemon-setup-ok",
@@ -3691,7 +3687,7 @@ async fn daemon_workflow_worktree_waits_for_the_setup_script_and_fails_on_its_er
     };
     crate::config::save_repo_defaults(crate::config::RepoDefaultsConfig::default(), defaults)
         .unwrap();
-    let err = match create_daemon_workflow_worktree(
+    let err = match create_daemon_worktree(
         &state,
         &repo.path().to_string_lossy(),
         "daemon-setup-fails",

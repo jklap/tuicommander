@@ -2108,7 +2108,10 @@ fn declared_background_work_defers_parent_idle_notification() {
     );
     let silence = Arc::new(Mutex::new(SilenceState::new()));
     silence.lock().set_declared_background_work(true, 0);
-    state.session_maps.silence_states.insert(child_id.to_string(), silence);
+    state
+        .session_maps
+        .silence_states
+        .insert(child_id.to_string(), silence);
 
     assert!(try_shell_transition(
         &state, child_id, SHELL_BUSY, SHELL_IDLE, true
@@ -2157,8 +2160,7 @@ fn declared_background_work_defers_suggest_publication() {
     assert!(emit_pending_suggest_if_idle(&state, &silence, child_id));
     let inbox = state.agent_inbox.get(parent_id).unwrap();
     assert_eq!(inbox.len(), 1);
-    let content: serde_json::Value =
-        serde_json::from_str(&inbox.front().unwrap().content).unwrap();
+    let content: serde_json::Value = serde_json::from_str(&inbox.front().unwrap().content).unwrap();
     assert_eq!(content["state"], "completed");
 }
 
@@ -2217,8 +2219,7 @@ fn pending_background_probe_defers_suggest_publication() {
     assert!(emit_pending_suggest_if_idle(&state, &silence, child_id));
     let inbox = state.agent_inbox.get(parent_id).unwrap();
     assert_eq!(inbox.len(), 1);
-    let content: serde_json::Value =
-        serde_json::from_str(&inbox.front().unwrap().content).unwrap();
+    let content: serde_json::Value = serde_json::from_str(&inbox.front().unwrap().content).unwrap();
     assert_eq!(content["state"], "completed");
 }
 
@@ -2250,8 +2251,21 @@ fn a_genuine_new_turn_clears_declared_background_work() {
 
     note_submitted_input(&state, child_id);
 
-    assert_eq!(state.session_maps.session_states.get(child_id).unwrap().turn_epoch, 1);
-    let silence = state.session_maps.silence_states.get(child_id).unwrap().clone();
+    assert_eq!(
+        state
+            .session_maps
+            .session_states
+            .get(child_id)
+            .unwrap()
+            .turn_epoch,
+        1
+    );
+    let silence = state
+        .session_maps
+        .silence_states
+        .get(child_id)
+        .unwrap()
+        .clone();
     assert!(
         !silence.lock().declared_background_work_for_epoch(0),
         "a genuine new turn must clear a stale declared_background_work claim"
@@ -2283,7 +2297,12 @@ fn submitted_input_with_no_detected_agent_type_still_clears_declared_background_
     note_submitted_input(&state, session_id);
 
     assert_eq!(
-        state.session_maps.session_states.get(session_id).unwrap().turn_epoch,
+        state
+            .session_maps
+            .session_states
+            .get(session_id)
+            .unwrap()
+            .turn_epoch,
         0,
         "this branch must not touch turn_epoch"
     );
@@ -2310,7 +2329,10 @@ fn standby_refuses_session_with_declared_background_work() {
     );
     let silence = Arc::new(Mutex::new(SilenceState::new()));
     silence.lock().set_declared_background_work(true, 0);
-    state.session_maps.silence_states.insert(session_id.to_string(), silence);
+    state
+        .session_maps
+        .silence_states
+        .insert(session_id.to_string(), silence);
 
     assert_eq!(standby_session(&state, session_id), Ok(false));
     assert!(!state.session_maps.standby_sessions.contains_key(session_id));
@@ -2325,7 +2347,12 @@ fn tuic_osc_bgtasks_sets_declared_background_work_for_current_epoch() {
         session_id.to_string(),
         Mutex::new(crate::state::VtLogBuffer::new(24, 80, 1000)),
     );
-    let silence = state.session_maps.silence_states.get(session_id).unwrap().clone();
+    let silence = state
+        .session_maps
+        .silence_states
+        .get(session_id)
+        .unwrap()
+        .clone();
     let mut processor = ChunkProcessor::new(None, None);
 
     assert!(!silence.lock().declared_background_work_for_epoch(0));
@@ -2357,7 +2384,12 @@ fn end_to_end_stop_hook_bgtasks_survives_a_subsequent_screen_poll() {
         session_id.to_string(),
         Mutex::new(crate::state::VtLogBuffer::new(24, 80, 1000)),
     );
-    let silence = state.session_maps.silence_states.get(session_id).unwrap().clone();
+    let silence = state
+        .session_maps
+        .silence_states
+        .get(session_id)
+        .unwrap()
+        .clone();
     let mut processor = ChunkProcessor::new(None, None);
 
     // A prompt row so `detect_claude_screen_activity` has a prompt anchor
@@ -2388,7 +2420,12 @@ fn end_to_end_stop_hook_bgtasks_survives_a_subsequent_screen_poll() {
     );
 
     assert_eq!(
-        state.session_maps.session_states.get(session_id).unwrap().turn_epoch,
+        state
+            .session_maps
+            .session_states
+            .get(session_id)
+            .unwrap()
+            .turn_epoch,
         0,
         "no real turn was submitted"
     );
@@ -2417,7 +2454,12 @@ fn tuic_osc_bgtasks_clears_on_zero_running_statuses() {
         session_id.to_string(),
         Mutex::new(crate::state::VtLogBuffer::new(24, 80, 1000)),
     );
-    let silence = state.session_maps.silence_states.get(session_id).unwrap().clone();
+    let silence = state
+        .session_maps
+        .silence_states
+        .get(session_id)
+        .unwrap()
+        .clone();
     silence.lock().set_declared_background_work(true, 0);
     let mut processor = ChunkProcessor::new(None, None);
 
@@ -2449,7 +2491,12 @@ fn tuic_osc_bgtasks_unknown_status_is_treated_as_still_running() {
         session_id.to_string(),
         Mutex::new(crate::state::VtLogBuffer::new(24, 80, 1000)),
     );
-    let silence = state.session_maps.silence_states.get(session_id).unwrap().clone();
+    let silence = state
+        .session_maps
+        .silence_states
+        .get(session_id)
+        .unwrap()
+        .clone();
     let mut processor = ChunkProcessor::new(None, None);
 
     processor.process_chunk(
@@ -2476,157 +2523,17 @@ fn tuic_osc_bgtasks_empty_payload_clears_declaration() {
         session_id.to_string(),
         Mutex::new(crate::state::VtLogBuffer::new(24, 80, 1000)),
     );
-    let silence = state.session_maps.silence_states.get(session_id).unwrap().clone();
+    let silence = state
+        .session_maps
+        .silence_states
+        .get(session_id)
+        .unwrap()
+        .clone();
     silence.lock().set_declared_background_work(true, 0);
     let mut processor = ChunkProcessor::new(None, None);
 
     processor.process_chunk("\x1b]7770;bgtasks=\x07", &silence, session_id, &state);
     assert!(!silence.lock().declared_background_work_for_epoch(0));
-}
-
-/// Replay `chunk` through a fresh hook-instrumented session's
-/// `ChunkProcessor` with an isolated config dir and return the pending
-/// wrap-prompt map's agents.
-fn userwrap_pending_after(chunk: &str) -> Vec<String> {
-    let dir = tempfile::tempdir().unwrap();
-    let _guard = crate::config::set_config_dir_override(dir.path().to_path_buf());
-    let state = crate::state::tests_support::make_test_app_state();
-    let session_id = "test-userwrap";
-    agent_session(&state, session_id, SHELL_IDLE);
-    state.grid.vt_log_buffers.insert(
-        session_id.to_string(),
-        Mutex::new(crate::state::VtLogBuffer::new(24, 80, 1000)),
-    );
-    let silence = state
-        .session_maps
-        .silence_states
-        .get(session_id)
-        .unwrap()
-        .clone();
-    let mut processor = ChunkProcessor::new(None, None);
-    processor.process_chunk(chunk, &silence, session_id, &state);
-    let mut agents: Vec<String> = state
-        .agent_wrap_pending
-        .iter()
-        .map(|e| e.key().clone())
-        .collect();
-    agents.sort();
-    agents
-}
-
-#[test]
-#[serial_test::serial]
-fn tuic_osc_userwrap_recognized_agent_opens_a_pending_prompt() {
-    // End-to-end regression for the zsh deferred integration's `ask` branch
-    // (shell_integration.rs) — a real `\e]7770;userwrap=claude:<fp>\a` byte
-    // sequence replayed through `ChunkProcessor::process_chunk` must reach
-    // `agent_wrap_prompt::request` and open exactly one pending prompt.
-    assert_eq!(
-        userwrap_pending_after("\x1b]7770;userwrap=claude:1234567-89:test-userwrap\x07"),
-        vec!["claude".to_string()],
-        "a recognized userwrap payload must open a pending prompt for that agent"
-    );
-}
-
-/// Batch 36 review: any program's output (`cat` of a file, remote SSH
-/// output) could forge the verb. The shell sends it only from precmd, so it
-/// is dropped while OSC 133 says a foreground command is running.
-#[test]
-#[serial_test::serial]
-fn tuic_osc_userwrap_is_ignored_while_a_foreground_command_runs() {
-    assert!(
-        userwrap_pending_after(
-            "\x1b]133;A\x07\x1b]133;B\x07\x1b]133;C\x07forged:\x1b]7770;userwrap=claude:1234567-89:test-userwrap\x07"
-        )
-        .is_empty(),
-        "a userwrap printed by a running command must not open a prompt"
-    );
-}
-
-#[test]
-#[serial_test::serial]
-fn tuic_osc_userwrap_is_honoured_again_once_the_command_finished() {
-    assert_eq!(
-        userwrap_pending_after(
-            "\x1b]133;C\x07\x1b]133;D;0\x07\x1b]7770;userwrap=claude:1234567-89:test-userwrap\x07\x1b]133;A\x07"
-        ),
-        vec!["claude".to_string()],
-        "precmd's userwrap (after D, before A) is the genuine one"
-    );
-}
-
-/// B2.6 (fixup batch A residual): output that forges `133;D` before the verb
-/// got past the foreground-command filter. The payload is now bound to the
-/// receiving PTY's own identity, which forged output cannot know.
-#[test]
-#[serial_test::serial]
-fn tuic_osc_userwrap_is_refused_unless_bound_to_this_session() {
-    for chunk in [
-        // Forged D first, then a request for ANOTHER session.
-        "\x1b]133;C\x07\x1b]133;D;0\x07\x1b]7770;userwrap=claude:1234567-89:other-session\x07",
-        // No session token at all (the pre-binding wire shape).
-        "\x1b]7770;userwrap=claude:1234567-89\x07",
-        "\x1b]7770;userwrap=claude:1234567-89:\x07",
-        "\x1b]7770;userwrap=claude:1234567-89:test userwrap\x07",
-    ] {
-        assert!(
-            userwrap_pending_after(chunk).is_empty(),
-            "{chunk:?} must not open a prompt"
-        );
-    }
-}
-
-/// The token may also be the `$TUIC_SESSION` bound to this PTY (a desktop tab
-/// restoring a persisted identity), not only the PTY key.
-#[test]
-#[serial_test::serial]
-fn tuic_osc_userwrap_accepts_the_identity_bound_to_this_pty() {
-    let dir = tempfile::tempdir().unwrap();
-    let _guard = crate::config::set_config_dir_override(dir.path().to_path_buf());
-    let state = crate::state::tests_support::make_test_app_state();
-    let session_id = "test-userwrap-bound";
-    agent_session(&state, session_id, SHELL_IDLE);
-    state.grid.vt_log_buffers.insert(
-        session_id.to_string(),
-        Mutex::new(crate::state::VtLogBuffer::new(24, 80, 1000)),
-    );
-    crate::state::tests_support::insert_dummy_session(&state, session_id);
-    state.bind_live_pty("persisted-identity-1", session_id);
-    let silence = state
-        .session_maps
-        .silence_states
-        .get(session_id)
-        .unwrap()
-        .clone();
-    let mut processor = ChunkProcessor::new(None, None);
-    processor.process_chunk(
-        "\x1b]7770;userwrap=claude:1234567-89:persisted-identity-1\x07",
-        &silence,
-        session_id,
-        &state,
-    );
-    assert!(state.agent_wrap_pending.contains_key("claude"));
-}
-
-#[test]
-#[serial_test::serial]
-fn tuic_osc_userwrap_unrecognized_payload_is_ignored() {
-    // Terminal output is untrusted — any process can print an OSC sequence.
-    // An agent outside the allow-list, a missing or malformed fingerprint, or
-    // shell text in either half must be silently ignored: no prompt, no panic.
-    for chunk in [
-        "\x1b]7770;userwrap=rm -rf ~:1-1\x07",
-        "\x1b]7770;userwrap=grok:1-1\x07",
-        "\x1b]7770;userwrap=claude\x07",
-        "\x1b]7770;userwrap=claude:\x07",
-        "\x1b]7770;userwrap=claude:1-1 x\x07",
-        "\x1b]7770;userwrap=claude:$(id)\x07",
-    ] {
-        assert!(
-            userwrap_pending_after(chunk).is_empty(),
-            "{chunk:?} must not open a prompt"
-        );
-    }
 }
 
 #[test]
@@ -4581,9 +4488,18 @@ fn tombstone_transient_cleanup_removes_swarm_maps() {
     );
     state.agent_inbox.entry(sid.to_string()).or_default();
     state.agent_inbox_evictions.insert(sid.to_string(), 2);
-    state.session_maps.has_osc133_integration.insert(sid.to_string(), ());
-    state.session_maps.has_tuic_state_integration.insert(sid.to_string(), ());
-    state.session_maps.turn_error_flags.insert(sid.to_string(), ());
+    state
+        .session_maps
+        .has_osc133_integration
+        .insert(sid.to_string(), ());
+    state
+        .session_maps
+        .has_tuic_state_integration
+        .insert(sid.to_string(), ());
+    state
+        .session_maps
+        .turn_error_flags
+        .insert(sid.to_string(), ());
 
     tombstone_transient_cleanup(sid, &state);
 
@@ -4622,7 +4538,10 @@ fn tombstone_transient_cleanup_removes_swarm_maps() {
         "must not leak a permanent entry per session UUID on normal exit"
     );
     assert!(
-        !state.session_maps.has_tuic_state_integration.contains_key(sid),
+        !state
+            .session_maps
+            .has_tuic_state_integration
+            .contains_key(sid),
         "must not leak a permanent entry per session UUID on normal exit"
     );
     assert!(

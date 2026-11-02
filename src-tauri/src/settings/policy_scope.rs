@@ -30,7 +30,9 @@ pub(super) fn adds_authority(fields: &[&Field], latest: &Value, next: &Value) ->
             }
             (
                 "tunnels",
-                "/profiles/{id}/ssh/port" | "/profiles/{id}/auto_connect" | "/profiles/{id}/forwards",
+                "/profiles/{id}/ssh/port"
+                | "/profiles/{id}/auto_connect"
+                | "/profiles/{id}/forwards",
             ) => tunnel_widened(latest, next),
             (
                 "upstreams",
@@ -150,7 +152,13 @@ fn tunnel_widened(latest: &Value, next: &Value) -> bool {
             .as_array()
             .map(Vec::as_slice)
             .unwrap_or(&[]);
-        profile["port"] != prev["port"]
+        // The SSH endpoint is a nested `ssh` table; the flat `port` is only a legacy spelling.
+        let port = |row: &Value| {
+            row.pointer("/ssh/port")
+                .or_else(|| row.get("port"))
+                .cloned()
+        };
+        port(profile) != port(prev)
             || (profile["auto_connect"] == true && prev["auto_connect"] != true)
             || rows(profile, "forwards")
                 .iter()
@@ -214,7 +222,7 @@ mod tests {
     fn tunnel_and_stdio_prompt_only_when_authority_grows() {
         let forward = json!({"type":"Local","bind_port":1,"remote_host":"h","remote_port":2});
         let other = json!({"type":"Local","bind_port":3,"remote_host":"h","remote_port":4});
-        let profile = |auto: bool, forwards: Vec<serde_json::Value>| json!({"profiles":[{"id":"p","port":22,"auto_connect":auto,"forwards":forwards}]});
+        let profile = |auto: bool, forwards: Vec<serde_json::Value>| json!({"profiles":[{"id":"p","ssh":{"port":22},"auto_connect":auto,"forwards":forwards}]});
         let before = profile(true, vec![forward.clone(), other.clone()]);
         assert!(!tunnel_widened(
             &before,

@@ -66,8 +66,8 @@ import { toastsStore } from "../../stores/toasts";
 import { uiStore } from "../../stores/ui";
 import * as transport from "../../transport";
 import { keyFor } from "../../utils/hotkey";
-import { adoptSuspendedSession } from "../../utils/suspendedSessions";
 import { ptyCaptureStore } from "../../utils/ptyCapture";
+import { adoptSuspendedSession } from "../../utils/suspendedSessions";
 
 describe("TabBar", () => {
 	beforeEach(async () => {
@@ -230,7 +230,6 @@ describe("TabBar", () => {
 		expect(view.getByText("Image work")).toBeTruthy();
 	});
 
-	it("Alt-clicking new tab button calls onNewTab directly", () => {
 	it("renders the tmux shim's accent color as a --accent-color style var, and omits it when unset", () => {
 		const id = addTerminal();
 		terminalsStore.update(id, { accentColor: "blue" });
@@ -260,7 +259,7 @@ describe("TabBar", () => {
 		expect(plainTab.style.getPropertyValue("--accent-color")).toBe("");
 	});
 
-	it("clicking new tab button calls onNewTab directly", () => {
+	it("Alt-clicking new tab button calls onNewTab directly", () => {
 		const onNewTab = vi.fn();
 		const { container } = render(() => (
 			<TabBar

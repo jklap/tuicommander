@@ -252,9 +252,9 @@ export const SmartPromptEditor: Component<{
 
 			<Show when={(props.prompt.executionMode ?? "inject") === "inject"}>
 				<SettingRow
-				label="Target"
-				hint="Auto reviews in an already-open Compose box, otherwise sends to the terminal; Compose always opens for review; Terminal always sends to the agent and waits for idle"
-			>
+					label="Target"
+					hint="Auto reviews in an already-open Compose box, otherwise sends to the terminal; Compose always opens for review; Terminal always sends to the agent and waits for idle"
+				>
 					{(id, descriptionId) => (
 						<div>
 							<Select
@@ -280,8 +280,7 @@ export const SmartPromptEditor: Component<{
 
 			<Show
 				when={
-					(props.prompt.executionMode ?? "inject") === "inject" &&
-					(props.prompt.injectTarget ?? "auto") !== "compose"
+					(props.prompt.executionMode ?? "inject") === "inject" && (props.prompt.injectTarget ?? "auto") !== "compose"
 				}
 			>
 				<SettingRow label="Send immediately">
