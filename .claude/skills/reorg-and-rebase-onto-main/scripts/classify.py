@@ -53,6 +53,9 @@ GROUPS = OrderedDict([
     ("build",          ("build: bundle budget, lazy loading, Makefile and dependency fixes", 21)),
     ("docs",           ("docs: AGENTS.md split, skills and repo guidance", 22)),
     ("misc",           ("chore: unclassified commits", 23)),
+    ("scrubbed",       ("docs(scrubbed): files main deleted upstream; drop this commit when rebasing", 94)),
+    ("generated",      ("chore(regen): generated files, regenerate after the rebase", 95)),
+    ("internal",       ("docs(internal): AGENTS.md and CLAUDE.md, kept on wip only", 96)),
     ("ledgers",        ("docs(ledgers): wip entries for CHANGELOG, to-test, SPEC, todo, FEATURES and .gitignore", 98)),
     ("personal",       ("personal scripts", 99)),
 ])
@@ -69,6 +72,8 @@ SCOPE = {
     **_scopes("tuic-core process process-manager agent-hooks", "process-info"),
     **_scopes("terminal clipboard crypto ids", "terminal-input"),
     **_scopes("shortcuts config", "command-blocks"),
+    **_scopes("shell", "test-infra"),
+    **_scopes("progress", "ui"),
     **_scopes("smart-selection", "smart-select"),
     **_scopes("cli", "inline-images"),
     **_scopes("worktree worktrees worktree-dialog workflows tuic-git attachments", "worktree"),
@@ -103,6 +108,7 @@ SCOPE = {
 SUBJECT_OVERRIDES = [
     (r"^personal scripts$|^ignore \.obsidian$", "personal"),
     (r"^added \.claude/$", "docs"),
+    (r"^chore\(regen\)", "build"),
     (r"command blocks|block display|Blocks group|block navigation|scrollbar (block )?marks|OSC 133|osc133|"
      r"133;B|fold-at-viewport|Command Blocks|gutter|synthesizes_block", "command-blocks"),
     (r"inline[- ]image|Kitty|OSC 1337|color-tools|imgcat|pixel size|cell pixel|image payloads|"
@@ -163,6 +169,8 @@ def classify(subject, files, upstream, trailer_group=None):
     kind = subject.split(":")[0].split("(")[0]
     if not scope and kind in ("test", "ci", "style"):
         return "test-infra"
+    if not scope and kind == "build":
+        return "build"
     for prefix, grp in PATHS:
         if any(f.startswith(prefix) for f in files):
             return grp

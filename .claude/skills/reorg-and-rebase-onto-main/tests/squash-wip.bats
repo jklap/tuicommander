@@ -152,3 +152,21 @@ snapshot() {
   [ "$status" -eq 0 ]
   git -C "$REPO" diff --quiet wip wip-squashed
 }
+
+@test "tip groups: scrubbed, generated and internal paths are restored between ledgers and personal" {
+  cm 'feat(ui): agents note' ui "$(lines ui | sed 's/ui1/pane/; s/ui2/agents/')" AGENTS.md 'a1\n' sub/AGENTS.md 's1\n' gen.lock 'g1\n' scratch.md 'x\n'
+  cm 'fix(ui): agents again' AGENTS.md 'a2\n' sub/CLAUDE.md 'c1\n'
+  export WIP_SCRUBBED_PATHS='scratch.md' WIP_GENERATED_PATHS='gen.lock' WIP_INTERNAL_NAMES='AGENTS.md CLAUDE.md'
+  run_squash "$REPO"
+  [ "$status" -eq 0 ]
+  git -C "$REPO" diff --quiet wip wip-squashed
+  mapfile -t subjects <<<"$(git -C "$REPO" log --reverse --format=%s main..wip-squashed | tail -5)"
+  [[ ${subjects[0]} == "docs(ledgers): "* ]]
+  [[ ${subjects[1]} == "docs(scrubbed): "* ]]
+  [[ ${subjects[2]} == "chore(regen): "* ]]
+  [[ ${subjects[3]} == "docs(internal): "* ]]
+  [ "${subjects[4]}" = "personal scripts" ]
+  # Nested names are found at any depth, and feature commits carry none of them.
+  [ "$(git -C "$REPO" diff --name-only wip-squashed~2 wip-squashed~1 | tr '\n' ' ')" = "AGENTS.md sub/AGENTS.md sub/CLAUDE.md " ]
+  [ -z "$(git -C "$REPO" diff --name-only main wip-squashed~5 -- AGENTS.md sub gen.lock scratch.md)" ]
+}

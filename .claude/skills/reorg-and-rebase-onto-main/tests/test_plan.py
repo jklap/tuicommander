@@ -221,3 +221,35 @@ def test_plan_leftover_personal_commit_raises(repo, tmp_path):
 def test_plan_in_non_bare_repo(repo, tmp_path):
     base, tip = make_wip(repo)
     run_plan(repo, tmp_path, base, tip, bare=False)
+
+
+def test_plan_extra_tip_groups_sit_between_ledgers_and_personal(repo, tmp_path):
+    extra = [("scrubbed", ["notes.md"]), ("generated", ["gen.lock"]),
+             ("internal", ["AGENTS.md", "sub/AGENTS.md"])]
+    base = repo.commit("base", {"ui": LINES, "git": LINES, "notes.md": "n\n", "gen.lock": "g0\n",
+                                "AGENTS.md": "a0\n", "CHANGELOG.md": "# log\n", ".gitignore": "target/\n"})
+    repo.commit("feat(ui): pane", {**repo.edit("ui", 1, "ui1"), "AGENTS.md": "a1\n", "gen.lock": "g1\n",
+                                   "sub/AGENTS.md": "s1\n", "CHANGELOG.md": "# log\n- ui\n"})
+    repo.commit("feat(git): branch", {**repo.edit("git", 1, "git1"), "notes.md": "n1\n", "gen.lock": "g2\n"})
+    repo.commit("personal scripts", {"build.sh": "#!/bin/sh\n"})
+    tip = repo.git("rev-parse", "HEAD")
+    paths = LEDGERS + PERSONAL + [p for _, ps in extra for p in ps]
+    stripped = repo.strip(base, tip, paths)
+    target = tmp_path / "x.git"
+    subprocess.run(["git", "clone", "-q", "--bare", "--no-local", str(repo.path), str(target)], check=True)
+    subprocess.run(["git", "-C", str(target), "fetch", "-q", str(repo.path),
+                    "+refs/squash/stripped:refs/squash/stripped"], check=True)
+    new = P.plan(str(target), base, stripped, tip, str(tmp_path / "out"), LEDGERS, PERSONAL, PERSONAL_RE,
+                 log=open(os.devnull, "w"), extra=extra)
+    repo.git("fetch", "-q", str(target), new)
+    assert repo.git("rev-parse", f"{new}^{{tree}}") == repo.git("rev-parse", f"{tip}^{{tree}}")
+    groups = repo.git("log", "--reverse", "--format=%(trailers:key=Squash-Group,valueonly,separator=)",
+                      f"{base}..{new}").splitlines()
+    assert [g for g in groups if g] == ["ui", "git", "ledgers", "scrubbed", "generated", "internal", "personal"]
+    assert repo.subjects(base, new)[-1] == "personal scripts"
+    # Feature commits carry none of the stripped paths; each tip commit adds only its own.
+    assert repo.git("diff", "--name-only", base, f"{new}~5") == "git\nui"
+    assert repo.git("diff", "--name-only", f"{new}~4", f"{new}~3") == "notes.md"
+    assert repo.git("diff", "--name-only", f"{new}~3", f"{new}~2") == "gen.lock"
+    assert repo.git("diff", "--name-only", f"{new}~2", f"{new}~1") == "AGENTS.md\nsub/AGENTS.md"
+    assert repo.git("diff", "--name-only", f"{new}~1", new) == "build.sh"

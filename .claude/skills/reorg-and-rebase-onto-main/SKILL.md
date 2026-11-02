@@ -338,6 +338,32 @@ and a final content check against each PR's net diff instead, and see the case s
 `rebase-onto-main` for the techniques and the gate loop. Budget a final pass for upstream-added
 code that trips our guard scripts, and for tests that encode behavior main has since changed.
 
+## Third run, 2026-11-02: tip groups, and wip onto main 2.0.0 (457 upstream commits)
+
+`wip` (139 commits, already replayed once) went to 99 commits, tree identical, then 97 picks were replayed onto
+`9f6af42b13` (about 45 conflict stops). What changed in the tooling:
+
+- **Three more tip commits**, between ledgers and personal, each from its own `wip.conf` set: `scrubbed`
+  (`WIP_SCRUBBED_PATHS`: files main deleted but wip edits, here `to-test.md`; DROP this commit in Phase B),
+  `generated` (`WIP_GENERATED_PATHS`: regenerate after the rebase instead of resolving them at stops; DROP and
+  regenerate) and `internal` (`WIP_INTERNAL_NAMES`: `AGENTS.md`/`CLAUDE.md` by basename at any depth, kept on wip
+  only). `plan.py --extra GROUP=PATHS` writes them; `squash-wip.sh` expands the names against the tip and base trees.
+- **Why**: main's 2.0.0 release commit deleted root `AGENTS.md`/`CLAUDE.md`/`to-test.md`. Inside feature commits that
+  is a modify/delete stop per first touch (63 wip commits touched them).
+- **Phase B**: `git rebase -i` with a `GIT_SEQUENCE_EDITOR` that deletes the `docs(scrubbed)` and
+  `chore(regen): generated files` picks; the `internal` pick stops once (`DU AGENTS.md`): `git checkout <wip-squashed> --
+  <every AGENTS.md/CLAUDE.md>` to restore all of them, because files wip left unchanged against the OLD base are not in
+  that commit's diff and main's deletion would otherwise win.
+- **Gotchas found**: (1) a `fixup`-style tip commit that adds tracked files in a sandbox that cannot unlink them
+  (`.claude/agents/*`) fails with "untracked working tree files would be overwritten"; build it with
+  `git merge-tree --write-tree --merge-base=<orig>^ <tip> <orig>` + `git commit-tree`, then `update-ref`.
+  (2) A squashed commit can carry a stray literal `||||||| base` line (seen in a test file): it surfaces as a conflict
+  hunk with an empty base. (3) New main code trips wip's guard scripts again (`check-no-home-gits`,
+  `check-no-hardcoded-tmp`): allow-list with a `DEFERRED (date)` reason. (4) Run Rust tests with every `TUIC_*`
+  variable unset. (5) `check-gate.sh` detaches HEAD in the worktree and installs a pre-commit hook into the shared
+  `.git/hooks`. (6) Tests that cannot run in the agent sandbox: `tuic_test_support::non_temporary_fixture_root()`
+  deliberately uses `<checkout>/.tmp`, where the sandbox denies `git init` (see the plan's result section).
+
 ## Re-running later
 
 The tool is idempotent on its own output: every squashed commit carries `Squash-Group:`, which
