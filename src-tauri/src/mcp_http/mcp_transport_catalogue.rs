@@ -555,7 +555,8 @@ pub(super) fn agent_tool_definition(
 ) -> serde_json::Value {
     let header = match (prefer_spawning, prefer_messaging) {
         (true, true) => {
-            "Agent orchestration. Send to=orchestrator message=<text> reaches your registered coordinator; no list_peers needed. For a host with its \
+            "AI agent orchestration. There is no separate swarm action: use these \
+            agent/session primitives to spawn and coordinate managed peers. Send to=orchestrator message=<text> reaches your registered coordinator; no list_peers needed. For a host with its \
             own native multi-agent/teammate feature (e.g. Claude Code's agent-teams), a peer \
             spawned here IS that host's teammate — not a different, unrelated kind of thing — \
             just running as its own TUICommander-managed PTY instead of in-process. Use this — \
