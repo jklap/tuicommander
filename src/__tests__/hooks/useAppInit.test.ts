@@ -10,7 +10,8 @@ vi.mock("../../transport", async (importOriginal) => ({
 
 import { listen } from "@tauri-apps/api/event";
 import { handleIntentEvent, shouldApplyIntentTitle } from "../../components/Terminal/intentTitle";
-import { type AppInitDeps, initApp, locallyCreatedSessions } from "../../hooks/useAppInit";
+import { locallyCreatedSessions } from "../../hooks/locallyCreatedSessions";
+import { type AppInitDeps, initApp } from "../../hooks/useAppInit";
 import { notificationManager } from "../../notifications";
 import { activityStore } from "../../stores/activityStore";
 import { appLogger } from "../../stores/appLogger";

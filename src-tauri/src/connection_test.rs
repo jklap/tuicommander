@@ -145,7 +145,8 @@ pub(crate) async fn test_connection_impl(request: &TestConnectionRequest) -> Con
         // A relay path has no URL to probe before Connect opens the end-to-end
         // channel; the editor does not offer Test Connection for it.
         RemoteTransport::Relay => ConnectionTestResult::Unreachable {
-            reason: "Test Connection is not available for a relay connection; use Connect".to_string(),
+            reason: "Test Connection is not available for a relay connection; use Connect"
+                .to_string(),
         },
         RemoteTransport::Local { port, instance_id } => {
             let resolved_port = match (port, instance_id) {

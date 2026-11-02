@@ -109,7 +109,11 @@ describe("remoteAutoClose", () => {
 		// countdown started.
 		it("cancels a running countdown when the tab is suspended or no longer exited", () => {
 			testInScope(() => {
-				const parked = terminalsStore.add({ ...makeTerminal({ name: "Parked" }), isExternallyCreated: true, agentType: "claude" });
+				const parked = terminalsStore.add({
+					...makeTerminal({ name: "Parked" }),
+					isExternallyCreated: true,
+					agentType: "claude",
+				});
 				terminalsStore.update(parked, { shellState: "exited" });
 				const revived = terminalsStore.add({ ...makeTerminal({ name: "Revived" }), isExternallyCreated: true });
 				terminalsStore.update(revived, { shellState: "exited" });
@@ -131,7 +135,11 @@ describe("remoteAutoClose", () => {
 
 		it("does not overwrite a rename made during the countdown", () => {
 			testInScope(() => {
-				const id = terminalsStore.add({ ...makeTerminal({ name: "Agent" }), isExternallyCreated: true, agentType: "claude" });
+				const id = terminalsStore.add({
+					...makeTerminal({ name: "Agent" }),
+					isExternallyCreated: true,
+					agentType: "claude",
+				});
 				terminalsStore.update(id, { shellState: "exited" });
 
 				scheduleRemoteAutoClose(id);

@@ -417,7 +417,9 @@ async fn invalid_records_are_rejected_before_any_write() {
         before_connections
     );
     assert_eq!(
-        ProfileStore::load_all(f.dir.path(), None).unwrap()[0].ssh.port,
+        ProfileStore::load_all(f.dir.path(), None).unwrap()[0]
+            .ssh
+            .port,
         22
     );
 }

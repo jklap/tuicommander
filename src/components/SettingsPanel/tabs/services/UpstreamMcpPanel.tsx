@@ -12,15 +12,15 @@ import {
 } from "../../../../transport";
 import { mergeSettingsSnapshot } from "../../../../utils/mergeSettingsSnapshot";
 import { handleOpenUrl } from "../../../../utils/openUrl";
-import { reconcileById } from "../../../../utils/reconcileById";
 import { randomId } from "../../../../utils/randomId";
+import { reconcileById } from "../../../../utils/reconcileById";
 import { ConfirmDialog } from "../../../ConfirmDialog";
+import { ConnectionStatusBadge } from "../../../shared/ConnectionStatusBadge";
 import { Button } from "../../../ui/Button";
 import { Input } from "../../../ui/Input";
 import { Select } from "../../../ui/Select";
 import { Switch } from "../../../ui/Switch";
 import { ContextualHelp } from "../../ContextualHelp";
-import { ConnectionStatusBadge } from "../../../shared/ConnectionStatusBadge";
 import { MachineSelector } from "../../MachineSelector";
 import s from "../../Settings.module.css";
 import { SectionCard } from "../../SettingsPrimitives";

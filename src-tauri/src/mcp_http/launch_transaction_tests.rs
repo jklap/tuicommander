@@ -584,14 +584,16 @@ async fn launch_transaction_waits_for_the_setup_script_and_blocks_on_its_failure
     let repo = repo(root.path());
     let state = state();
 
-    let mut defaults = crate::config::RepoDefaultsConfig::default();
-    defaults.setup_script = "sleep 1; echo ready > setup.marker".into();
+    let defaults = crate::config::RepoDefaultsConfig {
+        setup_script: "sleep 1; echo ready > setup.marker".into(),
+        ..Default::default()
+    };
     crate::config::save_repo_defaults(crate::config::RepoDefaultsConfig::default(), defaults)
         .unwrap();
     let mut ok_request = request();
     ok_request["idempotency_key"] = json!("setup-ok");
     ok_request["workspace"] = json!({"repo_path":repo, "branch":"feat/launch-setup-ok"});
-    let result = execute(&state, addr(), &ok_request).await;
+    let result = execute(&state, addr().into(), &ok_request).await;
     assert!(result.get("error").is_none(), "{result}");
     assert_ne!(result["status"], "blocked", "{result}");
     let path = PathBuf::from(result["workspace_path"].as_str().unwrap());
@@ -604,8 +606,10 @@ async fn launch_transaction_waits_for_the_setup_script_and_blocks_on_its_failure
     close(&state, result["session_id"].as_str().unwrap());
     crate::worktree::clear_warm(&path);
 
-    let mut defaults = crate::config::RepoDefaultsConfig::default();
-    defaults.setup_script = "echo setup-went-wrong >&2; exit 3".into();
+    let defaults = crate::config::RepoDefaultsConfig {
+        setup_script: "echo setup-went-wrong >&2; exit 3".into(),
+        ..Default::default()
+    };
     crate::config::save_repo_defaults(crate::config::RepoDefaultsConfig::default(), defaults)
         .unwrap();
     let sessions_before = state.session_maps.sessions.len();
@@ -613,7 +617,7 @@ async fn launch_transaction_waits_for_the_setup_script_and_blocks_on_its_failure
     failing["idempotency_key"] = json!("setup-fails");
     failing["name"] = json!("setup-fails-child");
     failing["workspace"] = json!({"repo_path":repo, "branch":"feat/launch-setup-fails"});
-    let result = execute(&state, addr(), &failing).await;
+    let result = execute(&state, addr().into(), &failing).await;
     assert_eq!(result["status"], "blocked", "{result}");
     let reason = result["reason"].as_str().unwrap();
     assert!(reason.contains("setup_script_failed"), "{reason}");

@@ -1851,6 +1851,7 @@ pub async fn get_claude_project_list() -> Result<Vec<ProjectEntry>, String> {
 mod tests {
     /// Catches: serde's bucket defaults turning missing provider utilization into 0%.
     #[test]
+    #[allow(clippy::float_cmp)]
     fn primary_usage_missing_utilization_is_unknown_not_zero() {
         let usage = super::parse_primary_usage(r#"{"five_hour":{},"seven_day":{"utilization":0}}"#)
             .unwrap();
@@ -1907,6 +1908,7 @@ mod tests {
 
     /// Catches API-key detection routing an OAuth session to default credentials.
     #[tokio::test]
+    #[allow(clippy::float_cmp)]
     async fn oauth_session_keeps_its_profile_credential_read() {
         let profile = profile_from_environment(&["CLAUDE_CONFIG_DIR=/fixture/oauth-2672".into()]);
         let (usage, stale) = session_quota_for_profile(
