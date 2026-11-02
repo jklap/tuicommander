@@ -1,0 +1,217 @@
+# TUICommander — Project Rules
+
+This file is repo-wide: it applies no matter which part of the tree you're touching.
+Subsystem-specific rules live next to the code they govern, each with its own
+`AGENTS.md` (and a `CLAUDE.md` that just imports it, so Claude Code picks it up
+automatically when you're working in that directory):
+
+| Area | File |
+|---|---|
+| Rust/Tauri backend (PTY, agent-state detection, worktrees, MCP HTTP server, alacritty patches, build/test mechanics) | [`src-tauri/AGENTS.md`](src-tauri/AGENTS.md) |
+| `tuic-cli` crate | [`src-tauri/crates/tuic-cli/AGENTS.md`](src-tauri/crates/tuic-cli/AGENTS.md) |
+| `tuic-hook` crate | [`src-tauri/crates/tuic-hook/AGENTS.md`](src-tauri/crates/tuic-hook/AGENTS.md) |
+| `tuic-streamdock` crate | [`src-tauri/crates/tuic-streamdock/AGENTS.md`](src-tauri/crates/tuic-streamdock/AGENTS.md) |
+| SolidJS frontend (reactivity, focus/modals, panel refresh) | [`src/AGENTS.md`](src/AGENTS.md) |
+| Settings panel (tri-state settings, search index, export/import) | [`src/components/SettingsPanel/AGENTS.md`](src/components/SettingsPanel/AGENTS.md) |
+| Canvas terminal component (selection, frame protocol, command blocks, opt-in frame workload evidence) | [`src/components/Terminal/AGENTS.md`](src/components/Terminal/AGENTS.md) |
+| Mobile PWA (`mobile.html`, `src/mobile/`) | [`src/mobile/AGENTS.md`](src/mobile/AGENTS.md) |
+
+If a change spans both a nested area and this file's scope, read both — they cross-reference each other rather than duplicating content.
+
+## Doc Sync
+
+Read [`docs/sync-matrix.md`](docs/sync-matrix.md) before any feature/API/config change — it maps code areas to docs that MUST be updated.
+
+## Tests
+
+- Run standalone Rust, Vitest, and plugin test commands through `scripts/with-test-tmp.sh`; `make check`, `make test-shell`, `make cov`, and `make mutants` set their own per-run test temp root under `$TMPDIR/tuic-tests` (never `$HOME`, never a literal `/tmp`/`/var/tmp`/`/private/tmp`/`/dev/shm` — `scripts/check-no-hardcoded-tmp.mjs` fails `make check` on a write-shaped one; `TUIC_TEST_TMP_BASE` overrides the base; an inherited `TUIC_TEST_TMP_ROOT` is used as is and never deleted). A base inside the checkout is opt-in only: it is unsafe wherever writes to the checkout's `.git/hooks`/`.git/config` are denied (the agent sandbox). Two more opt-ins of the wrapper: `TUIC_TEST_FAKE_HOME=1` gives the command a throwaway `HOME=<root>/home` (CARGO_HOME/RUSTUP_HOME stay pinned to the real home; `make check`/`make cov`/`make mutants` and CI's Rust test steps set it, and the nextest setup script applies it to a direct `cargo nextest run`), and `TUIC_TEST_ISOLATE_GIT_CONFIG=1` (`make test-shell` only) points git at the test root's gitconfig instead of yours — never default, since the audit and submodule steps need your credential helper and URL rewrites. This does not apply to `make dev` or `cargo run`.
+- Bare `cargo test` Rust test binaries initialize `TMPDIR`, `TMP`, and `TEMP` from `TUIC_TEST_TMP_ROOT`, else the per-checkout `${TUIC_TEST_TMP_BASE:-$TMPDIR/tuic-tests}/tuic-co-<checkout hash>` (the same dir the nextest setup script and the shell tests' `scripts/test-tmp-lib.sh` pick), before libtest starts; Nextest does the same for every test binary through `.config/nextest.toml` setup scripts. New Rust tests must use `test_temp_root()` or assert their scratch paths stay inside it. Neither mechanism changes `make dev` or `cargo run`.
+
+- **Test only the changed behavior.** Routine validation MUST use the narrowest test filters that cover the production code, protocol surface, fixtures, or test support changed by the task. Do not run full-crate, full-app, full-tree, or unrelated suites merely for reassurance; they waste shared build time and obscure relevant evidence. Expand beyond targeted tests only when a documented gate explicitly requires it, targeted evidence proves a cross-cutting risk, or Boss explicitly asks for the broader run.
+- Before declaring a change complete, run `./scripts/check-gate.sh` (or `make check-gate`) —
+  not a scoped test filter, and not a bare `make check 2>&1 | tee log` (that pipeline's exit
+  code is `tee`'s, not `make`'s, so a real failure can go unnoticed). Repo-wide consistency
+  tests — e.g. the IPC/HTTP Parity mapping test — only run as part of the full suite and
+  will not show up in a feature-scoped filter.
+- Tests are the spec. When a test fails after a code change, investigate BOTH sides before deciding which to fix.
+- **Finding a story partially implemented does NOT mean it's done.** When you pick up a story and discover the feature already exists, verify EVERY part of the story is honored — each acceptance criterion, edge case, and requirement — before marking it complete. Never assume the whole story is satisfied just because one part is implemented. Check each criterion against the code and prove it, or the story isn't done.
+- `to-test.md` tracks features awaiting manual testing — add items there for minor features.
+- **CI has never executed on this repository.** `.github/workflows/ci.yml` triggers on push and exists, but `gh run list` returns zero runs for this repo on any branch. "CI is green" is never evidence of anything — nothing in this repo's test suite has ever been machine-validated by CI. Treat any CI-shaped claim in a commit message or PR description as unverified until someone actually watches a run. `CONTRIBUTING.md` describes CI as an active gate; it isn't yet.
+- **The `plugins` submodule pin: plugin tests are real tests now; only `md-kanban` is out of reach.** The old "plugins submodule has zero test files / plugin tests are expected to fail" note is obsolete: the stale pin `497bb1f` (zero test files, missing `plan/`/`stories-ticker/`, so `cargo check` failed on `plugins.rs`'s `SEEDED_PLUGINS` `include_str!`s) is long gone, the plugins repo ships `*.test.js` files, and `pnpm test:plugins` (`scripts/run-plugin-tests.mjs`, part of `make check`) runs them. This tree pins the same commit as main, `d8de7d39b` (has `plan/`, `stories-ticker/`, `sqlite-viewer/`, `wiz-kanban/`). The plugins repo's `wip` tip `6dc4b8047` (`md-kanban/` + `tuic-voice/`) is still not merged into it (merge-base `c964e7bb9`), so `src/__tests__/plugins/mdKanban.test.ts`, which imports `plugins/md-kanban/main.js`, fails against the recorded pin until a plugins-repo commit merging both is pushed and pinned: that failure is the divergence, not your change. Check `git -C plugins rev-parse HEAD` against `git ls-tree HEAD plugins` first (a checkout at a different commit is drift); any other red plugin test is a real failure. An *uninitialized* submodule in a fresh worktree is a separate, still-expected drift mode (see `src-tauri/AGENTS.md`'s Fresh Worktree Setup section).
+- **`/code-review` and `/security-review` default to diffing the whole branch/working tree, not "the change you just made."** Confirmed repeatedly (7+ times across sessions) that passing a scope-override instruction in the invocation's own prompt/args is NOT reliable — the skill can still compute its own git-status-based diff and hand that to the reviewing agent instead. The fix that actually works: save the exact diff you want reviewed to a file first (`git diff > "${TMPDIR:-/tmp}/whatever.txt"` — under `$TMPDIR` or your session scratchpad, never a literal `/tmp` — including untracked new files via a temporary `git add -N` + `git diff` + `git reset` round-trip if needed), then launch the review agent with an explicit instruction to read that file and NOT run its own `git diff`/`git status`. A same-turn correction or a post-hoc message to an already-running review agent is too late — the scope has to be right in the agent's first message.
+- **Before writing what you believe is a "new" test file, verify it doesn't already exist.** `Write`'s "must Read first" safeguard only fires for paths *outside* the current working directory, so it will not stop you from silently overwriting an existing in-repo test file with no warning. A 2026-08-28 session did exactly this to `CreateWorktreeDialog.test.tsx` — a subagent's exploration summary claimed "zero tests exist for this component," which was wrong (a 919-line file already existed), and `Write` clobbered it. Caught only by a routine final `git status --porcelain`/`git diff --stat` sweep before wrapping up, which is why that sweep is not optional on multi-file work. Run `ls`/`git status <path>` yourself before `Write`-ing a file whose non-existence you're only inferring from someone else's report.
+- **`[HUMAN]` is a last resort.** Before marking a to-test item `[HUMAN]`, you MUST attempt verification through this escalation ladder:
+  1. **Code inspection** — read the source, confirm the logic exists at file:line
+  2. **Test execution** — `cargo nextest run` (doctests: `cargo test --doc`), `vitest run` with relevant filter
+  3. **CLI probing** — `curl` HTTP endpoints, `grep` for patterns
+  4. **MCP maccontrol** — take screenshots, click UI elements, verify visual state
+  5. **MCP invoke/JS** — call Tauri commands, inspect store state, trigger actions programmatically
+  Only use `[HUMAN]` when the item genuinely requires real hardware (audio, IME, touch), multi-app interaction (drag to Finder, global hotkey from another app), or timing-sensitive observation that none of the above can capture. When code-verifying, change `[HUMAN]` to `[x]` with a `_(verified: file:line explanation)_` annotation. When code reveals the description is wrong, change to `[ ]` with a `_(NOTE: ...)_` correction.
+
+- **Several independent commits landing in sequence on the same files (parallel agents/sessions each verifying and committing their own slice) can each pass their own scoped Rust checks while still drifting out of `cargo fmt`'s canonical formatting** — a scoped `cargo check`/`cargo clippy` run doesn't catch this, only `cargo fmt --check` does, and that only runs as part of the full gate. This isn't a correctness bug, just wasted cycles: a 2026-09-29 multi-fork session landed 5 formatting-drifted files across several commits, each individually "green" on its own targeted checks, only caught when the full `check-gate.sh` finally ran at the end. Run `cargo fmt` before each commit when several commits are landing back-to-back on overlapping files, not just once at the very end.
+
+Rust test-suite mechanics (mutation testing, `cargo nextest --workspace` gotchas for the
+vendored `patches/` crates, which tests are skipped on purpose, timing-assertion
+pitfalls): `src-tauri/AGENTS.md`. Nothing frontend-specific is split out separately —
+`vitest`/Testing-Library conventions live alongside the component code they test.
+
+## Agent desktop verification
+
+Use `make agent-test` from a linked worktree for authorized macOS desktop live
+checks, never `make dev`, `make test` or the daily executable. Start with
+`make agent-test AGENT_TEST_DRY_RUN=1`; stop with `make agent-test-stop`.
+See [Development Setup](docs/guides/development-setup.md#isolated-agent-desktop-checks-macos)
+for the preset namespace, port, distinct binary and shared-resource audit.
+This target disables global shortcuts, microphone/dictation, Telegram and updater.
+It does not authorize restarting Boss's app or substituting a desktop launch when
+the active assignment permits implementation-only work.
+
+## Test instance vs orchestrator instance — READ BEFORE TESTING
+
+There are TWO running TUICommander instances; do not confuse them:
+
+- **Orchestrator instance** — the one this agent is embedded in. The `tuicommander` MCP tools and `debug invoke_js` target THIS instance (Mission Control on `:14319`, app logs on `:9876`). It does **NOT** run your worktree build, so testing it proves nothing about your changes. It is a separately-launched release build (double-clicked/`open`ed, never started through this repo's `Makefile`), so nothing in this section affects it either way.
+- **Test instance** — the isolated worktree build started with `make agent-test` when desktop execution is authorized. Test it **only via its own HTTP API, default `http://127.0.0.1:19876`**. MCP/`invoke_js` cannot reach it. Implementation-only assignments must not launch it.
+  For the `make dev`/`make test` path (not `make agent-test`): **Gets its own isolated `TUIC_APP_INSTANCE` config directory automatically** — `make dev` and `make test` both default it to `tuic-<checkout directory name>` (see the `TUIC_APP_INSTANCE` comment at the top of the root `Makefile`; `scripts/check-make-instance-scope.sh` enforces it from `pre-commit` and `make check`), so two worktrees never share an `instances/<id>/` directory and neither touches Boss's real config. Pass `TUIC_APP_INSTANCE=<id>` for a different id (e.g. a second run from the same checkout); pass it EMPTY (`TUIC_APP_INSTANCE=`) only to deliberately opt back into the shared/production config for one run — both targets print a loud warning when you do.
+
+Test-instance endpoints (see `src-tauri/src/mcp_http/mod.rs`): `GET/POST /sessions`, `DELETE /sessions/{id}`, `POST /sessions/{id}/write`, `GET /sessions/{id}/output`, and terminal grid ops (all session-scoped) `POST /sessions/{id}/terminal/scroll {delta}`, `POST /sessions/{id}/terminal/scroll-to {line}` (absolute; `line`=top row, 0=oldest), `POST /sessions/{id}/terminal/scroll-to-anchor {anchor}` (coalesced all-time-row jump; powers wheel + scrollbar-drag in both modes), `POST /sessions/{id}/terminal/scroll-to-offset {offset}` (coalesced display-offset jump, same queue), `GET /sessions/{id}/terminal/scroll-info`, `GET /sessions/{id}/terminal/lines?start&end`, `GET /sessions/{id}/terminal/row-text?row`, `POST /sessions/{id}/terminal/search-buffer {query}`. Create a throwaway session, exercise it, then `DELETE` it — never test against Boss's live sessions.
+
+Canvas rendering (selection highlight, smooth-scroll visuals, cursor) is **not observable over HTTP** — those still need a visual check with Boss.
+
+## Web-UI testing with agent-browser (browser mode, not Tauri)
+
+You can exercise features through the **web UI** instead of the Tauri desktop app — every instance serves the full frontend at `http://localhost:<port>/` (`static_files.rs` `FRONTEND_DIST`). Loading it in a real browser is **browser mode** (`isTauri() === false`), the exact web/PWA path a remote client sees.
+
+- **Port:** authorized agent desktop checks use `make agent-test`, preset to `http://127.0.0.1:19876/`. Do not launch another desktop through `make dev` or use the orchestrator's :9876 for change verification. The agent-test port is explicit and has no next-port fallback; see the development guide for overrides.
+- **Drive it with `agent-browser`**, always via the stealth wrapper (see global rules). `@ref` CDP clicks are trusted and work (open modals/panels/tabs); **JS-dispatched keydown is `isTrusted:false`** so app keyboard shortcuts (Cmd+P, etc.) are ignored — click UI, never synthesize keys. Use a persistent `--session <name>`, restart the browser periodically (snapshots/clicks degrade after many calls), and wrap each call in a `perl alarm` timeout (macOS has no `timeout`/`gtimeout`).
+- **Isolation:** `make agent-test` selects `TUIC_APP_INSTANCE=agent-test` with a distinct binary, app identity and socket. It does not copy the daily config and disables global input, microphone, Telegram and updater. Ordinary default-instance debug/release launches still share config, so do not use them as substitutes. Filesystem access remains shared: use throwaway repositories, never Boss's repositories, for repo-mutating checks.
+- **The Command Palette DOES render in web mode.** `App.tsx` mounts it unconditionally as `<CommandPalette actions={actionEntries()} browserMode={!isTauri()} />`; `browserMode` filters the action list down to the HTTP-safe subset in `BROWSER_ACTION_IDS`/`BROWSER_ACTION_PREFIXES` (`CommandPalette.tsx`), which **includes** `search-files` and `search-file-contents`. Only the *opening shortcut* is unavailable to `agent-browser`: a JS-dispatched Cmd+P is `isTrusted:false`, so click the UI instead — that is a test-harness limit, not a missing feature.
+- **Desktop-only features do NOT render in web mode** — Command Palette is a partial exception (see above); the rest — IdeLauncher, Dictation, Global Hotkey, detach-panel windows, updater, native file drop, user-plugin install, MCP/hooks config — are fully gated. Built-in plugins DO load. See mdkb `web-mode-verification-2026-07-02` for the verified inventory before reporting a feature "missing".
+  - **If `agent-browser` isn't available in your environment** (confirmed missing in a 2026-08-27 session — no wrapper script found, and the `claude-in-chrome` skill requires an extension the user may decline), fall back to the **Playwright CLI**: `which playwright` resolves a global npm install (e.g. `/opt/homebrew/lib/node_modules/playwright` on macOS) even when the repo has no `playwright` devDependency. `require()` it by its full install path — `require('/opt/homebrew/lib/node_modules/playwright')` — from a throwaway Node script (scratchpad dir), since it won't resolve via bare `require('playwright')` outside that directory. Real CDP-dispatched `page.keyboard.press(...)` IS trusted (unlike JS-synthesized keydown), so app shortcuts like Cmd+, work fine for navigation. Pass `ignoreHTTPSErrors: true` on `newPage()` — the self-signed-HTTPS fallback 301-redirects plain `http://` to `https://` even on `127.0.0.1`, and Chromium otherwise refuses the untrusted cert before any page loads.
+- **Isolation caveat:** a 2nd debug instance always has isolated backend/sessions (its own PTY/agent state). Config-dir isolation comes from `TUIC_APP_INSTANCE`: the binary itself does not split debug from release — with no instance, debug and release builds read and write the exact same config directory and the same `config.json`/`repositories.json` (see `docs/backend/config.md`), protected by a cross-process file lock, and a toggle flipped in the dev build IS visible to the installed app. **`make dev`/`make test` therefore default `TUIC_APP_INSTANCE` per checkout** (`tuic-<checkout directory name>`), so a Makefile launch lands in its own code-enforced `instances/<id>/` directory (#763-d219) and `tunnel_audit.db` and every other per-instance file move with it; two worktrees running either target concurrently (the normal multi-agent shape here) never share one. An explicit empty `TUIC_APP_INSTANCE=` (or launching the binary yourself without it) is the way back onto the shared default config — the Makefile warns loudly; do it only on purpose (e.g. reproducing a bug that needs Boss's real `repositories.json`) and never mutate Boss's real repos through it. Either way the instance still **shares the filesystem** with the orchestrator — never run repo-mutating tests against Boss's repos. **Global agent configs are protected either way:** a named `TUIC_APP_INSTANCE` or a build running from a linked Git worktree never auto-installs or repairs the `tuicommander` MCP entry in `~/.claude.json` and the other agents' global configs, nor rewrites their hook commands — `agent_mcp::launch_owns_agent_configs`, checked by `ensure_mcp_configs` and `agent_hook_commands::reinstall_outdated_hooks` (set `TUIC_MCP_CONFIG_OWNER=1` only to hand an instance that ownership on purpose; see `docs/backend/config.md` "MCP Bridge Auto-Install"). This closes a real incident (2026-09-29; the per-checkout Makefile default above is the second, independent half of the fix): a worktree's `make dev` on the shared default config repaired the global `tuicommander` entry to point at that worktree's own `target/debug/tuic-bridge`, which went ENOENT the moment the worktree was removed and broke Claude Code's MCP connection for every session.
+- **When `agent-browser`/`chromium-cli` are unavailable and raw Playwright is the fallback, apply the same click discipline `@ref` gives you for free.** `@ref` resolves against a live accessibility snapshot, so it can't land on the wrong element; a blind CSS/text-label selector against the whole page can, and has, twice: a bare text-match on a branch name landed on the **double-click-to-rename** hit area and opened a real "Rename Branch" dialog on a live worktree, and a bare `input:not([type])` selector matched a **real terminal's hidden keyboard-capture input** instead of a dialog's own field, typing an unrelated string into a live shell prompt (nothing was executed in either case — no Enter was sent — but both required cleanup). Before any fallback-Playwright click: take a snapshot/screenshot first, and scope every locator to a specific dialog/container element (e.g. its heading's ancestor), never a bare `input`, `button`, or text-match against the whole page.
+
+## Branching
+
+NEVER create branches autonomously — Boss works with multiple windows.
+
+## Commits
+
+When a commit resolves a **GitHub issue**, use a closing keyword so GitHub auto-closes it: `Fixes #N` / `Closes #N` / `Resolves #N` (anywhere in the message — `fix(scope): desc (closes #N)` in the subject is fine). A bare `(#N)` only *links* the issue, it does NOT close it. This repo pushes directly to `main` (the default branch), where closing keywords take effect on push — no PR merge required.
+
+- Use the GitHub-issue keyword only for the commit that actually fixes it; reference-only commits keep `(#N)`.
+- This is distinct from **mdkb story ids** (7-char hex like `#abc1234`): those follow the wiz convention — `(#abc1234)` for traceability, `(closes #abc1234)` on story completion — and are unrelated to GitHub issue auto-close.
+- **Enforced by the `pre-push` hook** (`scripts/hooks/pre-push`, installed by `make hooks` / `make dev`): a push to `main` is blocked if a pushed commit references an **open** issue with a bare `#N` and no closing keyword. Reference-only pushes bypass with `git push --no-verify` (or `TUIC_SKIP_ISSUE_CHECK=1`). The hook skips silently when `gh` is missing/unauthenticated/offline — it never blocks on a verification failure.
+
+## Architecture
+
+All business logic in Rust. Frontend only renders and handles interaction — no data reshaping, computation, or process orchestration.
+
+**Inspect processes with `tuic_core::process_info`, never by exec'ing `ps`, `pgrep` or `pkill`** (production code and tests alike). `/bin/ps` is setuid root on macOS and sandboxed hosts refuse to exec it; `pgrep`/`pkill` need a mach service sandboxes do not expose, so a caller that parses their output goes blind exactly where TUIC most needs to see its children. `process_info` reads libproc / `kern.proc` (macOS) and `/proc` (Linux) natively, with a `FakeProcessSource` seam for tests; signal through it (`terminate`/`kill`) or `tuic_core::process_tree` for groups. `scripts/check-no-process-exec.mjs` fails `make check` on a new exec or a shell string that runs one, keyed by `file::fn`; the few remaining sites (the logged `ps` fallback in `pty/screen.rs`, text run by an agent or on a remote host, one macOS oracle test) are allow-listed with their reason.
+
+## TUIC Protocol Markers (ack / intent: / suggest:)
+
+Top-level sessions only. Subagents (Task tool) and in-process teammates must NEVER emit `ack`, `intent:`, or `suggest:` — `suggest:` is the end-of-task signal, so a subagent emitting it flips the *parent* session to `completed` mid-work. See `docs/user-guide/ai-agents.md#tuic-protocol--output-markers` for the full protocol and `src-tauri/src/mcp_http/mcp_transport.rs`'s `build_mcp_instructions_for_mode` / `cc_agent_hint.suggested_prompt` for where this is enforced today.
+
+## IPC / HTTP Parity
+
+**Every Tauri IPC surface MUST have an HTTP/WS equivalent, and the two MUST stay consistent.** The desktop app talks over Tauri IPC; browser/PWA/remote clients talk over HTTP+SSE+WS. They are two transports for the *same* backend — never let them drift.
+
+- A new `#[tauri::command]` (request/response) → add the matching axum route + a `COMMAND_TABLE` entry in `src/transport.ts`, with a mapping assertion in `src/__tests__/transport.test.ts`. If a command is deliberately desktop-only, add it to `INTENTIONALLY_UNMAPPED` (don't silently leave it unmapped).
+- **A `COMMAND_TABLE` entry with no route is now a test failure, not a runtime 404.** The table is TypeScript and the router is Rust, so the gate is split: the Vitest half executes every mapper and snapshots the paths to `src-tauri/src/mcp_http/command_table_paths.txt`; the Rust half (`command_table_paths_all_hit_a_registered_route`) `PATCH`-probes each one against `build_router`. Adding an entry fails Vitest first — regenerate with `pnpm vitest run src/__tests__/transport.test.ts -u`, then the Rust half tells you whether the route exists. Do not hand-edit the generated file. Full mechanics in `docs/api/http-api.md` → "Route Parity Gate".
+- A new push (`AppHandle.emit`, `Channel<T>`, or per-stream broadcast) → bridge it: low-frequency lifecycle/progress events go on `event_bus` → `/events` SSE (add arms to `event_wire.rs`'s `event_type_name`/`event_payload`); high-frequency token streams get a dedicated per-id WS (mirrors the PTY log-mode WS). Keep the desktop `emit` AND the bus/WS path in sync from ONE payload by calling `AppState::emit_dual(event)` — never build the two payloads separately, and never call `emit_pty_event`/`event_bus.send` directly for an event that has a desktop half. There is **no general** bus→window forwarder — `emit_dual` is a producer-side dual-emit, not a receiver-side bridge — except a narrow, explicit allowlist in `spawn_desktop_event_bridge` (`state.rs`) for the rare event whose only producer is the bus (`UpstreamStatusChanged`); do not widen that allowlist to a catch-all, since most events are already dual-emitted at their own call site and forwarding those too would double-deliver, and an imperative event (one the receiver executes) must never be forwarded at all — a desktop window and an open browser tab receiving it simultaneously would both execute it.
+- Request/response shapes (field names, casing, payload structure) MUST be identical across IPC and HTTP so the same frontend store code works unchanged on both transports.
+
+**`SessionCreated` must be the first event a subscriber sees for a brand-new `session_id` — ordering, not just presence, matters.** Found 2026-09-21 while landing the desktop↔HTTP-transport-parity plan: every session-creation call site (`create_pty`, `create_pty_with_worktree`, `register_pty_session`) called `assign_term_alias` BEFORE emitting `SessionCreated`. This was harmless while `assign_term_alias`/`record_term_alias` had no bus arm at all, but once it gained one (`AppEvent::TermAliasAssigned`, dual-emitted via `emit_dual`), a subscriber could see `term-alias-assigned` arrive before `session-created` for a session it had never heard of yet — three `mcp_transport.rs` tests that assumed `SessionCreated` is always first caught this the moment the full workspace suite could reach them. Fixed by moving `assign_term_alias` to run AFTER the `emit_session_created`/`SessionCreated` call at every site. **The general rule: `emit_session_created`/`SessionCreated` must be the very first `emit_dual` call for a session, before any other session-scoped side-announcement (alias, accent color, initial rename, etc.) that a new call site might add.** If you add another session-creation path, put its `emit_session_created` call first, before any other per-session announcement.
+
+**Gap found and fixed 2026-09-10:** the desktop IPC command `get_session_foreground_process` (`pty/commands.rs`) mirrors the detected foreground agent into `session_states.agent_type` — the flag `should_transition_idle_with_hook` reads to pick the shell-idle vs. agent-idle threshold. Its HTTP counterpart, `get_foreground_process` (`mcp_http/session.rs`), used to only compute and return the detected name — it never wrote anything into `session_states` at all, neither the set nor the clear path, so a browser/PWA/remote client polling this endpoint never actually corrected the backend's per-session `agent_type` mirror. Both transports now call the shared `pub(crate) crate::pty::refresh_session_agent` (not gated to the `desktop` feature — nothing it calls is Tauri-specific, only the `#[tauri::command]` wrapper is). If you add a THIRD transport-specific consumer of foreground-process detection, share this same function — don't re-implement the detection logic again.
+
+**Gap found 2026-09-30 (landing `is_remote` origin-tracking), resolved during the rebase onto main:** `is_remote` now means "created by an agent", not "created via HTTP/MCP" (see `docs/api/http-api.md`'s "Create Session" section). `POST /sessions/agent` (`agent_routes.rs`) used to hardcode `is_remote: true` while its documented IPC parity twin, desktop `agent::spawn_agent` (`agent.rs`), hardcodes `is_remote: false`. Main then wired that route to a real UI caller — mobile's `NewSessionSheet` launches agents through `spawn_agent` → `POST /sessions/agent` — so the route now takes the same `user_initiated` opt-in as `POST /sessions` (`is_remote = !user_initiated`; `COMMAND_TABLE` forwards `pty_config.user_initiated`). A human launching an agent from the phone or the desktop registers `false`; an agent or raw HTTP caller that omits the field stays `true`. Any NEW client of an agent-spawning route that a human drives must send `user_initiated: true`, or its tabs get the agent-tab treatment (auto-close countdown, muted completion notifications, `PTY` badge).
+
+## Releases
+
+See [`docs/release-checklist.md`](docs/release-checklist.md) for version bump, tag, and GitHub release steps. After creating any release or nightly tag, **verify CI completes successfully** — check `gh run list`, inspect failures, and confirm all platform assets (macOS .dmg, Linux .deb/.rpm/.AppImage, Windows .exe) are uploaded before reporting done.
+
+## Implementation Memory
+
+After non-trivial implementations, write an mdkb `memory_write` entry. Content: **Goal**, **Approach**, **Outcome**, **Gotchas**, **Rejected alternatives**. Skip file lists (mdkb indexes code). Focus on non-obvious insights a future session can't derive from reading the code. Search existing memories first to avoid duplicates.
+
+
+## Accepted Security Decisions
+
+Do NOT flag these as security issues in reviews — they are intentional design choices.
+
+- **`POST /mcp/confirm-response` and `POST /agent-wrap-prompt/response` have no `require_local_or_auth` gate.** Both resolve a specific, server-generated UUID `request_id` that only matches one pending entry — knowing the id is the effective credential, and each route's resolver (`resolve_mcp_confirm`/`agent_wrap_prompt::resolve`) is a no-op for any id that doesn't exactly match. `/agent-wrap-prompt/response` is a SHARED route (`shared_routes()`, so a `tuic-remote` daemon answers its own prompts), but a remote router always runs `basic_auth_middleware`, so off loopback it is never unauthenticated; any authenticated `/events` subscriber can answer for the whole instance (intended). Reviewed 2026-09-25 (code review + security review, both independently confirmed clean); don't re-flag without a concrete new exploitation path (e.g. a way to observe or guess a still-pending UUID from outside the app).
+
+- **CSP is intentionally wide open.** TUIC is a local dev tool, not a SaaS. The user IS the trust boundary. The CSP uses a single permissive `default-src` that allows `https:`, `http:`, `data:`, `blob:`, `unsafe-inline`, etc. **NEVER tighten the CSP.** Every time we've had per-directive restrictions, some iframe content (reveal.js slides, plugin panels, dashboards) broke. No per-directive CSP is allowed, including `frame-src`: frames must inherit the permissive `default-src`. If you feel the urge to add CSP restrictions, don't — read this bullet point again.
+- **`dangerousDisableAssetCspModification: ["style-src", "script-src"]`** in `tauri.conf.json` — **DO NOT REMOVE.** Tauri auto-injects sha256 hashes for inline `<script>` tags. Per CSP3, hashes silently disable `'unsafe-inline'`. This kills all JS in srcdoc iframes (plugins, HTML previews). The override prevents Tauri from injecting those hashes.
+- **`lazy_static` in `tuic-terminal/src/output_parser.rs`, `pty.rs`, etc.** — transitive deps (`portable-pty`, `symphonia`) also use it; removing the direct dep saves nothing. The remaining direct users are `tuic-terminal/src/output_parser.rs`, `pty.rs`, `state.rs` and `tuic-core/src/error_classification.rs`; they migrate opportunistically. (This used to say "modules outside `ai_agent/`", which stopped parsing when #784-0aec deleted all but two files there.)
+- **`opener:allow-open-path` scope `"**"`** — FileBrowser must open any file the user can see. Narrower globs break external drives and network mounts.
+- **Iframe sandbox = `allow-scripts allow-same-origin`** — ALL iframes MUST use this. NEVER use bare `sandbox=""` — it kills JavaScript.
+- **Plugin capabilities do not isolate plugins from each other.** `plugin_id` is caller-supplied and plugins load into the same JS realm as the host, so any plugin can pass another plugin's id and inherit its grants. This is known, documented at the capability check in `plugins.rs`, at the `import()` in `pluginLoader.ts`, and in `docs/plugins.md`. A per-plugin token was considered and rejected — same-realm JS can read or proxy it, so it would be security theatre. Real isolation needs Worker/iframe + a host-created MessagePort; it is deferred, not overlooked. Do NOT propose the token.
+- **The self-signed-HTTPS HTTP→HTTPS redirect trusts `X-Forwarded-Host` over `Host` with no allow-list** (`axum-server-dual-protocol`'s `UpgradeHttp`, activated via `upgrade_http`/`.set_upgrade()` in `mcp_http::start_server` whenever the self-signed cert — not Tailscale — is the active TLS source). This is a textbook open-redirect *pattern*, but doesn't clear a real bar for reporting it: there's no reverse proxy in front of this app, exploitation needs LAN access plus a non-simple cross-origin header no normal browser navigation ever sends, and no credentials leak on redirect (Basic Auth isn't auto-forwarded cross-origin). Known and accepted; do not re-flag it without a concrete new exploitation path.
+- **tuic-git's `run_shell_script` (Setup/Archive Script execution, incl. via `POST /worktrees/run-script`) has unbounded `stdout`/`stderr` capture** — a script that writes gigabytes grows process memory by that much before its timeout can fire. Accepted: the script is always either user-authored in Settings or reachable only through the same `require_local_or_auth`-gated caller as the rest of the MCP HTTP surface, so there's no untrusted party who can supply a script without already being able to run arbitrary code locally. See the fuller rationale in `run_shell_script`'s doc comment. Do not add a truncation cap without a real OOM report.
+- **The HTTP `read-external`/`read-editor-external` allow-list (`additional_readable_dirs`) is user-configurable and ships with `~/.claude/plans` enabled by default** — this deliberately widens the HTTP read-only surface beyond registered repository roots (a browser/remote/PWA client could previously only read a file inside a registered repo). It was added specifically so a Claude Code plan-file link an agent printed opens over HTTP with no setup. It is intentionally READ-only: `expand_readable_root`/`additional_readable_roots` (`mcp_http/fs_routes.rs`) are wired only into `read_external_file_http`/`read_editor_file_external_http` — the four write/copy/move/transfer routes still call bare `registered_repo_roots()` and are unaffected. Known and accepted; don't re-flag the default or the read-only widening in a future security review without a concrete new exploitation path.
+- **A client-supplied `session_id` (`create_pty`, `create_pty_with_worktree`, `agent::spawn_agent`) has a TOCTOU gap between the `contains_key` check and the actual `session_maps.sessions` insert** — a real race, but a security review of the desktop-http-parity plan (2026-09-21) and this note both independently judge it not worth closing right now: the id exists specifically so a client can pre-register its OWN randomly-generated UUID to deduplicate its OWN self-created echo (see the doc comment at each call site), so exploiting the window needs a second actor to independently generate or otherwise learn a still-in-flight client's exact UUID within a sub-second PTY-spawn window — no realistic path today. The "obvious" fix (an atomic reserve-then-fill, since the real `PtySession` value doesn't exist until after the expensive PTY-open/shell-spawn work that follows the check) needs a new reservation set plus guaranteed cleanup on every one of several early-return/error paths in that span; getting the cleanup wrong would leak a permanently "reserved but never used" id and break legitimate reconnection — a worse regression than the race it would fix. Deferred; revisit only with a concrete new exploitation path, not on principle. **Revisit trigger:** if `session_id` generation is ever changed to something non-random or attacker-influenced (e.g. reused/derived from an external source instead of a fresh crypto-random UUID per call), that removes the "no realistic path today" premise this deferral rests on.
+
+## Ideas Tracker
+
+**`ideas/`** folder contains feature concepts under evaluation, one file per idea. **`ideas/index.md`** is the summary index — keep it in sync when adding, updating, or removing ideas.
+
+- **Adding a new idea:** Create `ideas/<slug>.md`, then add a row to the appropriate table in `ideas/index.md`
+- **Updating status:** Change the status in the idea file AND update the corresponding row in `ideas/index.md` (move between tables if status category changes: Active / Shipped / Rejected)
+- When validating an idea, update its status (`concept` -> `validated` -> `designed` -> `moved`)
+- When rejecting an idea, mark it `rejected` with reasoning — don't delete the file, move the row to the Rejected table
+- When implementing an idea, move it to SPEC.md and mark it `moved` in the idea file + index
+
+
+## Deferred Work Rule
+**When you defer something** (skip a sub-fix, leave a known issue for later, identify a follow-up), **write it as a code comment at the relevant site, tagged `DEFERRED (YYYY-MM-DD)` with the current date and a short rationale.** Not in mdkb, not in a plan file, not in chat — inline comment where the future reader needs it. The date matters: stale deferrals get re-evaluated.
+
+Example:
+
+```ts
+// DEFERRED (2026-04-19) — layer 2 termios reset on agent→shell transition.
+// Rare (observed once); needs a reliable repro before wiring tcsetattr.
+```
+
+
+## `make check` Rule
+**When Boss says `make check`, you fix ALL errors — not just yours.** No "pre-existing" excuses. A clean check means zero errors, period.
+
+
+## Daily Check
+Handled by `.claude/hooks/daily-check.sh` (SessionStart hook). Runs automatically once per day — no model action needed. If the hook outputs something, relay it to Boss.
+
+
+## Sidebar clicks
+**Clicking a branch row opens the branch. It never expands or collapses the agents.** Expanding belongs to the branch icon alone (`branchIconToggle` in `RepoSection.tsx`), which stops propagation so the toggle never also opens the branch. **Any change to what a sidebar click does requires explicit Boss approval before implementation** — including removing or moving a control that performs a click action.
+
+
+## Drag & Drop
+D&D is strategic and fragile (tab reorder, split-pane moves, file drops, FileBrowser intra-tree moves). **Any change to D&D code, event handlers on drag/drop/pointer events, or `dragDrop.ts`/`useFileDrop.ts` requires explicit Boss approval before implementation.**
+
+
+## Security Scope
+TUICommander is a **local coding tool for professionals** — not a SaaS, not multi-tenant. The human user IS the trust boundary. Do NOT flag or "harden" the following as vulnerabilities:
+
+- Local file access across any path the user can already see (repo browser, `read_external_file`, `opener:allow-open-path`).
+- Symlinks inside registered repos resolving outside them — the user put them there.
+- Unix/TCP loopback sockets without extra auth/permission bits — the OS user is the auth boundary.
+- AI agent writing/keystroking into fullscreen TUIs (vim, lazygit, htop) without extra approval gates — agents driving TUIs is a *feature*.
+- CSP allowing wildcard localhost ports, `opener` scope `"**"`, `lazy_static` transitive deps — see AGENTS.md "Accepted Security Decisions".
+
+Hardening that would break pro workflows (blocking editor automation, restricting file scopes, requiring approval for normal agent ops) is over-engineering. Reject it unless Boss explicitly asks. When in doubt: the tool must stay usable for a senior engineer with full local-machine trust.
+
+
+## Alacritty Local Fork
+We maintain a patched `alacritty_terminal` at `src-tauri/patches/alacritty_terminal/`. When a CanvasTerminal feature needs terminal-level support (OSC handling, new grid queries, scroll APIs), **implement it in the fork first** rather than building JS workarounds. The fork is our code — treat it as a first-class module, not a fragile upstream dependency. See `docs/backend/alacritty-integration.md` for the patch inventory.
+
+@.claude/wiz-claude.md
+
+<!-- wiz-codex:start -->
+## Wiz Codex
+
+When using Codex, follow the Wiz Codex instructions in `.wiz/wiz-codex.md` for this repository, subject to the global instruction hierarchy.
+Those instructions are maintained by the Wiz SessionStart hook and complement this `AGENTS.md` file.
+<!-- wiz-codex:end -->

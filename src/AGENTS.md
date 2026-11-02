@@ -1,0 +1,747 @@
+# TUICommander — Frontend (`src/`)
+
+Repo-wide rules (doc sync, git workflow, architecture split, TUIC protocol markers,
+IPC/HTTP parity contract, accepted security decisions) live in the root
+`AGENTS.md` — read that first. This file covers what's specific to the SolidJS
+frontend: reactivity gotchas, focus/modal handling, panel data-refresh conventions,
+and frontend-only utilities.
+
+Directory-specific rules that don't belong here:
+`src/components/SettingsPanel/AGENTS.md`, `src/components/Terminal/AGENTS.md`.
+
+## Visual
+
+- UI controls use `src/components/ui` primitives (Button, Select, Input, Textarea, SegmentedControl, Dropdown); do not resize controls in feature CSS.
+- Clickable list rows and cards are layout, not form actions. Keep their native buttons and mark them with `data-control-layout="row"` or `data-control-layout="card"`. Geometry CSS must explicitly target `button[data-control-layout="row"]` or `button[data-control-layout="card"]` (additional classes are allowed). The guard exempts only these target compounds, never an entire file or an unmarked action. Do not use this marker for toolbar, form, view-switch or dialog actions.
+- All UI work MUST follow [`docs/frontend/STYLE_GUIDE.md`](../docs/frontend/STYLE_GUIDE.md).
+- **Plugin dashboards MUST follow [`docs/plugins-style.md`](../docs/plugins-style.md)** — use the shared `.dashboard`/`.dash-*` classes from `PLUGIN_BASE_CSS`, never hand-roll inline layout CSS. The built-in Claude Usage dashboard is the reference.
+- Icons: monochrome inline SVGs with `fill="currentColor"` — never emoji.
+- Take a screenshot after EVERY visual/CSS/layout change to verify rendering.
+- **The canvas-terminal frame protocol's bit layout** (`terminal_grid.rs`'s `serialize_dirty_rows`, mirrored in `canvasTerminalUtils.ts::decodeBinaryFrame` and `docs/frontend/canvas-terminal-audit.md`) — see `src/components/Terminal/AGENTS.md` for the three-way-sync rule and why it broke three times.
+
+## Global Focus/Keyboard Handlers Must Check `anyModalOpen()`
+
+`useKeyboardRedirect.ts` (forwards printable keys to the active terminal
+whenever focus isn't in an `INPUT`/`TEXTAREA`/`SELECT`) had no
+`anyModalOpen()` check at all — a dialog control that isn't a plain input
+(e.g. `CreateWorktreeDialog`'s "Start from" `<button>` trigger, Tab-focused)
+was fair game, so typing while it had focus both leaked the keystroke into
+the terminal underneath **and** yanked focus there via `activeTerminal.ref
+.focus()`. Fixed by adding an early `if (anyModalOpen()) return;` (from
+`stores/modalStack`) — every overlay in this codebase already calls
+`registerModal()` (confirmed: both current `role="dialog"` components do), so
+this single check covers all of them; it deliberately does NOT also add an
+ARIA-role fallback, since that would be unexercised code standing in for an
+invariant ("every dialog calls registerModal") that's enforced by convention,
+not by this hook. Any new document-level keydown/focus-stealing handler that
+only special-cases `INPUT`/`TEXTAREA`/`SELECT` has the same gap for every
+non-input dialog control — check `anyModalOpen()` before assuming a
+plain-input allowlist is enough, and make sure any new overlay actually calls
+`registerModal()` rather than relying on a hook to guess it's a dialog.
+
+The inverse failure also exists: a panel that reclaims focus/keyboard input
+for *itself* whenever it loses it (e.g. `ComposePanel`'s `focusout` handler,
+which used to unconditionally refocus its own CodeMirror instance one frame
+after ANY blur) traps focus away from a dialog opened over it, even though
+the dialog is strictly higher z-index and otherwise fully interactive. The
+fix there was symmetric: only reclaim when focus demonstrably fell through to
+`<body>`/nowhere (the actual "keystrokes would vanish" case) or a modal is
+registered — never when focus visibly moved to a specific other element.
+Any panel with this "reclaim focus on blur" pattern needs the same
+`document.activeElement !== document.body` / `anyModalOpen()` guard, not a
+z-index fix — the two panels were never actually z-index-conflicting.
+
+**A component-local key handler (not routed through `modalStack`'s own
+Escape listener) breaks the instant more than one instance of that component
+is open at once.** `ConfirmDialog.tsx`'s Enter-to-confirm handler used to be
+a bare `document.addEventListener("keydown", ...)` added by every mounted
+instance, with no notion of which one is "on top." Escape already worked
+correctly because it's routed centrally through `modalStack`'s own listener,
+which only ever invokes the top-most registered `close`; Enter had no
+equivalent because each `ConfirmDialog` wired it itself, assuming (correctly,
+for every existing caller until this one) that at most one instance would
+ever be visible at a time. `AgentWrapPromptHost` broke that assumption on
+purpose — it renders one `ConfirmDialog` per pending agent
+(claude/codex/goose can each have an independent prompt in flight), so with
+two open, a single Enter press fired both dialogs' default action at once.
+Fixed by adding `isTopModal(id)` to `modalStack.ts` and having
+`ConfirmDialog` call `pushModal`/`popModal` directly (instead of the
+`registerModal` convenience wrapper) so it can check `isTopModal` before
+acting on Enter, while Escape stays exactly as it was. Any future
+component-local key handler that isn't already routed through `modalStack`
+needs the same check the moment more than one instance of that component can
+be mounted simultaneously — don't assume "this dialog is always alone"
+without checking every call site.
+
+## Panel Refresh
+
+Panels with repo-dependent data MUST use `repositoriesStore.getRevision(repoPath)` in `createEffect` — not file watchers or polling. `repo_watcher` emits `"repo-changed"` → `bumpRevision()`.
+
+**A panel that renders ONLY committed history** (commit log, file history, stashes) uses `getGitRevision(repoPath)` instead, so a plain file save no longer re-runs its git processes. The two counters are nested, not parallel: `bumpGitRevision` bumps **both**, and `getRevision` still moves on every event. `getRevision` is therefore always the safe default — a panel left on it cannot go stale, while a panel wrongly moved to `getGitRevision` silently misses working-tree changes. Move a panel only after checking every command it calls ignores uncommitted state.
+
+**Panel visibility gates must check the specific scope they care about.** A gate bundled in from cross-repo/global state (e.g. `globalWorkspaceStore.isActive()`) must check the scope (`MANUAL_SCOPE`) it actually cares about, not just `isActive()` — a per-repo auto-consolidated workspace is a different activation with a single well-defined repo, and a bare `isActive()` check will wrongly suppress panels for it. The same "boolean/flag check too coarse for a growing state space" shape has recurred more than once (File Browser/Git Panel suppression, sidebar branch-icon color falling through to the wrong case) — when a state space grows a new case, re-check every existing boolean gate against it rather than assuming the old check still covers the new state correctly.
+
+## `branch.terminals` Membership Must Never Be Pruned On Terminal Exit
+
+`repositoriesStore`'s `branch.terminals: string[]` means "every terminal ever
+attached to this branch/worktree, whether or not it's still alive" — NOT "every
+currently-live terminal." Multiple consumers depend on the former, broader
+meaning: `closeTerminalsForBranch` (`createWorktreeWorkflowCoordinator.ts`,
+`createWorktreeRemovalCoordinator.ts`) iterates `branch.terminals` to close
+every terminal — including an already-**exited** one — before a worktree is
+merged/archived/removed, so its tab doesn't survive pointing at a deleted
+directory; `useWorktreeSwitchPrompt.ts`'s `pruneRemovedWorktree` uses
+`branch.terminals.length` to decide whether cleanup is even needed; and
+`RepoSection.tsx`'s `getBranchTabsAvailable`/`BranchTabList` render the sidebar's
+own expandable tab list straight from `branch.terminals`, so a still-open (if
+exited) tab stays reachable there.
+
+A 2026-09-10 fix for a real bug (a ghost-attached terminal — one whose process
+exited on its own rather than via the tab's close button — inflating the
+worktree-removal "N terminal(s) attached" dialog and keeping the sidebar dot
+green) initially tried removing the id from `branch.terminals` the moment the
+terminal exited (`Terminal.tsx`'s `hadAgent` PTY-exit branch,
+`useAppInit.ts`'s `"session-closed"` listener). An independent code-review pass
+caught that this broke all three consumers above: an exited-but-lingering tab
+became invisible to `closeTerminalsForBranch` (so it was never closed,
+surviving worktree teardown as a dangling tab pointing at a deleted directory),
+could make `pruneRemovedWorktree` skip cleanup entirely (`branch.terminals`
+going empty), and vanished from the sidebar's own tab-list even though the tab
+itself was still open — directly contradicting the intent that the tab
+"lingers so the user can still see it."
+
+**The correct fix does not touch array membership at all.** `branch.terminals`
+keeps every id, live or exited, until the terminal's tab is actually closed (or
+the branch/worktree itself goes away). Instead, everything that only cares
+about *live* activity — the removal-confirmation gate and the sidebar dot —
+filters by `terminalsStore.get(id)?.shellState !== "exited"` at read time:
+`branchActivitySummary`'s `isBusy` (`activitySnapshot.ts`) and
+`hasLiveTerminals()` (`RepoSection.tsx`). An id missing from `terminalsStore`
+entirely still counts as live/busy by design (conservative — see
+`activitySnapshot.ts`'s doc comment on `branchActivitySummary`). The
+confusing `"—"` label a stale/exited entry showed in the removal dialog (the
+shared `effectiveActivityState`/`terminalStatusLabel` has no `"exited"` case,
+so it falls through to `"unknown"`) is likewise handled locally in
+`branchActivitySummary`, not by adding an `"exited"` case to the shared
+dashboard label function — the Activity Dashboard has its own existing,
+tested contract for how it renders an exited session (`terminalStatusLabel`'s
+`"—"` fallback), which this fix deliberately leaves alone.
+
+**Do not reintroduce eager pruning of `branch.terminals` on terminal exit** —
+if a future ghost-attachment bug shows up again, fix it the same way: filter
+by live `shellState` in the specific consumer that cares about liveness,
+never by mutating branch membership.
+
+**The restart-recovery snapshot is one of those consumers.** Found 2026-10-09:
+tabs the user had already closed (a finished subagent's `squad-churn` pane, plus
+exited tabs left "for review") came back after a restart as sessionless
+placeholders, and kept coming back. `collectTerminalSnapshots`
+(`hooks/useAppInit.ts`) used to save every id in `branch.terminals` that still
+existed in `terminalsStore`, so a lingering exited tab was persisted into
+`savedTerminalsByClient`, restored by `createBranchSelectionCoordinator.ts` as an
+agent tab with a resume banner, and then re-saved by the 30s timer — a loop.
+It now skips a tab when `shellState === "exited"` (it lingers only so the user
+can review it, never to be restored) or `isExternallyCreated` (agent-created via
+MCP/tmux-shim/HTTP — a subagent/teammate pane is respawned by its lead, so
+there is nothing to resume). `branch.terminals` membership is still untouched.
+
+Two details that are easy to get wrong:
+- **A never-spawned restore placeholder (`sessionId` null, `shellState` null)
+  must still be saved.** It is a real tab the user simply hasn't clicked yet;
+  excluding it would lose it if they quit first. Don't "fix" the ghost problem
+  by filtering on `sessionId == null`.
+- **A branch whose tabs were all excluded must still write an empty snapshot**
+  (`excluded > 0`, not just `saved.length > 0`). Skipping the write leaves the
+  previous snapshot, which may contain exactly the tabs just excluded, on disk
+  to be restored.
+
+`isExternallyCreated` is broader than "subagent": it also covers a tab an orchestrator
+opened deliberately. If that ever needs to survive a restart, add a narrower
+teammate marker rather than loosening the exited/`isExternallyCreated` filter. (Main
+split the old flag: `isRemote` now means "runs on a configured remote connection"
+and is NOT the filter.)
+
+
+## `paneLayoutStore` Ghost Tabs Can Permanently Wedge A Split, And Global Workspace Has Its Own Independent Stale-Layout Cache
+
+Found 2026-09-25 from a live user report ("a new tab keeps landing in a pane
+split into 6, and Reset Panel Sizes doesn't stick"). Two distinct bugs, same
+root shape as `branch.terminals`'s ghost problem above, in a different store.
+
+**Bug 1 — a tab whose content never made it into (or was removed from) its
+owning store can permanently block a pane from ever collapsing.** A pane
+materialized by the tmux compatibility shim (Agent Teams teammate panes)
+whose underlying PTY died via a path that never fired `session-closed` — e.g.
+a `kill-pane` outside the shim's own `DELETE /tmux/panes/{id}` route, or the
+process dying with its parent tmux socket — leaves a tab id in
+`paneLayoutStore` with no `terminalsStore` entry (the same shape applies to a
+diff/markdown/editor tab whose entry disappeared from its own store by some
+other path). It renders nothing (no tab strip entry, no close button), so a
+user can never close it by hand. `useTerminalLifecycle.ts`'s
+`removeTabFromPane` used to gate pane-collapse on `group.tabs.length === 0` —
+a ghost's phantom tab entry means that count can never reach zero, so the pane
+(and, transitively, the whole split it's part of) is stuck open forever, and
+any *new* tab opened while that pane happens to be active lands inside it.
+Fixed by treating a tab with no live entry in its owning store as not
+counting toward "this pane still has content" — see `isPaneTabLive`
+(`src/utils/paneTabLiveness.ts`), which switches on `tab.type` to check the
+right one of `terminalsStore`/`diffTabsStore`/`mdTabsStore`/`editorTabsStore`.
+`useSplitPanes.ts`'s `closeActivePane` never had this gate (it unconditionally
+closes its target group), so it was never affected.
+
+**Bug 1b (found by code review, same day) — a pane whose ONLY tab is a ghost
+has no sibling tab to ever trigger `removeTabFromPane`'s check at all.** The
+fix above only re-evaluates a group's liveness when some OTHER tab in it is
+explicitly closed — a solo-ghost pane (the common shape for a tmux-shim
+teammate pane, which is usually alone in its own tiled cell) has nothing else
+to close, so it stayed wedged open even after the fix above. Closed with a
+second, independent mechanism: `src/utils/paneTabLiveness.ts` wires
+`terminalsStore.onRemove(...)` at module scope (mirroring
+`globalWorkspace.ts`'s own identical wiring for itself; deliberately NOT in
+`paneLayout.ts`, which the mobile entry reaches statically via
+`activitySnapshot` -> `globalWorkspace` — importing the four tab stores from
+there added ~12 KB gzip to `mobile.html` and broke its bundle budget) to sweep a removed
+terminal's tab out of its group immediately, collapsing the pane via
+`isPaneTabLive` if nothing else in it is live — event-driven off the actual
+removal, not dependent on an unrelated tab-close ever happening in that same
+group. (Not extended to diff/markdown/editor tabs: their shared
+`createTabManager` factory has no `onRemove`-style hook at all today — adding
+one to fix a not-yet-live-confirmed gap for those three tab types wasn't
+worth the risk; `isPaneTabLive`'s read-side check still covers them for the
+sibling-close path above.)
+
+**Bug 1c (found by the same review pass) — `globalWorkspaceStore
+.resetActiveLayout()` (below) could rebuild the visible pane without moving
+focus to match.** `addTerminalToLayout` sets a rebuilt group's `activeTabId`
+to the LAST id it folds in (`Set` iteration order), which won't generally be
+whatever `terminalsStore.state.activeId` (focus/keyboard routing) already
+pointed at. Fixed by reconciling `activeId` to the rebuilt layout's
+`activeTabId` at the end of `resetActiveLayout()`, mirroring `activate()`'s
+own pre-existing reconciliation for the identical reason — safe unconditionally
+there because the only caller (`useSplitPanes.ts`'s `resetLayout()`) gates the
+whole call on `isActive()`, so the user is guaranteed to be looking at this
+workspace already.
+
+**Bug 2 — `globalWorkspaceStore` caches its own layout snapshot, independent
+of `paneLayoutStore`, and reapplies it on every promote/unpromote.** While the
+Global Workspace (auto-consolidation, #e767) is active, `syncToPaneStore()`
+calls `paneLayoutStore.restore(workspace().layout)` on essentially every
+membership change — so a plain `paneLayoutStore.reset()` (what "Reset Panel
+Sizes" used to do) doesn't stick: the very next new terminal (which gets
+auto-consolidated into the active workspace) re-triggers a sync that restores
+the stale cached layout right back. Fixed with a new
+`globalWorkspaceStore.resetActiveLayout()` — rebuilds the active workspace's
+own cached layout as a flat single pane from its *current* `promoted` set,
+discarding whatever split geometry was cached — called alongside
+`paneLayoutStore.reset()` from `useSplitPanes.ts`'s `resetLayout()`.
+
+**Update (2026-09-29): the "promoted-but-dead member" gap above WAS confirmed
+live** — a real user report of the sidebar's Global Workspace badge showing a
+stuck, inflated count. Fixed exactly the way this section predicted: by
+filtering at the specific reader (`globalWorkspaceStore.getLiveManualMembers()`,
+used by `GlobalWorkspaceEntry.tsx`'s badge/visibility and the
+`toggle-global-workspace` shortcut), not by mutating `promoted` or filtering
+inside `syncToPaneStore()`/`activate()`. The root of the *resurrection* itself
+(not just the display) turned out to be `useWorktreeConsolidation.ts`'s
+`worktreeTerminalsOf` feeding dead ids straight into `syncScopeMembers` as
+"wanted" on every reactive re-run — fixed by filtering that function's result
+to `terminalsStore`-live ids before it ever reaches the store. See the
+"`globalWorkspaceStore`'s Ambient `scope` Pointer" section below for the full
+fix, which turned out to be one symptom of a larger ambient-scope bug.
+
+
+## `globalWorkspaceStore`'s Ambient `scope` Pointer Must Never Leak Into User-Facing "Global Workspace" Identity
+
+`globalWorkspaceStore` (`src/stores/globalWorkspace.ts`) implements **two different
+features** through one mechanism: the user's manually hand-promoted, cross-repo
+bucket (`MANUAL_SCOPE`) and each repo's own automatic "consolidate all worktrees"
+view (`useWorktreeConsolidation.ts`, one scope keyed per repo path). Both share a
+single ambient, mutable module-level `scope` variable. Found 2026-09-29 from a
+live user report: the sidebar's "Global Workspace" badge showed a confusing,
+inflated count, the globe icon on a tab disagreed with the Activity Dashboard's
+promote checkbox for the same terminal, removing a terminal via the Activity
+Dashboard didn't stick, and the sidebar pill's click had no visible effect —
+four distinct symptoms, one root cause.
+
+**The rule going forward: "Global Workspace" as a user-facing concept — the
+sidebar pill, its badge, the promote/unpromote control anywhere (Activity
+Dashboard, `PaneTree.tsx`, `TabBar.tsx`'s context menu), and the globe icon —
+means exactly and only `MANUAL_SCOPE`, never whatever scope happens to be
+ambient.** `promote`/`unpromote`/`isPromoted`/`togglePromote` all hardcode
+`workspace(MANUAL_SCOPE)` internally now — no ambient dependency, no
+`scopeKey` override parameter. Use the new `isManualWorkspaceActive()` (`isActive()
+&& scope === MANUAL_SCOPE`) for any "is the manual Global Workspace showing"
+check — it replaced a duplicated local helper in `PanelOrchestrator.tsx` and is
+what the repo-name hover overlay/globe-icon-redundancy guard in `TabViews.tsx`
+and the repo-badge/globe-badge guards in `PaneTree.tsx` all use now.
+
+**`getPromotedIds()`/`hasPromoted()` are the one deliberate exception — they
+stay ambient-scope-relative.** `TabBar.tsx`'s `activeTerminals()` genuinely
+needs these to reflect whichever scope's tab strip is currently on screen
+(the manual one, or a repo's own auto-consolidated one) — that's correct
+precisely because the other fixes here keep `scope` itself accurate. Do not
+"fix" these to be MANUAL_SCOPE-specific too; that would break the
+auto-consolidation tab-strip filter this store also serves.
+
+**The sidebar pill is one-way, not a toggle.** Clicking it always means
+"switch to `MANUAL_SCOPE`'s view" — it forces `setScope(MANUAL_SCOPE)` then
+`activate()` if not already active. It never deactivates. Clicking an
+ordinary terminal or branch row in the **sidebar** always exits the manual
+Global Workspace view, even if the clicked terminal happens to already be
+promoted into it — a sidebar row click is a deliberate "go look at this
+repo/branch" action, never a within-workspace tab switch.
+`navigateToTerminal.ts` (sidebar terminal rows, plus every other caller
+that isn't the main TabBar — notifications, Activity Dashboard, Session Diff,
+next/prev-terminal shortcuts) and `createBranchSelectionCoordinator.ts`'s
+`handleBranchSelectInner` (sidebar branch rows) both check
+`isManualWorkspaceActive()` unconditionally and call `deactivate()` before
+proceeding, with no exception for already-promoted ids. Confirmed directly
+with Boss: do not reintroduce a deactivate-on-click path on the pill or its
+matching `toggle-global-workspace` keyboard shortcut, and do not make
+`navigateToTerminal.ts` itself promoted-id-aware — see the next paragraph for
+why that distinction lives one layer up instead.
+
+**The main TabBar's own tab clicks are a separate path that must NOT
+deactivate, and the fix lives in `useTerminalLifecycle.ts`, not
+`navigateToTerminal.ts`.** Found 2026-09-30 from a live user report: clicking
+*any* tab while the manual Global Workspace was showing switched the user out
+of it entirely. `handleTerminalSelect` (`useTerminalLifecycle.ts`, wired to
+the main `TabBar`'s tab clicks) called `navigateToTerminal(id)` for every
+plain terminal id — but while the workspace is showing, its tab strip renders
+exactly `globalWorkspaceStore.getPromotedIds()` (`TabBar.tsx`'s
+`activeTerminals()`), so every tab visible there is already a member, and
+`navigateToTerminal`'s unconditional `deactivate()` fired on every single
+click. An initial attempt fixed this by making `navigateToTerminal.ts` itself
+skip `deactivate()` whenever the id is in `getPromotedIds()` — wrong, because
+that function is *also* the sidebar's click handler, and a sidebar row click
+must always exit regardless of promoted status (see previous paragraph) — a
+promoted terminal can still appear in its branch's sidebar tab list. The
+correct fix special-cases only the TabBar path: `handleTerminalSelect` checks
+`globalWorkspaceStore.isManualWorkspaceActive() &&
+globalWorkspaceStore.getPromotedIds().includes(id)` itself and, when true,
+just switches the active tab/pane group directly (mirroring
+`activateInPaneGroup`'s existing pattern) instead of calling
+`navigateToTerminal` at all — leaving `navigateToTerminal.ts` completely
+unchanged from its original always-deactivate behavior. Any future caller of
+`navigateToTerminal` that renders its own filtered-to-`getPromotedIds()` tab
+strip (not a plain "go to any terminal" action) needs this same
+caller-side special case, not a change to the shared function.
+
+**Re-asserting the correct scope after an imperative exit needs an imperative
+call, not just the reactive effect.** `useWorktreeConsolidation()`'s second
+`createEffect` only re-fires on an actual change to `repositoriesStore.state.activeRepoPath`
+— clicking a terminal or branch within the *same* already-active repo doesn't
+change that value, so after an imperative `deactivate()` the reactive trigger
+alone can leave `scope` stuck at `MANUAL_SCOPE` even though you're still in a
+consolidated repo. Fixed by extracting the effect's body into a standalone
+exported `syncScopeForActiveRepo()`, called both by the effect (reactively)
+and by `navigateToTerminal.ts`/`createBranchSelectionCoordinator.ts`
+(imperatively, right after they exit the manual workspace and switch
+repo/branch). Any third call site with the same shape (exit the manual
+workspace, then possibly land on an already-active repo) needs the same
+imperative call — don't assume the mounted effect will catch it.
+
+**Ghost resurrection had a second source beyond the badge display gap
+above.** `useWorktreeConsolidation.ts`'s `worktreeTerminalsOf` used to feed
+`branch.terminals` (deliberately never pruned on terminal exit, per this
+file's own section above) straight into `syncScopeMembers` as "wanted" —
+so a dead worktree terminal got continuously re-added to a repo's
+auto-consolidation scope on every reactive re-run, even after
+`onTerminalRemoved` had already correctly swept it out. Fixed by filtering
+`worktreeTerminalsOf`'s result to `terminalsStore`-live ids before it's ever
+treated as "wanted" — this is a fix to what's fed *into* the declarative sync,
+not a filter on `promoted` itself, so it doesn't reopen the "~22 tests use
+synthetic non-live ids" problem the badge-display fix above had to route
+around.
+
+**`setScope()` restored the pane layout on a scope switch but never
+reconciled `terminalsStore.state.activeId` — found live 2026-09-30.** With
+one terminal manually promoted while viewing a terminal in a repo's own
+auto-consolidated scope (i.e. `isActive()` already `true` for a *different*
+scope), clicking the Global Workspace pill changed the tab strip's displayed
+name (`TabBar.tsx`'s `activeTerminals()` reacts to `isActive()`/scope
+immediately) but left the previous scope's terminal's content on screen.
+`activate()` and `resetActiveLayout()` both reconcile `activeId` to the
+newly-shown layout's `activeTabId` after restoring it (see Bug 1c above) —
+`setScope()`'s own `syncToPaneStore()` call did not, so `activeId` kept
+pointing at the OLD scope's terminal. This is only visible with a
+single-pane layout: `TerminalArea.tsx`'s flat rendering path (used whenever
+`paneLayoutStore.isSplit()` is false, i.e. exactly one promoted terminal)
+gates content visibility purely on `terminalsStore.state.activeId`, with no
+reference to the pane layout's own `activeTabId` at all — a 2+-member
+layout is a `branch` and defers to the pane's own `activeTabId` instead, so
+the same staleness there is invisible. Fixed by adding the identical
+`activeGroup?.activeTabId` → `terminalsStore.setActive(...)` reconciliation
+directly inside `setScope()`, gated on `isActive()` being true after the
+scope swap (a `setScope()` call made while inactive is either followed by
+an explicit `activate()`, which already does this reconciliation itself —
+`GlobalWorkspaceEntry.tsx`, the `toggleGlobalWorkspace` shortcut,
+`syncScopeForActiveRepo` when the repo has members — or deliberately leaves
+the workspace inactive, e.g. `syncScopeForActiveRepo`'s exit path). Any
+future code path that swaps `paneLayoutStore`'s contents without going
+through `activate()`/`resetActiveLayout()`/`setScope()` needs this same
+reconciliation — the pane-layout's `activeTabId` and `terminalsStore
+.state.activeId` are two independent pieces of state that only *look*
+redundant because `activate()` keeps them in sync by convention, not by any
+enforced invariant.
+
+
+## A Pane Layout Belongs To A Repo+Branch, Not To "Whatever Is On Screen"
+
+`paneLayoutStore` only ever holds the layout of the branch currently showing;
+every other branch's split lives in the in-memory `savedPaneLayouts` cache
+(`stores/savedPaneLayouts.ts`), written on leave and read on arrive. Found
+2026-10-06 from a live report (four tmux-shim terminals in one split came back
+as four flat tabs), three separate leaks around that rule:
+
+- **A path that flips the active repo/branch without the save/resolve pair loses
+  the split.** `navigateToTerminal` (a sidebar terminal click in another repo)
+  set the active repo/branch directly and did neither, so the branch being left
+  was never saved and the first reset while away destroyed its split. Any code
+  that changes `activeRepoPath`/`activeWorkspaceId` must call
+  `savePaneLayoutForBranch` for the branch it leaves and
+  `resolvePaneLayoutForBranch` for the one it enters (both in
+  `utils/branchPaneLayout.ts`). A test that mocks `paneLayoutStore` cannot see
+  this bug — use the real store + `savedPaneLayouts`
+  (`navigateToTerminal.paneLayout.test.ts`).
+- **Restore must prune, not discard.** A saved split used to be thrown away whole
+  if any one terminal in it had been closed while away (the live layout's
+  `terminalsStore.onRemove` sweep never reaches a saved copy). Restore now runs
+  `pruneLayoutToLiveTerminals`: dead terminal tabs and the panes they empty are
+  removed, and what is left is restored if it is still a split (>= 2 panes).
+- **The tmux shim's `select-layout` must target the branch that owns the
+  terminals.** `arrangeSwarmLayout` (`utils/arrangeTmuxLayout.ts`) arranges the
+  live store only when the owning branch is on screen; otherwise it arranges that
+  branch's saved layout via the pure `arrangeLayoutState`, so the split is there
+  when the user opens the branch. `paneLayoutStore.arrangeSessionsAsLayout` is a
+  thin wrapper over the same pure function — do not grow a second copy of the
+  arrange logic. Terminals no branch claims yet, and the manual Global Workspace,
+  keep the old live-layout behavior.
+
+## Implicit "Close" Must Target What Is On Screen, Not `activeGroupId`
+
+Found 2026-10-26 from a live report: Cmd+W with "main 1" in front closed other terminals,
+twice. A tmux-shim agent swarm had built a split, and "main 1" — a terminal in no pane group
+— rendered full-page over it (an *orphan overlay*, `TerminalArea.tsx`). `closeActiveTabOrPane`
+only asked `paneLayoutStore.isSplit()`, so it ran `closeActivePane()` against the hidden
+split's `activeGroupId` — the most recently spawned agent pane, which destroys every terminal
+in that group. Each press ate the next-newest agent pane.
+
+`utils/activeOrphanTab.ts` is the single source for the overlay predicate
+(`getActiveOrphanTabId`, also what `TerminalArea` hides the split with) and for the close
+decision (`resolveCloseTarget`/`closeActiveTarget`): an orphan terminal/diff/markdown/editor
+tab over a split closes *that tab*; otherwise a split closes its active pane and a non-split
+closes the active terminal. Every implicit entry point (keyboard, command palette, native menu,
+terminal context menu) goes through `closeActiveTabOrPane`; entry points that name a tab
+(tab-strip and pane sub-tab "Close Tab") call `closeTerminal(id)` directly and were never
+affected. Any new implicit-close entry point must go through `closeActiveTarget` — never
+call `closeActivePane()` on its own, and never decide "split vs. not" without the orphan check.
+
+## SolidJS `<For>` Index Staleness
+
+`<For>`'s mapping callback is invoked once per distinct item **reference**, not once per render — it does not re-run just because filtering/sorting shifted that same item to a new position. `<For>` hands the callback an `index` **accessor** (a function) specifically so consumers can read the item's current position later; calling it immediately (`i()`) and stashing the plain number in a closure throws that liveness away. Any handler built from that captured number (a click/hover callback that indexes back into the filtered array) goes stale the instant the array's composition changes without that item's own identity changing — the callback still runs, but against a now-wrong (sometimes out-of-bounds) slot, so it silently no-ops instead of throwing.
+
+This bit `BaseRefDropdown` in `CreateWorktreeDialog/CreateWorktreeDialog.tsx`: typing a query that filtered out an earlier match shifted a later option to a new index, and clicking or hovering it used a captured stale pre-filter index, so the click silently did nothing. **The fix is to never capture the number at all** — `renderItem(option, index: () => number)` keeps `index` as a lazy accessor called inline inside each handler (`index()`), matching the sibling branch list in the same file, which already did this correctly. (An earlier attempt at this fix computed the index at use-time via `filteredRefs().indexOf(option)` instead — don't do that either: it recomputes on every row on every keystroke, and the component's own comment now says so explicitly.) When a `<For>`-rendered row's event handler needs its position, call the index accessor inline at the moment the handler runs — never cache the number, and don't reach for `array.indexOf(item)` as a substitute.
+
+## `<For>` Remounting a Row on Every Keystroke (whole-array-replace hazard)
+
+A **reference-keyed** `<For>` over a list where an edit handler rebuilds the
+**entire backing array** via `.map()` with a spread-copied element
+(`arr.map(x => x.id === id ? { ...x, ...patch } : x)`, then a single
+`setState("listField", newArray)`) disposes and recreates that one row's DOM
+on every keystroke — Solid can't reconcile a plain-object replacement of the
+whole array in place, so the edited index gets a fresh reference every call.
+This destroys whatever was focused inside that row (an `<input>` mid-type)
+and, if the row's own expand/collapse state is a **local** `createSignal`
+(not hoisted to the parent), collapses the row back too. If the array was
+previously *empty* (falling back to a shared default/built-in list) and the
+edit is the *first* one, every element flips reference simultaneously,
+remounting the whole list and resetting scroll position along with it — this
+hit `SelectionTab.tsx`'s Smart Selection rule editor, fixed by converting
+both the rule list and each rule's action list to `<Index>`, which keys by
+position and updates via a per-slot signal instead of remounting.
+
+**This is NOT a blanket "any store update near a `<For>`" problem** — check
+how the specific setter is implemented before assuming a bug. A store setter
+that targets a specific key with `setState("mapField", id, patch)` (a
+**path-based** update into an object/record, e.g. `promptLibraryStore
+.updatePrompt`'s `setState("prompts", id, {...existing, ...data})`) merges
+onto the existing proxy *in place*, preserving that entry's reference
+identity — `<For>` never sees a change and never remounts. The hazard is
+specifically "whole-array replacement built from spread-copied plain
+objects," not "any field of any list item changing." Verify empirically
+(mount the real component against the real store, edit the field, assert the
+same DOM node stays focused) before either claiming or ruling out this bug in
+a sibling list.
+
+## `<Show>` Never Remounts on a Truthy→Truthy Value Change
+
+`<Show when={signal()}>{(value) => <Child target={value()} />}</Show>` only
+re-invokes its render callback on a **falsy→truthy transition** — Solid's own
+implementation memoizes the outer condition with an `equals` comparator that
+treats any two truthy values as equal, so switching `signal()` from one
+truthy value to a *different* truthy value does **not** recreate `<Child>`.
+If `Child` reads its prop once at setup time (`const target = props.target`)
+and seeds `createSignal`s from that snapshot, it silently keeps showing the
+FIRST value forever — found in `RemoteServersTab.tsx` (code review
+2026-09-23): a shared, non-modal inline editor mounted via `<Show
+when={editorTarget()}>`, where only the "Add" button (not each row's own
+"Edit" button) was gated behind `!editorTarget()`. Clicking Edit on a second
+row while the editor was already open left the form showing the first row's
+stale data, and Save would have written the second row's edits to the
+first row's id.
+
+**Fix: `<Show when={target()} keyed>`, when the child must remount on every
+distinct target, not just null→value.** With `keyed`, Show compares the value
+itself (by reference) instead of its truthiness and hands the callback the
+value, not an accessor, so every retarget — any `setTarget({...})` with a fresh
+object — unmounts and remounts the child. `RemoteServersTab.tsx` mounts
+`RemoteConnectionEditor` this way; `RemoteServersTab.render.test.tsx`'s
+"clicking Edit on a second connection…" test pins it (dropping `keyed` fails
+it). A reference-keyed `<For each={target() ? [target()] : []}>` does the same
+and was the original fix on the pre-rebase branch; prefer `keyed`. This is not
+specific to that one component: any inline (non-modal) editor/panel gated by
+a "target object" signal, where more than one entry point can retarget it
+while it's already open, has the same latent bug if it's mounted via a
+non-keyed `<Show>`.
+
+## A Plain-Value Component Prop Computed Inline From a Store Read Is Still Reactive
+
+`<PaneNodeView node={paneLayoutStore.getRoot()!} .../>` — `node` is typed as a plain
+`PaneNode`, not an accessor, but Solid's JSX compiler still wraps a non-trivial expression
+passed as a component prop in a getter, so `props.node` re-evaluates `paneLayoutStore.getRoot()`
+on demand rather than snapshotting it once at call time. Found 2026-09-29 writing
+`PaneTree.test.tsx` (new file, zero prior coverage): a test that first calls
+`globalWorkspaceStore.syncScopeMembers(...)`/`setScope(...)`/`activate()` — all synchronous,
+non-Tauri store mutations — then renders `<PaneNodeView node={paneLayoutStore.getRoot()!} .../>`
+crashed inside `<Switch><Match when={props.node.type === "branch"}>` with "Cannot read
+properties of null (reading 'type')", from inside a `writeSignal`/`runUpdates` call triggered by
+something reactive *inside the mounted tree itself* writing back to `paneLayoutStore` during
+mount — re-evaluating the getter against a transiently-stale/null root mid-render.
+
+**Fix: snapshot the value as a plain local variable before calling `render()`**, never pass the
+store-read expression inline:
+
+```ts
+const node = paneLayoutStore.getRoot()!; // snapshot first
+render(() => <PaneNodeView node={node} .../>); // pass the plain value, not the expression
+```
+
+Confirmed by reproducing both ways side-by-side against the identical store setup — inline
+crashed, snapshotted-first didn't. Any test that renders a component with a prop computed
+directly from a mutable store's getter (not just `paneLayoutStore`) should snapshot first if the
+component being mounted (or anything it renders) can itself write back to that same store during
+mount.
+
+
+## `<Show when={x} keyed>` Rejects A Zero-Arg Render Callback At Compile Time — And That's The Point
+
+`<Show when={rowKey(row())} keyed>{() => <Child .../>}</Show>` fails to type-check with a
+confusing overload-resolution error ("Type '() => JSX.Element' is not assignable to type
+'Element'") if the callback ignores the keyed value. Solid's own types define
+`RequiredParameter<T> = T extends () => unknown ? never : T`, so a zero-arg function's type
+collapses to `never`, leaving only the plain non-function `JSX.Element` overload — which the
+literal function value obviously isn't. This is deliberate: `keyed` mode exists specifically so
+the callback receives the resolved value directly (not an `Accessor`), and a callback that
+throws that value away is almost certainly a bug (why key on it if you don't use it?), so the
+type system won't let you write one. Fix by naming the parameter, even if genuinely unused
+(`{(_key) => <Child .../>}`) — found while building the Session Diff virtualized-list fix
+(`SessionDiffList.tsx`/`DiffFileList.tsx`, 2026-09-29), where `<Show keyed>` replaced a `<For>`
+that was silently reusing stale row objects; `vitest` never caught either the original bug or
+this follow-on type error, since it doesn't type-check — a full `tsc --noEmit` did.
+
+
+## solid-js Signals Inside `vi.mock` Factories
+
+When a mocked hook (e.g. `useAgentDetection`) needs to expose a signal a test can flip **after** the component has mounted (simulating async data resolving), do not create that signal via a plain top-level `import { createSignal } from "solid-js"` referenced inside the `vi.mock(...)` factory. It silently resolves to a *different* solid-js module instance than the one `<For>`/the component's own reactive tracking uses under this project's Vite/Vitest config — the signal's value updates fine, but `<For>` never re-renders, because its tracking context lives in the other instance's module-scope globals. Confirmed empirically while writing the headless-agent `<select>` regression tests (`ProvidersTab.test.tsx`, `SmartPromptsTab.headlessAgent.test.tsx`, 2026-08-28): a first attempt using a top-level import produced a signal that updated but triggered zero re-renders.
+
+Fix: create the signal *inside* the `vi.mock` factory via a dynamic `await import("solid-js")` (the factory can be async), which resolves through the same module cache the rest of the app uses:
+
+```ts
+const detectionBox = vi.hoisted(() => ({
+  availableAgentTypes: (): string[] => [],
+  setAvailableAgentTypes: (_types: string[]) => {},
+}));
+
+vi.mock("../../hooks/useAgentDetection", async () => {
+  const { createSignal } = await import("solid-js"); // NOT a top-level import
+  const [availableAgentTypes, setAvailableAgentTypes] = createSignal<string[]>([]);
+  detectionBox.availableAgentTypes = availableAgentTypes;
+  detectionBox.setAvailableAgentTypes = setAvailableAgentTypes;
+  return { useAgentDetection: () => ({ /* ... */ }) };
+});
+```
+
+Use `vi.hoisted()` for the mutable box itself, not a plain module-scope `let` — `vi.mock` calls (and their factories' effects) are hoisted above other top-level statements in the file, so a plain `let` the factory assigns into hits a TDZ `ReferenceError`.
+
+## `t()` Interpolation and `$`-Pattern Injection
+
+`src/i18n/t.ts`'s `t(key, fallback, params)` interpolates via `str.replace(new RegExp(...), v)` — passing the raw dynamic value `v` as `String.replace`'s **replacement** argument, not as literal text. Per the JS spec, a replacement string containing `$&`, `$1`, `$$`, etc. is reinterpreted as a special pattern (matched substring, capture group, literal `$`) rather than inserted verbatim. Any call site that interpolates a value which can contain `$` and isn't fully controlled by us (a git branch name, a file path, free-form user text) can render garbled output — e.g. a branch named `foo$&bar` would have `$&` replaced by the matched `{placeholder}` text instead of appearing literally. Fixed (2026-09-10, found via code review while adding branch-name interpolation to the Create Worktree dialog's stale-setting warning) by escaping `$` → `$$` in each `v` before calling `.replace()`. This fix lives in the single shared helper, so it protects every existing and future `t(..., {...})` call site — no call site itself needs to change.
+
+## PTY Command Injection
+
+NEVER write text + `\r` directly to a PTY. Always use `sendCommand()` from `src/utils/sendCommand.ts` — it handles agent-specific Enter semantics (Ink raw mode needs split writes). This applies to dictation, command palette, suggested actions, and any other feature that sends input to a terminal.
+
+## Logging
+
+Use `appLogger` from `src/stores/appLogger.ts` — never `console.log/warn/error`. Check app logs via `GET http://localhost:9876/logs` (supports `?level=`, `?source=`, `?limit=` filters) before asking Boss for logs.
+
+## Frontend performance instrumentation (`perfDebug`)
+
+The frontend counterpart to backend Diagnostics. **One master flag gates ALL frontend perf/debug instrumentation** — `isPerfDebug()` from `src/utils/perfDebug.ts`.
+
+- **Default = `import.meta.env.DEV`** → active in dev, **dormant in release**. We ship a quiet binary; we never distribute hyper-logging.
+- **Runtime-toggleable, NOT tree-shaken** — a release build can be woken up to diagnose a field issue:
+  ```js
+  window.__TUIC__.setPerfDebug(true)   // persists to localStorage; starts the freeze detector
+  window.__TUIC__.perfDebug()          // read current state
+  ```
+  (Run via the WebView devtools / MCP `debug invoke_js`. After toggling on in a build that started dormant, the freeze detector is (re)started automatically.)
+- **Dormant cost:** a single boolean read at each entry point — negligible even per-frame.
+
+**What it gates** (all in `src/utils/`): `markPerf`, `timeSync`, `timeBatch` (`perfTrace.ts`), `noteFrameRequest` (frame-burst detector), and `startFreezeDetector` (`freezeDetector.ts`). `frameTiming.ts` is a **heavy opt-in sub-harness subordinate to this master gate** — it has its own local enable (`__terminalFrameTiming.enable(true)`), but cannot record unless `perfDebug` is also on.
+
+**RULE for all future perf/debug instrumentation:** gate it on `isPerfDebug()` (or route it through a `perfTrace` helper, which already does). **Never ship always-on perf logging or per-frame timing.** Do not invent a second on/off flag — extend this one.
+
+**Reading the output** (only present when active): `appLogger.warn` lines like `SLOW <label>: <n>ms` (and `SLOW git.refreshBatch:<repo>: <n>ms (body Xms + flush Yms)` — body = our setState loop, flush = dependent effects/memos waking), plus `UI freeze: <n>ms main-thread block` carrying a `perfTrace` breadcrumb that names the culprit. Read via `GET http://localhost:9876/logs` (or `:9877` for a worktree build).
+
+## Worktree Automation Script Context (`TUIC_*`) — Frontend Side
+
+Backend mechanics (`ScriptContext::derive`, the setup-script/file-sync background
+chain, the pollable `worktree_setup_status`): see `src-tauri/AGENTS.md`'s
+"Worktree Automation Script Context" section. This is the frontend half — the
+Smart Prompts variable registry and the worktree-creation ordering fix that
+consumes that backend chain's completion event.
+
+**Smart Prompts' `{var}` context-variable list is single-sourced in
+`src/data/contextVariables.ts`** (name, description, group, `source` — who resolves it:
+Rust, frontend, or one of three host surfaces — plus `repoControlled`/`script` flags).
+It replaced four independently hand-maintained copies that had drifted (a stray
+undocumented `branch_name` variable, 11 missing entries in one list, two near-identical
+picker arrays). `src/__tests__/contextVariablesParity.test.ts` parses `prompt.rs`'s
+`ALL_VARS`/`resolve_single_var` and `script_env.rs`'s `ScriptContext::pairs` straight out
+of the Rust source and asserts the TS registry stays in sync with both — when you add a
+new rust-sourced variable, add it to `contextVariables.ts` first; the parity test will
+tell you if `prompt.rs` disagrees. A variable's `TUIC_*` script-env name is always
+`TUIC_` + the registry name uppercased — no separate naming step.
+
+**Smart Prompts variables must resolve against the *terminal's* tree, not just "the
+active repo."** `executeSmartPrompt` used to resolve `{branch}`/`{diff}`/etc. against
+`repositoriesStore.getActive()` (the last-focused repo) while the command it substitutes
+into runs in the active *terminal's* cwd — with a worktree tab focused, this could
+generate a commit message from the main checkout's diff and then commit it in the
+worktree. Fixed via `resolvePromptTreeIn`/`resolvePromptTree`
+(`src/utils/repoOwnership.ts`/`src/stores/repositories.ts`), which resolves the tree
+(worktree or repo root) that owns a path — falls back to the active-repo behavior when
+the terminal's cwd belongs to no registered repo. `resolveFrontendVars` still needs the
+**repo root** specifically (never a worktree path): `repositoriesStore.get(...)` is
+keyed by repo root, so passing a worktree path there silently drops every `pr_*`
+variable — carry repo-root and tree-path as two separate values, don't conflate them.
+
+**`GitPanel/ChangesTab.tsx`'s "Generate commit message" had the same shape of bug** — it
+called `executeSmartPrompt(prompt)` with no target override, so it inherited whatever
+`executeSmartPrompt` resolves against (the active terminal's tree) rather than
+`props.repoPath` — the specific repo/worktree *that GitPanel instance* is showing, which
+can differ from whichever repo is currently active/focused. This could generate a commit
+message from one repo's diff and commit it (via `doCommit`, which always uses
+`props.repoPath`) into another. Confirmed pre-existing via
+`git diff main..HEAD -- src/components/GitPanel/ChangesTab.tsx` (that file's only prior
+change on this branch was an unrelated indicators feature) before fixing it.
+
+**Fixed by giving `executeSmartPrompt` an optional third `targetPath` parameter** —
+when a caller supplies one (a real filesystem path, worktree or repo root, same shape as
+the active terminal's cwd), it's what `resolvePromptTreeIn` resolves against instead of
+the active terminal's cwd, for BOTH variable resolution and — since `executeHeadless`/
+`executeShell` independently derived their own execution cwd from
+`active?.cwd ?? repositoriesStore.getActive()?.path` — the actual directory a
+shell/headless prompt runs in. `ChangesTab.tsx` now passes its own `props.repoPath`
+(already the correct worktree-aware filesystem path — `GitPanel.tsx`'s `gitPath()`, not
+its `storeRepoPath`). Omitting `targetPath` (every other existing caller) is
+byte-for-byte the old behavior — nothing else needed to change.
+
+**The identical shape recurred one component over: `SmartButtonStrip.tsx` also takes a
+`repoPath` prop, used by five different callers (`GitHubPanel.tsx`, `PrSection.tsx`,
+`PrDetailPopover.tsx`, `BranchesTab.tsx`, and `ChangesTab.tsx`'s own commit-button strip,
+distinct from its direct `executeSmartPrompt` call above), and wasn't forwarding it
+either — fixed the same way, in the one shared component, so all five callers got the fix
+in a single change rather than five. If you add a sixth caller (or any new caller of
+`executeSmartPrompt` that is itself bound to a specific repo/worktree independent of
+terminal focus), pass its own path through `targetPath` rather than trusting the
+active-terminal fallback — grep for existing `repoPath`-prop components that call
+`executeSmartPrompt` before assuming this pattern is now fully closed out.
+
+**The setup-script/run-script ordering fix threads a real wait, not just documentation.**
+`createWorktreeCreationCoordinator.ts`'s `setupNewWorktree` used to `await
+runSetupScript(...)` inline before creating the terminal — an implicit ordering guarantee
+the background chain removed, so the Run Script could start concurrently with (or before)
+the Setup Script (e.g. `npm run dev` racing `npm install`). Restored via
+`armSetupScriptWaiter` (same file): a `listen()` on `worktree-setup-script-completed`
+opened BEFORE the create request (a fast chain can report before the response is
+processed), matched by `repoPath`+`branch`, armed only when `effective?.setupScript` is
+truthy, with a generous (20 min) safety-net timeout so a lost event (backend crash, SSE
+disconnect) can't hang worktree creation forever — it resolves either way, never rejects.
+Every caller of `createWorktree` arms one (dialog, quick-clone, auto-fix). A worktree the
+backend did NOT create through that chain (conflict assist) passes
+`{ runSetupScriptHere: true }` and still runs the script from the frontend.
+
+## Tab/Dialog Openers Bound To "The Active Repo" Must Resolve The Worktree First
+
+Any handler that opens a tab, dialog, or file-picker default path for "the current
+repo" and is reachable while a **worktree** tab is focused must resolve
+`gitOps.activeWorktreePath() || repositoriesStore.state.activeRepoPath` — never
+`repositoriesStore.state.activeRepoPath` alone. `activeRepoPath` is keyed by the main
+repo checkout root (`repositoriesStore` is keyed by repo root, not by worktree), so a
+handler that reads it directly always resolves to the main checkout even when a
+worktree tab has focus. `gitOps.activeWorktreePath()` (`useGitOperations.ts`) follows the
+workspace model: the active repo's `activeWorkspaceId` → `workspaces[id].worktreePath`, or
+the repo root for a workspace with no worktree.
+
+`useAppShortcutHandlers.ts`'s `openFile`/`openFolder`/`newFile` already get this right.
+`openSessionReview` and `toggleDiffScroll` (same file) didn't — Session Diff opened
+against the worktree's terminal, then queried Claude Code session transcripts for the
+**main repo's** path instead of the worktree's, so it correctly found zero sessions and
+showed "No Claude sessions found" even though the worktree had live sessions the
+sidebar could see fine (the sidebar resolves each terminal's own real `cwd` via a
+different, correct mechanism — `useAgentPolling.ts`). Fixed 2026-09-18 by matching the
+established `activeWorktreePath() || activeRepoPath` pattern; regression-tested in
+`src/__tests__/hooks/useAppShortcutHandlers.test.ts`.
+
+This is the third documented instance of "the active-repo/active-terminal fallback
+resolves to the wrong tree when a worktree is focused" (see also `executeSmartPrompt`'s
+`targetPath` and `SmartButtonStrip`'s `repoPath` forwarding in the section above, a different
+mechanism — `resolvePromptTreeIn`/`repoOwnership.ts` — for a different set of callers).
+Before adding a new handler that opens something scoped to "the current repo," check
+whether it needs `gitOps.activeWorktreePath()` first.
+
+## A Store Method Fed By a Backend Push Event Must Never Reuse The Same Write Path a Local User Action Uses, If That Path Echoes Back
+
+Found 2026-09-30 from a live report: a session's tab name (and its accent-color border) could
+flicker between two values on the order of 10k+ times/second, driving sustained high CPU.
+`terminalsStore.update()`'s `name`/`accentColor` echo already had an unchanged-value guard — but
+that guard only stops a *value repeating*, not two backend writes racing each other. The trigger:
+the backend can legitimately emit two events close together (e.g. two tmux `set-option ...
+*-border-style` calls, or an OSC title followed by the restore to the base name) — call them A
+then B. A listener that feeds both into the same `update()` a local rename/recolor uses echoes
+each change back (`set_session_name`/`set_session_accent_color`). Because A and B are different
+values, each hop looks like a genuine change to whichever side receives it next. On this tree
+`set_session_accent_color` re-emits every change, so the accent color can bounce forever;
+`set_session_name` emits `session-renamed` only once per real change (`AppState::rename_session_from_frontend`,
+so other windows/clients see a frontend rename live — dropped-items #22), so a name echo cannot loop
+on its own, but echoing it is still a redundant round trip that can briefly write a stale name back
+over a newer one.
+
+**The fix is not a better guard on the shared write path — it's a second, non-echoing path for
+backend-pushed events.** `applyBackendRename`/`applyBackendAccentColor` (`terminals.ts`) apply a
+`session-renamed`/`session-accent-color-changed` event via `update(id, data, { echo: false })`
+(the option the auto-close countdown's cosmetic "(5s)" name suffix already used). There is nothing
+to synchronize back: the event already IS the backend's authoritative state. `useAppInit.ts`'s two
+listeners call these instead of a plain `update()`. The frontend-originated paths (TabBar,
+`ApplicationOverlays.tsx`, `intentTitle.ts`) are unaffected — they still echo a real local rename.
+
+**The general rule: before wiring a `listen(EVENT)` handler to a store method that echoes any of
+its writes back to the backend, ask whether `EVENT` is itself backend-originated.** If it is, the
+handler needs its own non-echoing entry point (or an explicit `{ echo: false }` at the call
+site) — never the same method a local user action calls, no matter how good that method's own
+unchanged-value guard is: a guard comparing against "what the store currently holds" cannot tell
+a stale echo of its own prior write from a second, different backend write that arrived while the
+first echo was still in flight.
