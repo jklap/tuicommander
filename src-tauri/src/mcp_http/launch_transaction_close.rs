@@ -413,7 +413,10 @@ mod tests {
         );
         assert!(
             background_refusal(
-                Some(&["/tmp/tuicommander-agent-test-wf04".into()]),
+                Some(&[std::env::temp_dir()
+                    .join("tuicommander-agent-test-wf04")
+                    .to_string_lossy()
+                    .into_owned()]),
                 "worker"
             )
             .unwrap_err()

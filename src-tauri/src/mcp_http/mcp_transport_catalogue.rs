@@ -672,7 +672,8 @@ pub(super) fn agent_tool_definition(
 // reference description (main's text); only the walkthrough is gated on the
 // Prefer TUICommander flags (see [`agent_tool_definition`]).
 const AGENT_STEP_REGISTER: &str = "Managed PTYs auto-bind from $TUIC_SESSION. A headerless external caller calls register without tuic_session to receive an MCP-scoped UUID, or supplies an explicit stable UUID to reclaim it.";
-const AGENT_STEP_SPAWN: &str = "Spawn: spawn name=worker prompt=<task> [agent_type=codex|gemini|...] → {session_id, name}.";
+const AGENT_STEP_SPAWN: &str =
+    "Spawn: spawn name=worker prompt=<task> [agent_type=codex|gemini|...] → {session_id, name}.";
 const AGENT_STEP_WAIT: &str = "Wait: agent action=wait (new mail; omit since, the cursor is kept server-side) or session action=wait session_id=<id> until=idle|exited. Cheap blocking call — do NOT poll in a loop. Both cap at 300s: for work that runs longer, or across a reconnect, poll the spawn's task_id with agent action=task_get instead — the outcome is recorded even with nobody waiting.";
 const AGENT_STEP_SEND: &str = "Send: send to=<peer> message=<text> [urgency=normal|urgent|interrupt]. Normal is the default; use urgent when the recipient must change course before its next step. For normal/urgent mail the payload is never typed into the recipient's composer. Idle recipients may get a payload-free generic `agent action=inbox` wake; urgent adds a safe busy-composer notice.";
 const AGENT_STEP_LIFECYCLE: &str = "Lifecycle notifications carry state only. Every worker must report task output or blockers with send; use session output only if a child anomalously failed to send.";

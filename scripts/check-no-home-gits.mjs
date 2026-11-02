@@ -38,6 +38,13 @@ const ALLOWED = new Map([
 	["src-tauri/src/config.rs", "recognized_temp_roots: classifies historical ghost rows already in users' repositories.json"],
 	["src-tauri/tauri.conf.json", "asset-protocol scope ($HOME/** skips dot-dirs); a product decision"],
 	["scripts/check-no-home-gits.mjs", "this guard's own self-test fixtures"],
+	// DEFERRED (2026-11-02): upstream's typed workflow command adapters (#2512-5a42) default to the
+	// author's own orchestrator layout under ~/Gits. These are product runtime defaults, overridable
+	// (TUIC_WORKFLOW_ADAPTER_ROOT, RB_BUILD_FREEZE, BUILD_SLOT_DIR, TUIC_COORD_STATE) and never test
+	// scratch, so they are allow-listed here until upstream moves them off ~/Gits.
+	["src-tauri/src/workflows/command/executor.rs", "installed workflow policy adapters default to ~/Gits/personal/orchestrator/tools and ~/Gits/.tmp/BUILD_FREEZE; overridable"],
+	["src-tauri/src/workflows/command/fixtures/build/build-slot.sh", "upstream's build-slot adapter fixture keeps its ~/Gits defaults (BUILD_SLOT_DIR overrides)"],
+	["src-tauri/src/workflows/command/fixtures/coord-state.sh", "upstream's coordinator-state adapter fixture keeps its ~/Gits default (TUIC_COORD_STATE overrides)"],
 ]);
 
 const HOME_PATTERNS = [
