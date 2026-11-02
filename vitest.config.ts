@@ -96,11 +96,13 @@ export default defineConfig({
       // Floors below are each value minus one point, rounded down. Since 2026-10-29
       // `make check` (and scripts/check-gate.sh) enforces them: its single Vitest
       // run is `vitest run --coverage`.
+      // Re-measured 2026-11-02 after the rebase onto main 9f6af42b13 (2.0.0): lines 87.11%, statements
+      // 85.24%, functions 85.57%, branches 77.76%; each floor is the value minus one point, rounded down.
       thresholds: {
-        lines: 85,
-        functions: 83,
-        branches: 75,
-        statements: 83,
+        lines: 86,
+        functions: 84,
+        branches: 76,
+        statements: 84,
       },
     },
   },
