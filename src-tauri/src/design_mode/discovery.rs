@@ -177,17 +177,42 @@ fn attributed_candidates(
 #[cfg(unix)]
 async fn live_candidates(roots: &[PathBuf]) -> Result<Vec<Value>, String> {
     let listing = command("lsof", &["-nP", "-iTCP", "-sTCP:LISTEN", "-Fpcn"]).await?;
-    let ids = listeners(&listing)
+    let pids = listeners(&listing)
         .iter()
-        .map(|listener| listener.pid.to_string())
-        .collect::<Vec<_>>()
-        .join(",");
-    if !ids.is_empty() {
+        .map(|listener| listener.pid)
+        .collect::<Vec<_>>();
+    if !pids.is_empty() {
+        let ids = pids
+            .iter()
+            .map(u32::to_string)
+            .collect::<Vec<_>>()
+            .join(",");
         let mut cwds = command("lsof", &["-a", "-p", &ids, "-d", "cwd", "-Fn"]).await?;
-        let commands = command("ps", &["-p", &ids, "-o", "pid=,command="]).await?;
+        // Native process list, never `ps`: sandboxed hosts refuse to exec it, which used to
+        // fail the whole discovery (and drop the configured dev-server URL with it).
+        let commands = tokio::task::spawn_blocking(move || process_commands(&pids))
+            .await
+            .map_err(|e| e.to_string())??;
         return Ok(attributed_candidates(&listing, &mut cwds, &commands, roots));
     }
     Ok(Vec::new())
+}
+
+/// `pid argv...` lines, the shape `ps -o pid=,command=` printed, for the given processes.
+/// A process whose arguments cannot be read (another user's) contributes its short name only.
+#[cfg(unix)]
+fn process_commands(pids: &[u32]) -> Result<String, String> {
+    let processes = tuic_core::process_info::snapshot(true)
+        .ok_or("process list unavailable on this platform")?;
+    let mut out = String::new();
+    for process in processes.iter().filter(|p| pids.contains(&p.pid)) {
+        let command = match &process.argv {
+            Ok(argv) if !argv.is_empty() => argv.join(" "),
+            _ => process.comm.clone(),
+        };
+        out.push_str(&format!("{} {command}\n", process.pid));
+    }
+    Ok(out)
 }
 
 /// Only trusted TUIC settings supply scripts; .tuic.json cannot silently execute code.

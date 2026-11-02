@@ -321,10 +321,8 @@ pub(crate) fn close_workflow_agent(
             }
         }
         let processes = crate::pty::process_tree_snapshot().ok_or("process inventory unknown")?;
-        let commands = processes
-            .iter()
-            .map(|p| p.command.clone())
-            .collect::<Vec<_>>();
+        let commands = crate::pty::runner_inventory_commands(&processes)
+            .ok_or("process argv inventory unknown; no stop authorized")?;
         background_refusal(Some(&commands), &binding.session_id)?;
         if let Some(acp) = &binding.acp {
             acp_refusal(state, &record, acp, &processes)?;

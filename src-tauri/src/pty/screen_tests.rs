@@ -2586,3 +2586,34 @@ fn cctitle_and_ccend_payloads_drop_control_characters() {
         "plain title"
     );
 }
+
+/// Catches: another user's process (root's, always on the machine) making every
+/// "is the background runner alive" check read "inventory unknown", while a process in
+/// TUIC's own subtree with unreadable argv must still make it unknown.
+#[cfg(not(windows))]
+#[test]
+fn runner_inventory_skips_foreign_unreadable_processes_but_not_own_descendants() {
+    let own = std::process::id();
+    let entry = |pid: u32, parent_pid: u32, command: &str, argv_unknown: bool| ProcessTreeEntry {
+        pid,
+        parent_pid,
+        name: command.split(' ').next().unwrap_or_default().to_owned(),
+        command: command.to_owned(),
+        age_seconds: Some(5),
+        argv_unknown,
+    };
+    let foreign = entry(1, 0, "", true);
+    let ours = entry(own, 1, "tuic", false);
+    let child = entry(own + 100_000, own, "sh -c sleep", false);
+
+    let commands = runner_inventory_commands(&[foreign.clone(), ours.clone(), child.clone()])
+        .expect("a foreign unreadable process cannot be this session's runner");
+    assert_eq!(commands, ["tuic", "sh -c sleep"]);
+
+    let unreadable_grandchild = entry(own + 100_001, own + 100_000, "", true);
+    assert_eq!(
+        runner_inventory_commands(&[foreign, ours, child, unreadable_grandchild]),
+        None,
+        "an unreadable descendant could be the runner"
+    );
+}

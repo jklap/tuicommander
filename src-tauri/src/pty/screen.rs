@@ -523,6 +523,43 @@ pub(crate) fn process_tree_snapshot() -> Option<Vec<ProcessTreeEntry>> {
     )
 }
 
+/// Commands for a "is this session's background runner still alive" check, or `None` when the
+/// inventory cannot answer.
+///
+/// The native snapshot lists every process on the machine, and another user's (root's, always
+/// present on macOS) have unreadable argv: an empty `command` with `argv_unknown`. Such a process
+/// cannot be this session's runner, so it is skipped; treating it as "inventory unknown" would
+/// refuse every close. An unreadable process in TUIC's own subtree CAN be the runner, so that
+/// one makes the inventory unknown. Windows entries never carry argv and never set the flag:
+/// their empty commands pass through and keep the caller's established refusal.
+pub(crate) fn runner_inventory_commands(processes: &[ProcessTreeEntry]) -> Option<Vec<String>> {
+    let mut subtree = std::collections::HashSet::from([std::process::id()]);
+    loop {
+        let before = subtree.len();
+        for process in processes {
+            if subtree.contains(&process.parent_pid) {
+                subtree.insert(process.pid);
+            }
+        }
+        if subtree.len() == before {
+            break;
+        }
+    }
+    if processes
+        .iter()
+        .any(|process| process.argv_unknown && subtree.contains(&process.pid))
+    {
+        return None;
+    }
+    Some(
+        processes
+            .iter()
+            .filter(|process| !process.argv_unknown)
+            .map(|process| process.command.clone())
+            .collect(),
+    )
+}
+
 /// Why a native snapshot was not enough on its own.
 #[cfg(not(windows))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
