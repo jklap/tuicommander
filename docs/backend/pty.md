@@ -784,7 +784,7 @@ implement the protocol itself.
   Windows only closes its handle (per spec). **The
   Windows `t=s` path is written against documented Win32 semantics but
   has not been compiled or run on Windows** (this repo is developed on
-  macOS/Linux) — see `to-test.md`.
+  macOS/Linux).
 - **Raw pixel formats and length**: `f=24`/`f=32` payloads are trimmed to
   exactly `width_px * height_px * channels` bytes regardless of medium — a
   page-rounded `t=s` segment (observed on macOS: `fstat` can report a
@@ -809,7 +809,7 @@ implement the protocol itself.
   client from streaming an unbounded *number* of `m=1` chunks and growing
   the pending buffer without limit before the app-level
   `MAX_SESSION_IMAGE_BYTES` cap ever ran (found by a 2026-09-11 security
-  review, see `to-test.md`).
+  review).
 - **Reservation and decompression size caps** (also from that review):
   `reserve_image_footprint` clamps requested rows to a hard
   `MAX_FOOTPRINT_ROWS = 10_000` — a crafted `r=`/iTerm2 `height=` with no
@@ -933,6 +933,10 @@ A debounce (`last_session_conflict_mark`) prevents creating multiple flag files 
 ## No Ctrl-U Prefix (Injected Text Is Appended)
 
 TUICommander never sends a Ctrl-U (`\x15`) before injected text — not from the frontend helpers, not from the backend's `write_agent_command_with_boundary` (MCP/HTTP `session submit`, inbox wakes, deferred prompts, queued commands, dictation). Injected text is **appended** to whatever the input line already holds; it never replaces it (user decision, dropped-items #16). Automated submits that must not merge into a half-typed line are refused up front instead (`partial_composer` in `agent_composer_rejection`; dictation's `Draft` hold; the deferred-prompt watchdog's half-typed-line refusal). Main used to clear the line with a Ctrl-U in its own write; never reintroduce one bundled into the text — Claude Code strips a Ctrl-U inside a long chunk as an invisible character and then refuses the Enter. `ShellFamily`/`get_session_shell_family` remain as an informational classification (it only ever decided whether to skip that prefix on cmd/PowerShell).
+
+The one place a Ctrl-U is still written is an explicit user operation, not an injection: the mobile
+composer's draft-to-queue transfer (`enqueue_owned_draft`, see "Mobile Queue" below) clears the live draft after
+moving it into the queue, and only when the caller's `expectedDraft` matches what the composer holds.
 
 Frontend input helpers route through `src/utils/sendCommand.ts`:
 - `sendCommand(fn, text)` — full command: text + `\r` (the `shellFamily` argument is accepted but no longer changes the bytes). Enter follows text by 200 ms for Codex and 50 ms for other known agents. If the type is unknown but a non-shell process owns the foreground, the frontend uses agent framing and the 200 ms gap; a failed foreground probe keeps shell framing and delays Enter. Codex suppresses Enter for 120 ms after a paste burst.
@@ -1279,8 +1283,8 @@ empty screens fail closed. Other agents keep their tracked-editor gate.
 Dropping phantom tracking without Ctrl-U is not a safe substitute: the next
 payload could append to an unpainted real draft. Recovery therefore does not
 write anything without composer paint evidence. The normal managed submission
-may send its existing Ctrl-U prefix only after the shared empty-composer claim;
-recovery itself never sends Ctrl-U. In the worst case, one unpainted character
+waits for the shared empty-composer claim; neither it nor recovery sends a Ctrl-U
+(injected text is appended). In the worst case, one unpainted character
 plus any number of cursor/title updates still blocks all managed payload bytes.
 A genuine discard that produces no visible composer-row change also stays
 blocked rather than risking a real draft.

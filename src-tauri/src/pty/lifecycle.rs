@@ -798,11 +798,11 @@ pub(crate) fn resolve_shell(override_shell: Option<String>) -> String {
 
 /// Which family of shell is running inside a PTY.
 ///
-/// Used by the frontend to decide whether control characters like Ctrl-U are
-/// honoured (POSIX readline) or echoed literally (`cmd.exe`, PowerShell).
-/// Classifying by the shell command rather than by host OS is the whole point
-/// of story 1274-2e38: Git Bash, Cygwin, MSYS and WSL all run on Windows yet
-/// support Ctrl-U, so a host-OS check alone is wrong.
+/// Informational since TUIC stopped sending Ctrl-U (dropped-items #16): it says whether
+/// the shell has POSIX readline semantics or is a native Windows shell
+/// (`cmd.exe`, PowerShell). Classifying by the shell command rather than by host OS is the
+/// point of story 1274-2e38: Git Bash, Cygwin, MSYS and WSL all run on Windows yet behave
+/// like POSIX shells, so a host-OS check alone is wrong.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub(crate) enum ShellFamily {
@@ -810,12 +810,10 @@ pub(crate) enum ShellFamily {
     /// and friends — including WSL (spawns a Linux shell) and Git Bash /
     /// Cygwin / MSYS (bash compiled for Windows).
     Posix,
-    /// Native Windows shell that treats Ctrl-U as a literal character:
-    /// cmd.exe, PowerShell, pwsh.
+    /// Native Windows shell without readline semantics: cmd.exe, PowerShell, pwsh.
     WindowsNative,
     /// Shell basename didn't match any known set. Callers should fall back to
-    /// the safer default for their host (on Windows: skip Ctrl-U; on
-    /// Unix: send it).
+    /// the safer default for their host.
     Unknown,
 }
 
@@ -5100,7 +5098,7 @@ pub(super) fn standby_tick(state: &AppState, now_ms: u64) {
         // Standby disabled: wake any sessions still parked (SIGSTOP'd)
         // from a previous non-zero timeout. Otherwise their stopped
         // badge persists until the user manually focuses each tab
-        // (to-test.md:236, story 095).
+        // (story 095).
         wake_all_standby(state);
         return;
     }

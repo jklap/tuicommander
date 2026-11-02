@@ -93,7 +93,7 @@ just-refreshed stable copy.
   errors — a stale installed copy must degrade gracefully against a future
   binary's new vocabulary.
 - Any Rust change here needs a `make dev` restart to take effect (this crate is
-  `src-tauri/**`, which never hot-reloads) — add a `to-test.md` entry per the
+  `src-tauri/**`, which never hot-reloads) — say what to re-check in your report, per
   `src-tauri/AGENTS.md`'s "Dev Hot Reload" section; do not open a story for it.
 - When fixing a stale doc claim inside this binary's own `--help` text or doc
   comments, add the assertion that would have caught it (see

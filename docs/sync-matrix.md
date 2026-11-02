@@ -201,7 +201,6 @@ When modifying `selfsigned.rs`'s SAN/cache-coverage logic, `get_local_ips`'s ent
 | `docs/user-guide/remote-access.md` | HTTPS section — sources of SAN coverage, how to connect by each entry type |
 | `docs/api/tauri-commands.md` | `get_local_ips` entry shape/description |
 | `docs/api/http-api.md` | `GET /system/local-ips` description |
-| `to-test.md` | Any new SAN source needs a manual cert-regeneration/connectivity check — this class of change can't be exercised by `cargo test` alone (real network/OS state) |
 | `plans/network-aware-remote-access.md` (main checkout only, gitignored) | Living plan for trusted-network gating / mDNS Tier B / custom hostname — update phase status as each ships |
 
 ### Diagnostics
@@ -690,7 +689,6 @@ When modifying `src-tauri/src/dictation/**`, `src-tauri/crates/tuic-dictation/**
 | `src/components/SettingsPanel/settingsSearchIndex.ts` | One row per new label, **in source order**: `extractSettings` reads the file, not the render tree |
 | `src/i18n/en.json` | Every `t("key", "double-quoted fallback")`, verbatim — `i18nKeyCollisions.test.ts` is the gate |
 | `docs/FEATURES.md` | Section 9 (Voice Dictation) |
-| `to-test.md` | Anything needing real audio, a real download or Boss's eye — a Rust change here never reaches his live `make dev` session |
 
 ### Session Diff Review
 When modifying transcript parsing, base resolution, revert mechanisms, or the review UI:
@@ -908,7 +906,6 @@ When adding, renaming or moving a docs page:
 | `CHANGELOG.md` | Release history (Keep a Changelog format) |
 | `AGENTS.md` | Project rules, compact reference |
 | `CONTRIBUTING.md` | Contributor guide (test requirements, PR quality gates) |
-| `to-test.md` | Manual testing tracker |
 | **plans/ (main checkout only, gitignored)** | |
 | `plans/docs/hook-lifecycle.html` | Native hook instrumentation reference — event→wire→feature pipeline, CLI surface, per-agent event tables, rationale. Despite the name matching `agent-signal-architecture.html`'s style, this one is NOT tracked at repo root — confirmed absent from `git ls-files` (2026-09-15); it only exists as a `plans/docs/`-directory reference doc in the main checkout, same as `plans/network-aware-remote-access.md` below |
 | **docs/** | |

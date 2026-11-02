@@ -563,7 +563,7 @@ Stop disarms the conversation, stopping capture and dropping replies. Backend
 speech state updates the displayed playback state. Ending hands-free clears the
 metadata, handlers and explicit playback state; iOS decides when its card disappears.
 Real iPhone lock-screen rendering, action delivery and media volume still need
-the device check in `to-test.md`.
+a check on the device.
 
 **A link outlives its socket, and that is the whole design.** The socket handler
 owns the `Arc` it registered and drops it on close, but the conversation holds
@@ -1731,7 +1731,7 @@ cannot: a 100 ms burst the canceller cannot see, above the activity floor but
 below `min_speech_ms`. It must not hush the reply.
 
 **Neither is a substitute for a real microphone and a real speaker in a room.**
-That probe is in `to-test.md`.
+That probe has to be run by hand.
 
 ### The eight states the conversation has to survive (820-21a5)
 

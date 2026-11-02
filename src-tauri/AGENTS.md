@@ -254,7 +254,7 @@ check-gate`), which detects and calls this out automatically.
 
 **Audio-device-enumeration tests can stall behind an un-granted macOS permission prompt — not
 a code bug.** Found 2026-09-30 (pre-rebase `wip` branch) running the full gate after an unrelated
-`to-test.md`-only change: `cargo nextest run --workspace` hit its 120 s hard kill (`slow-timeout`
+documentation-only change: `cargo nextest run --workspace` hit its 120 s hard kill (`slow-timeout`
 in `.config/nextest.toml`) on five tests that enumerate real CoreAudio devices through cpal. The
 first cpal query waits on a system permission dialog (main's `audio_enumeration::ENUMERATION_TIMEOUT`
 comment names the microphone prompt) when it was never granted for the process running the tests,
@@ -319,7 +319,7 @@ To debug the WebView in a release build, temporarily add `"devtools"` to the tau
 **Consequence for agents:** when your change touches Rust (`src-tauri/**`), it will NOT take effect in Boss's live `make dev` session. Do NOT assume it did. Instead:
 
 1. Make the Rust change as normal.
-2. **Add an item to `to-test.md`** describing what to check after the rebuild. Never open a story for this — a story whose criteria are all post-restart checks can never close itself, so they pile up. `to-test.md` is the only tracker for anything a human must verify.
+2. **State in your final report** what to check after the rebuild. Never open a story for this — a story whose criteria are all post-restart checks can never close itself, so they pile up.
 3. **Tell Boss explicitly** that the Rust change is staged but requires a manual `make dev` restart (or `make build` for release) to load, and to run it when he's ready to lose the current session.
 
 Never silently ship a Rust edit expecting hot reload — it will look like your fix did nothing.
@@ -745,8 +745,8 @@ time a primary-screen chunk synthesizes a dump `start` event — that event alon
 existing `fromTranscriptDump: true` `CommandBlock` — including a still-open `activeBlock` left
 unclosed by leaving transcript mode mid-turn — before adding the new one, so a repeat gesture
 never leaves stale blocks behind. A real shell/hook/heuristic block (`fromTranscriptDump: false`)
-is never touched by this prune. See `to-test.md`'s "§5/#11" entry for the manual check (this is a
-Rust change; needs a rebuild).
+is never touched by this prune. (This is a Rust change: it needs a rebuild, and the live check is
+still owed.)
 
 Frontend consumer rules (`rowAnchoredBlocks()`, `CommandOverview.tsx`'s
 `getCommandText`, subtracting `historyBase` from a stored block row): see
@@ -954,10 +954,10 @@ never carry the prompt) and hand the withheld prompt to the shared
   `#[tauri::command]` does not (this codebase has never tested one directly — no
   `tauri::test` scaffolding). It shares the fully-tested
   `should_defer_prompt_for_mcp_bind`/`spawn_deferred_prompt_delivery` with the other two
-  paths, plus a `to-test.md` item for a real UI spawn.
+  paths; a real UI spawn still needs a live check.
 
 **!! Known risk, mitigated 2026-10-08 (fixup B2.2): the deferred prompt could hang a spawn
-for 500+ s.** Pre-rebase wip's own to-test notes recorded real-task Claude spawns sitting idle
+for 500+ s.** Pre-rebase wip's own manual-test notes recorded real-task Claude spawns sitting idle
 for minutes on this path: the forced `PEER_MAIL_WAKE` write could land before the TUI was ready
 (or inside its trust dialog), `note_submitted_input` still recorded it as a submitted turn (a
 Protocol-rank busy latch held until `PROTOCOL_STALE_TIMEOUT`), and nothing retried. Also, the
@@ -970,7 +970,7 @@ a `DEFERRED_PROMPT_WATCHDOG_MS` (20 s) watchdog types the prompt itself
 message is still unread — claiming it out of the inbox first (`take_unread_agent_message`) so it is
 never delivered twice, and refusing (message kept) over a draft or an open dialog. The task holds
 no per-session map entry. Do not remove the watchdog without replacing it with an equivalent
-"did a turn start?" check; see the to-test.md entry for the live verification still owed.
+"did a turn start?" check; the live verification of this path is still owed.
 
 The inline deferred-delivery logic is `pub(crate) fn spawn_deferred_prompt_delivery`
 (`mcp_transport_session_agent.rs`, next to `wait_for_mcp_identity_bound`) — all three spawn paths call the

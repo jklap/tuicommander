@@ -1701,7 +1701,7 @@ pub(crate) fn agent_submission_ack_kind(state: &AppState, session_id: &str) -> &
 /// the same failure while fixing opencode and could NOT be verified: none of those three
 /// binaries is installed on this machine, and an adapter written from documentation
 /// instead of a live capture is how grok first shipped green tests over a UI that stayed
-/// stuck BUSY. They are tracked in `to-test.md`; give each one an adapter only after
+/// stuck BUSY. Give each one an adapter only after
 /// capturing its real screens. **goose left this list on 2026-09-07** — it was installed,
 /// captured live at 1.49.0, and now has `detect_goose_screen_activity`.
 ///

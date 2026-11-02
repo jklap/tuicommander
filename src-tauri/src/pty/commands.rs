@@ -489,9 +489,9 @@ pub(crate) fn get_shell_state(
 }
 
 /// Return the classified shell family for a PTY session.
-/// Lets the frontend pick the correct control sequences (e.g. Ctrl-U as
-/// line-kill for POSIX readline vs. literal-char on cmd.exe/PowerShell)
-/// without re-deriving the classification on every keystroke.
+/// Informational: no Ctrl-U is sent before injected text any more (dropped-items #16), so
+/// the classification no longer picks control sequences. It remains for callers that need
+/// to know whether a PTY runs a POSIX-readline shell or a native Windows shell.
 #[cfg(feature = "desktop")]
 #[tauri::command]
 pub(crate) fn get_session_shell_family(

@@ -466,8 +466,7 @@ iTerm2's own scripts use.
 The frontend renders these inline, on their own canvas layer above the text
 but below the cursor/selection — see `docs/frontend/terminal-features.md`'s
 "Inline Images" section for how, and its documented gaps (Kitty `z<0`
-placements, and mpv/blackcat's raw pixel formats, both deferred — see
-`to-test.md`).
+placements, and mpv/blackcat's raw pixel formats, both deferred).
 
 ## System Commands
 
