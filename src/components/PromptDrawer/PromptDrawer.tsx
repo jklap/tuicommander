@@ -667,7 +667,7 @@ const PromptEditor: Component<PromptEditorProps> = (props) => {
 					createdAt: 0,
 					updatedAt: 0,
 					executionMode: "inject",
-					injectTarget: "compose",
+					injectTarget: "auto",
 					autoExecute: false,
 				},
 	);
@@ -736,6 +736,7 @@ const PromptEditor: Component<PromptEditorProps> = (props) => {
 					</p>
 				</Show>
 				<SmartPromptEditor
+					autoFocusName
 					prompt={draft}
 					title={props.prompt ? "Edit Prompt" : "New Prompt"}
 					headlessAgents={headlessAgents()}

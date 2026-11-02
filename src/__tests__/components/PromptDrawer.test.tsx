@@ -105,7 +105,8 @@ function createPromptThroughEditor(
 		const checkbox = container.querySelector('[role="switch"]') as HTMLInputElement;
 		expect(checkbox).toBeTruthy();
 		fireEvent.click(checkbox);
-		fireEvent.change(target, { target: { value: "compose" } });
+		// wip: editor-created prompts keep the adaptive target (Compose if open, else Terminal).
+		fireEvent.change(target, { target: { value: "auto" } });
 	}
 
 	fireEvent.click(buttonByText(container, "Save"));
@@ -167,7 +168,7 @@ describe("PromptDrawer auto-execute", () => {
 	it("renders prompt controls without invented guidance", () => {
 		const view = render(() => <PromptDrawer />);
 		fireEvent.click(buttonByText(view.container, "+ New Prompt"));
-		expect(view.getByLabelText("Target")).toHaveValue("compose");
+		expect(view.getByLabelText("Target")).toHaveValue("auto");
 		expect(view.container.textContent).not.toContain("Uncheck to review before sending");
 		const mode = Array.from(view.container.querySelectorAll("select")).find((select) =>
 			Array.from(select.options).some((option) => option.value === "api"),
@@ -193,7 +194,7 @@ describe("PromptDrawer auto-execute", () => {
 		]) {
 			expect(view.getByLabelText(label)).toHaveAttribute("type", "checkbox");
 		}
-		expect(view.getByLabelText("Target")).toHaveValue("compose");
+		expect(view.getByLabelText("Target")).toHaveValue("auto");
 		fireEvent.change(view.getByLabelText("Target"), { target: { value: "terminal" } });
 		expect(view.getByRole("switch", { name: "Send immediately" })).toBeTruthy();
 	});

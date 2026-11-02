@@ -6,6 +6,7 @@ import { chatViewStore } from "../../stores/chatView";
 import { toastsStore } from "../../stores/toasts";
 import { HttpRpcError, rpc } from "../../transport";
 import { spacedUrlPaste } from "../../utils/pastedUrl";
+import { randomId } from "../../utils/randomId";
 import { sendCommand, waitForAgentEnterGap } from "../../utils/sendCommand";
 import { sendNativeChoice } from "../../utils/sendNativeChoice";
 import { useBrowserDictation } from "../useBrowserDictation";
@@ -102,7 +103,7 @@ export function CommandInput(props: CommandInputProps) {
 			const result = await rpc<{ accepted: boolean; typed: boolean }>("enqueue_agent_command", {
 				sessionId,
 				text,
-				...(localChatDraft() ? { idempotencyKey: crypto.randomUUID() } : { expectedDraft: draft }),
+				...(localChatDraft() ? { idempotencyKey: randomId("") } : { expectedDraft: draft }),
 			});
 			if (!result.accepted) throw new Error("Queue was not accepted");
 			props.onQueued?.(sessionId);
@@ -415,7 +416,7 @@ export function CommandInput(props: CommandInputProps) {
 			try {
 				await parkChatDraft();
 				if (props.busy) {
-					await rpc("enqueue_agent_command", { sessionId, text, idempotencyKey: crypto.randomUUID() });
+					await rpc("enqueue_agent_command", { sessionId, text, idempotencyKey: randomId("") });
 					props.onQueued?.(sessionId);
 					void chatViewStore.refreshQueue(sessionId).catch(() => {});
 				} else {

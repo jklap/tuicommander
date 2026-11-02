@@ -90,7 +90,7 @@ const UNINDEXABLE: Record<string, { dynamic: number; orphans: number }> = {
 	streamdock: { dynamic: 1, orphans: 0 },
 	plugins: { dynamic: 1, orphans: 0 },
 	// Shared editor: runtime title and placement captions, plus eleven per-prompt fields.
-	"smart-prompts": { dynamic: 3, orphans: 11 },
+	"smart-prompts": { dynamic: 2, orphans: 11 },
 	// The per-agent "Native status signals", "Prevent alternate screen", and
 	// "Accept workspace trust for managed spawns" toggles sit in runtime-rendered
 	// cards and have no static scroll target; their static captions are orphans. Workspace trust appears only in the

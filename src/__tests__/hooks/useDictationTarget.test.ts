@@ -189,7 +189,7 @@ describe("dictation delivery target", () => {
 		await hook.handleDictationStop();
 		const payload = `\x1b[200~${claudeLongInput.sent}\x1b[201~`;
 		expect(write.mock.calls).toEqual(
-			(autoSend ? ["\x15", payload, "\r"] : [payload]).map((data) => ["long-dictation-session", data]),
+			(autoSend ? [payload, "\r"] : [payload]).map((data) => ["long-dictation-session", data]),
 		);
 	});
 

@@ -209,7 +209,7 @@ describe("link overlay during cached smooth scroll", () => {
 			sink.current?.(wire(top, ROWS));
 			await vi.advanceTimersByTimeAsync(32);
 			const canvas = view.container.querySelector('canvas[tabindex="0"]') as HTMLCanvasElement;
-			const overlay = contexts.get(view.container.querySelectorAll("canvas").item(2));
+			const overlay = contexts.get([...view.container.querySelectorAll("canvas")].at(-1)!);
 			expect(overlay?.lines.filter((line) => line.dashed)).toHaveLength(1);
 			canvas.dispatchEvent(new WheelEvent("wheel", { deltaY: delta, bubbles: true, cancelable: true }));
 			await vi.advanceTimersByTimeAsync(96);
@@ -242,7 +242,7 @@ describe("link overlay during cached smooth scroll", () => {
 			sink.current?.(wire(100, ROWS));
 			await vi.advanceTimersByTimeAsync(192);
 			const canvas = view.container.querySelector('canvas[tabindex="0"]') as HTMLCanvasElement;
-			const overlay = contexts.get(view.container.querySelectorAll("canvas").item(2));
+			const overlay = contexts.get([...view.container.querySelectorAll("canvas")].at(-1)!);
 			document.dispatchEvent(new MouseEvent("mousemove", { bubbles: true, clientX: 54, clientY: 40, metaKey: true }));
 			await vi.advanceTimersByTimeAsync(112);
 			expect(canvas.style.cursor).toBe("pointer");
@@ -280,7 +280,7 @@ it("retains wrapped link underlines across unrelated full-frame spinner redraws"
 		vi.useFakeTimers();
 		sink.current?.(wire(100, ROWS));
 		await vi.advanceTimersByTimeAsync(192);
-		const overlay = contexts.get(view.container.querySelectorAll("canvas").item(2));
+		const overlay = contexts.get([...view.container.querySelectorAll("canvas")].at(-1)!);
 		const underlines = () => overlay?.lines.filter((line) => line.dashed);
 		const verified = [...(underlines() ?? [])];
 		expect(new Set(verified.map((line) => line.y)).size).toBe(2);
@@ -317,7 +317,7 @@ it.each([2, 3])("withdraws all wrapped spans when only row %s is rewritten", asy
 		vi.useFakeTimers();
 		sink.current?.(wire(100, ROWS));
 		await vi.advanceTimersByTimeAsync(192);
-		const overlay = contexts.get(view.container.querySelectorAll("canvas").item(2));
+		const overlay = contexts.get([...view.container.querySelectorAll("canvas")].at(-1)!);
 		expect(overlay?.lines.filter((line) => line.dashed)).toHaveLength(2);
 		linkRemoved = true;
 		sink.current?.(wire(100, 1, false, row));
@@ -345,7 +345,7 @@ it("retains a verified file underline when another cell on the same row changes"
 		vi.useFakeTimers();
 		sink.current?.(wire(100, ROWS));
 		await vi.advanceTimersByTimeAsync(192);
-		const overlay = contexts.get(view.container.querySelectorAll("canvas").item(2));
+		const overlay = contexts.get([...view.container.querySelectorAll("canvas")].at(-1)!);
 		const verified = [...(overlay?.lines.filter((line) => line.dashed) ?? [])];
 		expect(verified).toHaveLength(1);
 		spinner = "o";

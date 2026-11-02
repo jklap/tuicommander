@@ -840,11 +840,12 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
 	{
 		tab: "dictation",
 		section: "Speech assets",
-		label: "Whisper Model",
+		label: "Whisper model",
 		labelKey: "dictation.modelLabel",
 		hint: "Choose a model. Larger models are more accurate but slower.",
 		hintKey: "dictation.modelHint",
 	},
+	{ tab: "dictation", section: "Speech assets", label: "Downloads", labelKey: "dictation.downloadsLabel" },
 	{
 		tab: "dictation",
 		section: "Speech assets",
@@ -853,9 +854,6 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
 		hint: "Record a test phrase and watch where your voice sits against the gates. Text stays in this panel — nothing is sent to a terminal.",
 		hintKey: "dictation.tuningHint",
 	},
-	{ tab: "dictation", section: "Speech assets", label: "Whisper model", labelKey: "dictation.modelLabel" },
-	{ tab: "dictation", section: "Speech assets", label: "Downloads", labelKey: "dictation.downloadsLabel" },
-	{ tab: "dictation", section: "Speech assets", label: "Voice tuning", labelKey: "dictation.tuningLabel" },
 	{ tab: "dictation", section: "Spoken replies", label: "Downloads", labelKey: "dictation.downloadsLabel" },
 	{
 		tab: "dictation",
@@ -878,6 +876,8 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
 		section: "Spoken replies",
 		label: "Speech command",
 		labelKey: "dictation.speechCommandLabel",
+		hint: "One argument per line, no shell. {out} is the WAV file the command must write; {text} and {voice} are optional (without {text}, the text arrives on stdin).",
+		hintKey: "dictation.speechCommandHint",
 		expert: true,
 		configKey: "dictation.speech_command",
 	},
@@ -1409,7 +1409,12 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
 	{ tab: "ai-chat", section: "Network and sandbox", label: "Network", hint: "Network access for new ego runs." },
 	{ tab: "ai-chat", section: "Agent and model", label: "Default model", labelKey: "providers.label.defaultModel" },
 	{ tab: "ai-chat", section: "Agent and model", label: "Provider catalogue" },
-	{ tab: "ai-chat", section: "Chat behavior", label: "Master prompt" },
+	{
+		tab: "ai-chat",
+		section: "Chat behavior",
+		label: "Master prompt",
+		hint: "Extra instructions for new AI Chat conversations. Added to the existing TUIC rules. Leave empty for no extra instructions. Maximum 8192 UTF-8 bytes.",
+	},
 	{ tab: "streamdock", section: "StreamDock M18" },
 	{ tab: "streamdock", section: "Pinned sessions" },
 	{

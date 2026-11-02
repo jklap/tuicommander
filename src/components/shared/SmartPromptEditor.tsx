@@ -1,4 +1,4 @@
-import { type Component, createMemo, createSignal, For, Show } from "solid-js";
+import { type Component, createMemo, createSignal, For, onCleanup, onMount, Show } from "solid-js";
 import { AGENT_TYPES, AGENTS, type AgentType } from "../../agents";
 import { repoControlledVarsInContent, variablesForPicker } from "../../data/contextVariables";
 import { ALL_SMART_PLACEMENTS, SMART_PLACEMENT_INFO } from "../../data/smartPlacementLabels";
@@ -77,10 +77,22 @@ export const SmartPromptEditor: Component<{
 	headlessAgents: AgentType[];
 	title?: string;
 	onReset?: () => void;
+	/** Focus the Name field when the editor mounts (the drawer dialog; Settings keeps focus where it was). */
+	autoFocusName?: boolean;
 }> = (props) => {
 	const isBuiltIn = () => !!props.prompt.builtIn;
 	const builtInDefault = () => BUILTIN_BY_ID.get(props.prompt.id);
 	let textareaRef: HTMLTextAreaElement | undefined;
+	let nameInputRef: HTMLInputElement | undefined;
+
+	// `autofocus` is inert on a node inserted after page load in some WebViews, so focus explicitly
+	// (CreateWorktreeDialog, RenameBranchDialog and BranchSwitcher do the same). setTimeout lets the
+	// dialog's own layout settle first.
+	onMount(() => {
+		if (!props.autoFocusName) return;
+		const focusTimer = setTimeout(() => nameInputRef?.focus(), 0);
+		onCleanup(() => clearTimeout(focusTimer));
+	});
 
 	const handleContentChange = (content: string) => {
 		props.onChange({ content });
@@ -143,6 +155,7 @@ export const SmartPromptEditor: Component<{
 							data-setting-id="prompts.prompts.{id}.label"
 							id={id}
 							aria-describedby={descriptionId()}
+							ref={nameInputRef}
 							type="text"
 							placeholder="My Prompt"
 							value={props.prompt.name}
@@ -181,7 +194,8 @@ export const SmartPromptEditor: Component<{
 							value={props.prompt.content}
 							onInput={(e) => handleContentChange(e.currentTarget.value)}
 							ref={textareaRef}
-							rows={6}
+							// rows alone sizes it: the control-geometry guard forbids a feature-CSS min-height.
+							rows={10}
 							placeholder="Enter your prompt text here..."
 						/>
 						<VariableDropdown onInsert={handleInsertVariable} />
