@@ -554,10 +554,10 @@ fn waiting_rule_does_not_end_turn_on_background_start() {
         for child in [false, true] {
             for mdkb in [false, true] {
                 let text = effective_text_with(&app, &agents, agent, child, mdkb);
-                // Keep the default playbook under 4 KiB, including MDKB and child scope.
-                if text.len() > 4096 {
+                // Keep the default playbook under 4.25 KiB, including MDKB and child scope.
+                if text.len() > 4352 {
                     failures.push(format!(
-                        "{agent} child={child} mdkb={mdkb}: launch text exceeds 4 KiB: {} bytes",
+                        "{agent} child={child} mdkb={mdkb}: launch text exceeds 4.25 KiB: {} bytes",
                         text.len()
                     ));
                 }

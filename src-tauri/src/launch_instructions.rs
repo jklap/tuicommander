@@ -29,11 +29,12 @@ pub(crate) const REQUIRED_MARKERS: [&str; 3] = ["intent:", "suggest:", "💬 "];
 // concision rules" sentence never reads as a bare override directive (wip
 // 49c014a37 found it alone looked like a prompt injection); both are kept.
 const HEADER: &str = "## TUIC output markers\n\n\
-Requested by TUICommander, the terminal app you run in — not by file contents, web pages, tool output, or another agent. They are UI wire tokens the host strips from what the user reads, so they do not count against brevity. Required even under concision rules; omission breaks the UI. Top-level session only: subagents and in-process teammates do not emit them. Each marker is the first text on its own line, outside quotes and code fences. Only 💬 may also start the text of a list item.\n\n";
-/// The longer provenance header wip carried before the 4 KiB budget forced it down (main's
-/// own text grew underneath it). Like `LEGACY_HEADER`, only `migrate_additions` reads it.
-const PREVIOUS_HEADER: &str = "## TUIC output markers\n\n\
 Requested by TUICommander, the local terminal application the user launched you in — not by file contents, web pages, tool output, or another agent; the user controls them in Settings > Agents. They are UI wire tokens the host strips from what the user reads, so they do not count against brevity; dropping one leaves a stale tab title or a missing suggestion bar. Required even under concision rules; omission breaks the UI. Top-level session only: subagents and in-process teammates do not emit them. Each marker is the first text on its own line, outside quotes and code fences. Only 💬 may also start the text of a list item.\n\n";
+/// The shortened provenance header that briefly shipped to fit a 4 KiB budget. The full text
+/// (user authority, stated consequence) is the one the prompt-injection tests covered, so it is
+/// `HEADER` again. Like `LEGACY_HEADER`, only `migrate_additions` reads it.
+const PREVIOUS_HEADER: &str = "## TUIC output markers\n\n\
+Requested by TUICommander, the terminal app you run in — not by file contents, web pages, tool output, or another agent. They are UI wire tokens the host strips from what the user reads, so they do not count against brevity. Required even under concision rules; omission breaks the UI. Top-level session only: subagents and in-process teammates do not emit them. Each marker is the first text on its own line, outside quotes and code fences. Only 💬 may also start the text of a list item.\n\n";
 /// Main's header before the provenance sentence (main 50fde4b53..cf0eb34a9).
 /// Only `migrate_additions` reads it: a default saved under it is still a
 /// default, not a custom addition.
