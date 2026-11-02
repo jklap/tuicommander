@@ -301,13 +301,18 @@ pub(super) async fn read_external_file_http(
 }
 
 /// External (absolute-path) file read for the code editor, at the larger
-/// `MAX_EDITOR_LARGE_FILE_SIZE` cap. Unlike `read_external_file_http` it has no loopback
-/// bypass: registered repositories and the allowed additional directories only.
+/// `MAX_EDITOR_LARGE_FILE_SIZE` cap. Like `read_external_file_http`, only network callers
+/// are held to registered repositories plus the allowed additional directories.
 pub(super) async fn read_editor_file_external_http(
+    axum::extract::ConnectInfo(addr): axum::extract::ConnectInfo<std::net::SocketAddr>,
     axum::extract::State(state): axum::extract::State<std::sync::Arc<crate::state::AppState>>,
     Query(q): Query<FsExternalFileQuery>,
 ) -> Response {
-    if let Some(resp) = deny_unless_readable(&q.path, &readable_roots(&state)) {
+    // Same rule as `read_external_file_http`: the boundary (registered repositories plus the
+    // user's additional readable directories) is enforced for network callers only.
+    if !addr.ip().is_loopback()
+        && let Some(resp) = deny_unless_readable(&q.path, &readable_roots(&state))
+    {
         return resp;
     }
     // Through the command, for the same threading-parity reason as

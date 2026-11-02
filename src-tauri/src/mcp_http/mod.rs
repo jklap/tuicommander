@@ -6672,18 +6672,25 @@ mod tests {
         );
     }
 
-    /// A request as a network (non-loopback) client sends it: `read-external` only enforces its
-    /// repository / additional-readable-directory boundary for those, a loopback caller is the
+    /// A GET as the given peer sends it. The external-read routes enforce their repository /
+    /// additional-readable-directory boundary for remote peers only; a loopback peer is the
     /// desktop user's own browser.
-    fn network_get(uri: impl AsRef<str>) -> Request<Body> {
+    fn get_as(peer: [u8; 4], uri: impl AsRef<str>) -> Request<Body> {
         let mut request = Request::get(uri.as_ref()).body(Body::empty()).unwrap();
         request
             .extensions_mut()
-            .insert(ConnectInfo(std::net::SocketAddr::from((
-                [192, 168, 0, 1],
-                5000,
-            ))));
+            .insert(ConnectInfo(std::net::SocketAddr::from((peer, 5000))));
         request
+    }
+
+    /// A request from a remote (non-loopback) client.
+    fn remote_get(uri: impl AsRef<str>) -> Request<Body> {
+        get_as([192, 168, 0, 1], uri)
+    }
+
+    /// A request from the desktop user's own machine.
+    fn local_get(uri: impl AsRef<str>) -> Request<Body> {
+        get_as([127, 0, 0, 1], uri)
     }
 
     #[tokio::test]
@@ -6696,7 +6703,7 @@ mod tests {
         state.config.write().additional_readable_dirs = vec![dir.path().display().to_string()];
         let app = build_router(state, false, true);
         let resp = app
-            .oneshot(network_get(format!(
+            .oneshot(remote_get(format!(
                 "/fs/read-external?path={}",
                 file.display()
             )))
@@ -6717,7 +6724,7 @@ mod tests {
         state.config.write().additional_readable_dirs = vec![dir.path().display().to_string()];
         let app = build_router(state, false, true);
         let resp = app
-            .oneshot(network_get("/fs/read-external?path=/etc/passwd"))
+            .oneshot(remote_get("/fs/read-external?path=/etc/passwd"))
             .await
             .unwrap();
         assert_eq!(resp.status(), StatusCode::FORBIDDEN);
@@ -6737,7 +6744,7 @@ mod tests {
         state.config.write().additional_readable_dirs = vec![root.display().to_string()];
         let app = build_router(state, false, true);
         let resp = app
-            .oneshot(network_get(format!(
+            .oneshot(remote_get(format!(
                 "/fs/read-external?path={}",
                 sibling_file.display()
             )))
@@ -6760,14 +6767,63 @@ mod tests {
         state.config.write().additional_readable_dirs = vec![dir.path().display().to_string()];
         let app = build_router(state, false, true);
         let resp = app
-            .oneshot(
-                Request::get(format!("/fs/read-editor-external?path={}", file.display()))
-                    .body(Body::empty())
-                    .unwrap(),
-            )
+            .oneshot(remote_get(format!(
+                "/fs/read-editor-external?path={}",
+                file.display()
+            )))
             .await
             .unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    // Catches: additional_readable_dirs (or the repo boundary) being enforced on the desktop
+    // user's own browser, or failing to be enforced on a remote client, for either external read.
+    #[tokio::test]
+    async fn external_reads_enforce_the_boundary_for_remote_peers_only() {
+        let allowed = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let inside_file = allowed.path().join("plan.md");
+        let outside_file = outside.path().join("secret.md");
+        std::fs::write(&inside_file, "plan").unwrap();
+        std::fs::write(&outside_file, "secret").unwrap();
+
+        let state = test_state();
+        state.config.write().additional_readable_dirs = vec![allowed.path().display().to_string()];
+        let app = build_router(state, false, true);
+        for route in ["/fs/read-external", "/fs/read-editor-external"] {
+            let uri = |file: &std::path::Path| format!("{route}?path={}", file.display());
+            let status = |resp: Response<Body>| resp.status();
+            let remote_inside = app
+                .clone()
+                .oneshot(remote_get(uri(&inside_file)))
+                .await
+                .unwrap();
+            let remote_outside = app
+                .clone()
+                .oneshot(remote_get(uri(&outside_file)))
+                .await
+                .unwrap();
+            let local_outside = app
+                .clone()
+                .oneshot(local_get(uri(&outside_file)))
+                .await
+                .unwrap();
+            assert_eq!(
+                status(remote_inside),
+                StatusCode::OK,
+                "{route}: remote, allowed dir"
+            );
+            assert_eq!(
+                status(remote_outside),
+                StatusCode::FORBIDDEN,
+                "{route}: remote, outside every allowed root"
+            );
+            assert_eq!(
+                status(local_outside),
+                StatusCode::OK,
+                "{route}: loopback is unrestricted"
+            );
+        }
     }
 
     /// Critical regression guard: the write/copy/move/transfer routes must stay
@@ -6862,7 +6918,7 @@ mod tests {
         let state = test_state();
         let app = build_router(state, false, true);
         let resp = app
-            .oneshot(network_get("/fs/read-external?path=/etc/passwd"))
+            .oneshot(remote_get("/fs/read-external?path=/etc/passwd"))
             .await
             .unwrap();
         assert_eq!(resp.status(), StatusCode::FORBIDDEN);
@@ -6901,7 +6957,7 @@ mod tests {
         state.config.write().additional_readable_dirs = vec![];
         let app = build_router(state, false, true);
         let resp = app
-            .oneshot(network_get(format!(
+            .oneshot(remote_get(format!(
                 "/fs/read-external?path={}",
                 file.display()
             )))
@@ -6920,7 +6976,7 @@ mod tests {
         state.config.write().additional_readable_dirs = vec![String::new(), "  ".to_string()];
         let app = build_router(state, false, true);
         let resp = app
-            .oneshot(network_get("/fs/read-external?path=/etc/passwd"))
+            .oneshot(remote_get("/fs/read-external?path=/etc/passwd"))
             .await
             .unwrap();
         assert_eq!(

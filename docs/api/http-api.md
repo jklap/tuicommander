@@ -2351,7 +2351,7 @@ end-exclusive UTF-16 code-unit offsets within `line_text`. They can be passed
 directly to JavaScript `String.slice`, including when text before the match
 contains multibyte characters or non-BMP emoji.
 
-Sandboxed filesystem operations for the file manager panel. `/fs/read-external` (and `/fs/read-editor-external`) reads an absolute path gated to registered repository roots **plus** the user-configurable `additional_readable_dirs` list (`AppConfig`, default `["~/.claude/plans"]`) — not sandboxed to a single repo, but not arbitrary either. See `docs/backend/config.md` for the setting and `docs/backend/mcp-http.md`'s Security Model section for the gate's mechanics.
+Sandboxed filesystem operations for the file manager panel. `/fs/read-external` (and `/fs/read-editor-external`) reads an absolute path. For **network (non-loopback) clients** it is gated to registered repository roots **plus** the user-configurable `additional_readable_dirs` list (`AppConfig`, default `["~/.claude/plans"]`) — not sandboxed to a single repo, but not arbitrary either; a loopback caller (the desktop user's own browser) is not gated. See `docs/backend/config.md` for the setting and `docs/backend/mcp-http.md`'s Security Model section for the gate's mechanics.
 
 ## Agent Usage Endpoints
 
