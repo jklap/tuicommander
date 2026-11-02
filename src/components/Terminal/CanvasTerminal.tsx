@@ -90,6 +90,7 @@ import { createTransport, type TerminalTransport, toBinaryPayload } from "./canv
 import {
 	type CellMetrics,
 	type CursorShape,
+	cellText,
 	clampRowRangeToViewport,
 	createFrameStarvationWatchdog,
 	createHiddenAckThrottle,
@@ -1071,6 +1072,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 		// before applying marker layout, including each row of a wrapped hover.
 		const linkRowToViewport = (row: number) => absRowToViewport(frame.historySize - frame.displayOffset + row);
 		const visuals = currentLinkVisuals();
+		const maxRow = currentFrame?.screenRows || lastResizeRows;
 		octx.strokeStyle = cachedFgDefault;
 		octx.lineWidth = 1;
 
@@ -4639,7 +4641,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 					if (first < viewportTop || last >= viewportTop + currentFrame!.screenRows) {
 						const from = Math.max(historyBase, first - MARKER_LOOKBACK_ROWS);
 						const range = await fetchStyledRange(from, last - from + 1 + MARKER_LOOKBACK_ROWS);
-						if (!range || !range.rows.some(({ abs }) => abs === first) || !range.rows.some(({ abs }) => abs === last)) {
+						if (!range?.rows.some(({ abs }) => abs === first) || !range.rows.some(({ abs }) => abs === last)) {
 							throw new Error("selection rows are no longer retained");
 						}
 						copyRows = new Map(range.rows.map(({ abs, row }) => [abs, row]));

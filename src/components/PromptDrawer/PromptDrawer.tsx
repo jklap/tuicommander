@@ -13,8 +13,8 @@ import {
 } from "../../hooks/useSmartPrompts";
 import { t } from "../../i18n";
 import { appLogger } from "../../stores/appLogger";
-import { type PromptCategory, promptLibraryStore, type SavedPrompt } from "../../stores/promptLibrary";
 import { registerModal } from "../../stores/modalStack";
+import { type PromptCategory, promptLibraryStore, type SavedPrompt } from "../../stores/promptLibrary";
 import { terminalsStore } from "../../stores/terminals";
 import { toastsStore } from "../../stores/toasts";
 import { cx } from "../../utils";

@@ -729,59 +729,57 @@ export const RemoteAccessPanel: Component = () => {
 							? t("services.status.selfSignedGeneratedInactive", "Generated, not yet active")
 							: t("services.status.selfSignedNotGenerated", "Not yet generated");
 					return (
-						<>
-							<SectionCard title={t("services.heading.selfSignedHttps", "Self-Signed HTTPS")}>
-								<div class={s.group}>
-									<div class={s.row}>
-										<label class={s.label}>{t("services.label.selfSignedStatus", "Status")}</label>
-										<span class={s.value}>
-											<span class={cx(s.mcpStatusDot, ss.active && s.running)} />
-											{statusText}
-											<Button
-												data-non-setting="Regenerate the self-signed certificate; a runtime action, not configuration"
-												size="compact"
-												disabled={regeneratingCert()}
-												onClick={async () => {
-													setRegeneratingCert(true);
-													try {
-														await rpc("regenerate_self_signed_cert");
-														// Server restart is async server-side; give it a moment before polling status.
-														setTimeout(refresh, 500);
-													} catch (e) {
-														appLogger.error("tailscale", "Self-signed cert regenerate failed", e);
-													} finally {
-														setRegeneratingCert(false);
-													}
-												}}
-												title={t("services.action.regenerateSelfSignedTitle", "Regenerate self-signed certificate")}
-											>
-												{regeneratingCert()
-													? t("services.action.regenerating", "Regenerating…")
-													: t("services.action.regenerate", "Regenerate")}
-											</Button>
-										</span>
-									</div>
-									<Show when={ss.fingerprint_sha256}>
-										{(fingerprint) => (
-											<div class={s.row}>
-												<label class={s.label}>{t("services.label.selfSignedFingerprint", "Fingerprint")}</label>
-												<span class={s.value} style={{ "font-family": "monospace", "font-size": "0.85em" }}>
-													{fingerprint()
-														.match(/.{1,2}/g)
-														?.join(":")}
-												</span>
-											</div>
-										)}
-									</Show>
-									<p class={s.hint}>
-										{t(
-											"services.hint.selfSignedExplain",
-											"Without Tailscale HTTPS, TUICommander serves a self-signed certificate so remote/LAN access still gets HTTPS (needed for the clipboard and other browser features that require a secure context). Each device shows a one-time browser security warning the first time it connects — that's expected; accept it to continue. Plain http:// links now redirect to https:// automatically.",
-										)}
-									</p>
+						<SectionCard title={t("services.heading.selfSignedHttps", "Self-Signed HTTPS")}>
+							<div class={s.group}>
+								<div class={s.row}>
+									<label class={s.label}>{t("services.label.selfSignedStatus", "Status")}</label>
+									<span class={s.value}>
+										<span class={cx(s.mcpStatusDot, ss.active && s.running)} />
+										{statusText}
+										<Button
+											data-non-setting="Regenerate the self-signed certificate; a runtime action, not configuration"
+											size="compact"
+											disabled={regeneratingCert()}
+											onClick={async () => {
+												setRegeneratingCert(true);
+												try {
+													await rpc("regenerate_self_signed_cert");
+													// Server restart is async server-side; give it a moment before polling status.
+													setTimeout(refresh, 500);
+												} catch (e) {
+													appLogger.error("tailscale", "Self-signed cert regenerate failed", e);
+												} finally {
+													setRegeneratingCert(false);
+												}
+											}}
+											title={t("services.action.regenerateSelfSignedTitle", "Regenerate self-signed certificate")}
+										>
+											{regeneratingCert()
+												? t("services.action.regenerating", "Regenerating…")
+												: t("services.action.regenerate", "Regenerate")}
+										</Button>
+									</span>
 								</div>
-							</SectionCard>
-						</>
+								<Show when={ss.fingerprint_sha256}>
+									{(fingerprint) => (
+										<div class={s.row}>
+											<label class={s.label}>{t("services.label.selfSignedFingerprint", "Fingerprint")}</label>
+											<span class={s.value} style={{ "font-family": "monospace", "font-size": "0.85em" }}>
+												{fingerprint()
+													.match(/.{1,2}/g)
+													?.join(":")}
+											</span>
+										</div>
+									)}
+								</Show>
+								<p class={s.hint}>
+									{t(
+										"services.hint.selfSignedExplain",
+										"Without Tailscale HTTPS, TUICommander serves a self-signed certificate so remote/LAN access still gets HTTPS (needed for the clipboard and other browser features that require a secure context). Each device shows a one-time browser security warning the first time it connects — that's expected; accept it to continue. Plain http:// links now redirect to https:// automatically.",
+									)}
+								</p>
+							</div>
+						</SectionCard>
 					);
 				})()}
 			</Show>

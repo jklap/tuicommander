@@ -51,7 +51,6 @@ const emitEvent = (event: string, payload: unknown) => {
 
 const { FileBrowserPanel } = await import("../../../components/FileBrowserPanel/FileBrowserPanel");
 const { uiStore } = await import("../../../stores/ui");
-const { appLogger } = await import("../../../stores/appLogger");
 const { mdTabsStore } = await import("../../../stores/mdTabs");
 const { editorTabsStore } = await import("../../../stores/editorTabs");
 const { repositoriesStore } = await import("../../../stores/repositories");

@@ -3953,7 +3953,7 @@ fn managed_child_progress_instructions_route_to_parent_for_every_client() {
 /// Catches: the always-loaded progress description overriding child-specific instructions.
 #[test]
 fn managed_child_progress_tool_description_excludes_children_from_user_duty() {
-    let tools = native_tool_definitions();
+    let tools = native_tool_definitions(true, true);
     let tool = tools
         .as_array()
         .unwrap()
