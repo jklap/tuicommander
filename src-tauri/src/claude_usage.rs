@@ -1843,6 +1843,7 @@ mod tests {
 
     /// Catches API-key detection routing an OAuth session to default credentials.
     #[tokio::test]
+    #[allow(clippy::float_cmp)]
     async fn oauth_session_keeps_its_profile_credential_read() {
         let profile = profile_from_environment(&["CLAUDE_CONFIG_DIR=/fixture/oauth-2672".into()]);
         let (usage, stale) = session_quota_for_profile(
