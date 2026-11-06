@@ -38,6 +38,20 @@ class AgentTestPlanTests(unittest.TestCase):
         self.assertEqual(binary.stat() if binary.exists() else None, before,
                          "dry run must neither create nor replace an existing warm executable")
 
+    def test_plan_works_without_mbx(self):
+        # mbx is an optional Cargo cache: without it the launcher plans a plain-cargo build, and
+        # a caller-set CARGO_TARGET_DIR (which only mbx forbids) is not an error.
+        plan = self.plan(TUIC_NO_MBX="1")
+        self.assertFalse(plan["build_environment"]["mbx"])
+        self.assertIsNone(plan["build_environment"]["PATH_prefix"])
+        self.assertEqual(plan["cargo"][0], "cargo")
+        env = {**os.environ, "TUIC_NO_MBX": "1", "CARGO_TARGET_DIR": "/nonexistent/target"}
+        result = subprocess.run(
+            ["make", "--no-print-directory", "agent-test", "AGENT_TEST_DRY_RUN=1"],
+            cwd=ROOT, env=env, text=True, capture_output=True,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_runtime_temp_lives_under_the_callers_tmpdir(self):
         # A sandboxed run may only write under its own $TMPDIR, so the socket, pid file and stop
         # FIFO must be derived from it, never from a broader host-wide temp dir.
