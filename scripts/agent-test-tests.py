@@ -30,8 +30,12 @@ class AgentTestPlanTests(unittest.TestCase):
         launcher = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(launcher)
         conf = "abort_conf:true,prof:true,prof_active:false"
+        shim = str(Path.home() / "Library/Application Support/mbx/bin/cargo")
         with patch.dict(os.environ, {"AGENT_TEST_HEAP_PROFILE": "1", "_RJEM_MALLOC_CONF": conf}):
-            launch = launcher.plan("agent-test-2959-env-contract", "19879")
+            # Planned with mbx "installed": the plan records whether mbx is active, so a host
+            # without mbx would otherwise skip the doctor step this test exists to observe.
+            with patch.object(launcher.shutil, "which", lambda *_a, **_k: shim):
+                launch = launcher.plan("agent-test-2959-env-contract", "19879")
             self.assertEqual(launch["environment"]["_RJEM_MALLOC_CONF"], conf)
             def doctor(command, **kwargs):
                 self.assertEqual(command, ["mbx", "doctor"])
@@ -39,7 +43,6 @@ class AgentTestPlanTests(unittest.TestCase):
                 raise RuntimeError("toolchain boundary verified")
             # The macOS host, linked worktree and mbx shim are preconditions of start(), not the
             # boundary under test: provide them so the contract also runs on Linux CI.
-            shim = str(Path.home() / "Library/Application Support/mbx/bin/cargo")
             with tempfile.TemporaryDirectory() as worktree:
                 (Path(worktree) / ".git").write_text("gitdir: elsewhere\n")
                 with patch.object(launcher.sys, "platform", "darwin"), \
@@ -91,6 +94,20 @@ class AgentTestPlanTests(unittest.TestCase):
             plan = self.plan("AGENT_TEST_INSTANCE=agent-test-7", TUIC_AGENT_TEST_BUILD_ROOT=base)
             self.assertEqual(Path(plan["binary"]), Path(base) / digest / "agent-test-7" / "tuicommander-agent-test")
             self.assertFalse(Path(base, digest).exists(), "dry run must not create the build dir")
+
+    def test_plan_works_without_mbx(self):
+        # mbx is an optional Cargo cache: without it the launcher plans a plain-cargo build, and
+        # a caller-set CARGO_TARGET_DIR (which only mbx forbids) is not an error.
+        plan = self.plan(TUIC_NO_MBX="1")
+        self.assertFalse(plan["build_environment"]["mbx"])
+        self.assertIsNone(plan["build_environment"]["PATH_prefix"])
+        self.assertEqual(plan["cargo"][0], "cargo")
+        env = {**os.environ, "TUIC_NO_MBX": "1", "CARGO_TARGET_DIR": "/nonexistent/target"}
+        result = subprocess.run(
+            ["make", "--no-print-directory", "agent-test", "AGENT_TEST_DRY_RUN=1"],
+            cwd=ROOT, env=env, text=True, capture_output=True,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_runtime_temp_lives_under_the_callers_tmpdir(self):
         # A sandboxed run may only write under its own $TMPDIR, so the socket, pid file and stop
