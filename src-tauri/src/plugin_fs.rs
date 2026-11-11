@@ -1827,15 +1827,20 @@ mod tests {
         assert!(validate_within_home("").is_err());
     }
 
-    /// A directory under $HOME, because every plugin read is confined to it.
-    fn temp_dir_in_home() -> tempfile::TempDir {
-        tempfile::tempdir_in(dirs::home_dir().unwrap()).unwrap()
+    /// A fake $HOME under the test temp root, because every plugin read is
+    /// confined to $HOME. Never the real one: the agent sandbox (and any
+    /// locked-down machine) denies writes there, and a test must not litter it.
+    /// The guard holds `FS_TEST_LOCK` and clears the override on drop, so a
+    /// caller must not also take `FS_TEST_LOCK` itself.
+    fn temp_dir_in_home() -> (impl Drop, tempfile::TempDir) {
+        let dir = tempfile::tempdir().unwrap();
+        let guard = set_home_dir_override(dir.path().to_path_buf());
+        (guard, dir)
     }
 
     #[test]
     fn batch_read_returns_contents_in_request_order() {
-        let _guard = FS_TEST_LOCK.lock().unwrap();
-        let dir = temp_dir_in_home();
+        let (_guard, dir) = temp_dir_in_home();
         let paths: Vec<String> = (0..3)
             .map(|i| {
                 let p = dir.path().join(format!("{i}.md"));
@@ -1858,8 +1863,7 @@ mod tests {
 
     #[test]
     fn batch_read_reports_unreadable_entries_as_none() {
-        let _guard = FS_TEST_LOCK.lock().unwrap();
-        let dir = temp_dir_in_home();
+        let (_guard, dir) = temp_dir_in_home();
         let good = dir.path().join("good.md");
         std::fs::write(&good, "here").unwrap();
 
@@ -1895,8 +1899,7 @@ mod tests {
 
     #[test]
     fn batch_read_still_enforces_the_per_file_cap() {
-        let _guard = FS_TEST_LOCK.lock().unwrap();
-        let dir = temp_dir_in_home();
+        let (_guard, dir) = temp_dir_in_home();
         let big = dir.path().join("big.md");
         std::fs::write(&big, vec![b'x'; MAX_FILE_SIZE as usize + 1]).unwrap();
 
@@ -1911,8 +1914,7 @@ mod tests {
 
     #[test]
     fn batch_read_stops_spending_at_the_byte_budget() {
-        let _guard = FS_TEST_LOCK.lock().unwrap();
-        let dir = temp_dir_in_home();
+        let (_guard, dir) = temp_dir_in_home();
 
         // The per-file cap cannot bound a batch: MAX_BATCH_FILES files just
         // under it would retain three orders of magnitude more than any single
@@ -1957,8 +1959,7 @@ mod tests {
 
     #[test]
     fn binary_read_uses_the_requested_budget() {
-        let _guard = FS_TEST_LOCK.lock().unwrap();
-        let dir = temp_dir_in_home();
+        let (_guard, dir) = temp_dir_in_home();
         let file = dir.path().join("database.sqlite");
         std::fs::write(&file, b"SQLite format 3\0payload").unwrap();
 
