@@ -13803,6 +13803,11 @@ export const settingsCatalogue = {
       "reason": "Host-issued MCP settings access policy; only trusted UI can enable it."
     },
     {
+      "store": "app",
+      "path": "/shell_prompt_marker_timeout_ms",
+      "reason": "Hidden expert override for the OSC 133 prompt-marker gate; edit config.json."
+    },
+    {
       "store": "agents",
       "path": "/launch_additions_migrated",
       "reason": "One-time launch additions migration marker."

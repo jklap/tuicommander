@@ -1443,6 +1443,17 @@ pub(crate) struct AppConfig {
     #[serde(default)]
     #[schemars(extend("x-setting" = {"sensitivity":"private","apply":"live","effect":"Replaces the environment variables injected into every new terminal.","operations":["get","set"],"confirmationClass":"execution_authority"}, "x-atomic-list" = true))]
     pub(crate) custom_pty_env: Vec<CustomEnvVarEntry>,
+    /// Hidden expert override (no UI; edit `config.json`) for how long a freshly
+    /// spawned **zsh** pane may take to print its first OSC 133 prompt marker
+    /// before a caller that is about to type into it (tmux `materialize`, MCP/HTTP
+    /// session create) stops waiting. See `mcp_transport::wait_for_shell_prompt`
+    /// for why idle alone is not enough. `0` turns the marker requirement off and
+    /// restores the plain idle-only gate (5 s bound); any other value is clamped
+    /// to 1000..=60000 ms. Set it low (or `0`) only if shell integration is broken
+    /// for you: a line typed before the shell reaches its prompt can be truncated.
+    #[serde(default = "default_shell_prompt_marker_timeout_ms")]
+    #[schemars(extend("x-not-setting" = "Hidden expert override for the OSC 133 prompt-marker gate; edit config.json."))]
+    pub(crate) shell_prompt_marker_timeout_ms: u64,
     /// Diff comparison: ignore leading whitespace on each line (Session Diff
     /// Review and Branch Diff Scroll, via the shared `diff_options` engine —
     /// `git diff` has no native equivalent for leading-only whitespace).
@@ -1560,6 +1571,20 @@ pub(crate) fn sanitize_custom_pty_env(entries: Vec<CustomEnvVarEntry>) -> Vec<Cu
 /// platform's `execve`-family call can represent.
 pub(crate) fn valid_custom_env_value(value: &str) -> bool {
     !value.contains('\0')
+}
+
+/// Default for [`AppConfig::shell_prompt_marker_timeout_ms`].
+pub(crate) const DEFAULT_SHELL_PROMPT_MARKER_TIMEOUT_MS: u64 = 15_000;
+
+fn default_shell_prompt_marker_timeout_ms() -> u64 {
+    DEFAULT_SHELL_PROMPT_MARKER_TIMEOUT_MS
+}
+
+/// Raw configured value of [`AppConfig::shell_prompt_marker_timeout_ms`];
+/// interpretation (0 = off, clamping) lives in
+/// `mcp_transport_session_agent::prompt_gate_for_shell`.
+pub(crate) fn resolve_shell_prompt_marker_timeout_ms() -> u64 {
+    load_app_config().shell_prompt_marker_timeout_ms
 }
 
 /// The current global custom-PTY-env list, loaded fresh from disk. Called once per
@@ -1895,6 +1920,7 @@ impl Default for AppConfig {
             additional_readable_dirs: default_additional_readable_dirs(),
             inline_blame_enabled: true,
             custom_pty_env: Vec::new(),
+            shell_prompt_marker_timeout_ms: default_shell_prompt_marker_timeout_ms(),
             diff_ignore_leading_whitespace: false,
             diff_ignore_trailing_whitespace: false,
             diff_ignore_whitespace_amount: false,
@@ -7055,6 +7081,7 @@ mod tests {
                 key: "FOO".to_string(),
                 value: "bar".to_string(),
             }],
+            shell_prompt_marker_timeout_ms: 7_000,
             diff_ignore_leading_whitespace: true,
             diff_ignore_trailing_whitespace: true,
             diff_ignore_whitespace_amount: true,
@@ -7167,6 +7194,7 @@ mod tests {
             loaded.additional_readable_dirs,
             vec!["/tmp/plans".to_string()]
         );
+        assert_eq!(loaded.shell_prompt_marker_timeout_ms, 7_000);
         assert_eq!(
             loaded.custom_pty_env,
             vec![CustomEnvVarEntry {
@@ -7467,6 +7495,20 @@ mod tests {
             AppConfig::default().additional_readable_dirs,
             vec!["~/.claude/plans".to_string()]
         );
+    }
+
+    #[test]
+    fn default_shell_prompt_marker_timeout_is_fifteen_seconds() {
+        assert_eq!(AppConfig::default().shell_prompt_marker_timeout_ms, 15_000);
+        // A config.json written before the field existed must load with the default:
+        // round-trip the defaults through JSON with the key removed.
+        let mut json = serde_json::to_value(AppConfig::default()).unwrap();
+        json.as_object_mut()
+            .unwrap()
+            .remove("shell_prompt_marker_timeout_ms")
+            .expect("field is serialized");
+        let parsed: AppConfig = serde_json::from_value(json).unwrap();
+        assert_eq!(parsed.shell_prompt_marker_timeout_ms, 15_000);
     }
 
     #[test]

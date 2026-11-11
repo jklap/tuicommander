@@ -280,8 +280,21 @@ impl TuicBackend for IpcBackend {
 
     fn write(&self, session_id: &str, data: &str) -> Result<(), String> {
         let body = serde_json::json!({ "data": data });
-        let resp = crate::ipc::post(&format!("/sessions/{session_id}/write"), &body.to_string())
-            .map_err(|e| e.to_string())?;
+        // The server holds a line over ~1000 bytes back (up to
+        // `LINE_EDITOR_WAIT`, 10s) while the pane's shell is still in canonical
+        // mode — otherwise the tty truncates it. The default 3s socket timeout
+        // would report that wait as a failed write, so long writes get 15s.
+        let timeout = if data.len() >= 1000 {
+            std::time::Duration::from_secs(15)
+        } else {
+            std::time::Duration::from_secs(3)
+        };
+        let resp = crate::ipc::post_with_timeout(
+            &format!("/sessions/{session_id}/write"),
+            &body.to_string(),
+            timeout,
+        )
+        .map_err(|e| e.to_string())?;
         if !resp.is_success() {
             return Err(format!("Failed to send keys: {}", resp.body));
         }
@@ -376,7 +389,10 @@ impl TuicBackend for IpcBackend {
     ) -> Result<String, String> {
         let body = serde_json::json!({ "cwd": cwd, "origin_session_id": env_origin_session() });
         // The server-side handler blocks for its own shell-readiness gate,
-        // bounded at `SHELL_READINESS_TIMEOUT_MS` (5s, `mcp_transport.rs`) — the
+        // bounded at `SHELL_READINESS_TIMEOUT_MS` (5s) or, for a zsh pane that
+        // must also print its prompt marker, `shell_prompt_marker_timeout_ms`
+        // (15s by default, clamped to at most 60s by the hidden
+        // `shell_prompt_marker_timeout_ms` setting) — see `mcp_transport_session_agent.rs`. The
         // default 3s client socket timeout is shorter than that, so a
         // legitimately slow (not hung) shell would otherwise time out
         // client-side and report failure even though the server would have
@@ -390,7 +406,7 @@ impl TuicBackend for IpcBackend {
                 crate::urlencod(label)
             ),
             &body.to_string(),
-            std::time::Duration::from_secs(8),
+            std::time::Duration::from_secs(65),
         )
         .map_err(|e| e.to_string())?;
         if !resp.is_success() {

@@ -770,13 +770,7 @@ async fn materialize(
         // is cheap to call redundantly: `wait_for_shell_idle`'s own fast path
         // returns immediately once the shell is already idle, which is the
         // common case here (the pane was materialized a while ago).
-        apply_pane_readiness_gate(
-            state,
-            pane_id,
-            &existing,
-            crate::mcp_http::mcp_transport::SHELL_READINESS_TIMEOUT_MS,
-        )
-        .await;
+        apply_pane_readiness_gate(state, pane_id, &existing, &resolve_shell(None)).await;
         return Ok(existing);
     }
     // `respawn-pane` — the only caller that ever materializes `new-session`'s
@@ -803,6 +797,7 @@ async fn materialize(
         ));
     }
     let shell = resolve_shell(None);
+    let shell_for_gate = shell.clone();
     let state_clone = state.clone();
     let requested = super::session::RequestedIdentity {
         extra_env: if is_automated_swarm_label(label) {
@@ -857,13 +852,7 @@ async fn materialize(
     // (plans/p10k-wizard-hijack-agent-pane-spawn-race.md) at its source: raw
     // keystrokes landing during `.zshrc` sourcing used to get eaten by
     // Instant Prompt's own remediation menu instead of reaching the shell.
-    apply_pane_readiness_gate(
-        state,
-        pane_id,
-        &spawn,
-        crate::mcp_http::mcp_transport::SHELL_READINESS_TIMEOUT_MS,
-    )
-    .await;
+    apply_pane_readiness_gate(state, pane_id, &spawn, &shell_for_gate).await;
     Ok(spawn)
 }
 
@@ -880,12 +869,48 @@ async fn apply_pane_readiness_gate(
     state: &Arc<AppState>,
     pane_id: &str,
     session_id: &str,
-    timeout_ms: u64,
+    shell: &str,
 ) {
-    if !crate::mcp_http::mcp_transport::wait_for_shell_idle(state, session_id, timeout_ms).await {
+    // A zsh pane must also have printed an OSC 133 prompt marker: idle alone can
+    // come from the 500 ms silence fallback while direnv is still evaluating a
+    // slow `.envrc`, and the launch line typed into that window is truncated at
+    // the tty's 1024-byte canonical-mode limit. See `wait_for_shell_prompt`.
+    // `shell_prompt_marker_timeout_ms` (hidden, 0 = off) tunes or disables it.
+    let gate = crate::mcp_http::mcp_transport::configured_prompt_gate(
+        shell,
+        crate::mcp_http::mcp_transport::SHELL_READINESS_TIMEOUT_MS,
+    );
+    apply_pane_readiness_gate_bounded(
+        state,
+        pane_id,
+        session_id,
+        gate.timeout_ms,
+        gate.require_marker,
+    )
+    .await;
+}
+
+/// The gate body with its bound and strictness as parameters, so a test can
+/// exercise the fail-open and marker-required branches without a real wait.
+async fn apply_pane_readiness_gate_bounded(
+    state: &Arc<AppState>,
+    pane_id: &str,
+    session_id: &str,
+    timeout_ms: u64,
+    require_marker: bool,
+) {
+    if !crate::mcp_http::mcp_transport::wait_for_shell_prompt(
+        state,
+        session_id,
+        timeout_ms,
+        require_marker,
+    )
+    .await
+    {
         tracing::warn!(
             "materialize: pane {pane_id} (session {session_id}) never reached a ready shell \
-             prompt within {timeout_ms}ms — proceeding anyway rather than hanging pane creation"
+             prompt within {timeout_ms}ms (marker required: {require_marker}) — proceeding \
+             anyway rather than hanging pane creation"
         );
     }
 }
@@ -2209,7 +2234,7 @@ mod tests {
         // returns control, not an external bound saving it.
         tokio::time::timeout(
             std::time::Duration::from_millis(500),
-            apply_pane_readiness_gate(&state, "%0", "never-idle-pane", 50),
+            apply_pane_readiness_gate_bounded(&state, "%0", "never-idle-pane", 50, false),
         )
         .await
         .expect("apply_pane_readiness_gate must return on its own timeout, not hang");

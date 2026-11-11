@@ -246,6 +246,14 @@ use super::mcp_transport_session_agent::wait_for_mcp_identity_bound;
 #[cfg(test)]
 use super::mcp_transport_session_agent::wait_for_pty_quiet;
 pub(crate) use super::mcp_transport_session_agent::wait_for_shell_idle;
+#[cfg(test)]
+use super::mcp_transport_session_agent::{
+    MAX_PROMPT_MARKER_TIMEOUT_MS, MIN_PROMPT_MARKER_TIMEOUT_MS, gate_new_shell_session_with,
+    prompt_gate_for_shell, shell_emits_prompt_marker,
+};
+pub(crate) use super::mcp_transport_session_agent::{
+    configured_prompt_gate, wait_for_shell_prompt,
+};
 
 /// Serialize a value to JSON, returning a structured error on failure instead of silent null.
 pub(super) fn to_json_or_error<T: serde::Serialize>(value: T) -> serde_json::Value {

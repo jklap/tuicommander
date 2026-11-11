@@ -5557,3 +5557,233 @@ fn session_list_reports_progress_wait_blocking_automated_wake() {
     );
     assert!(bytes.lock().unwrap().is_empty());
 }
+
+/// Only zsh is guaranteed to print OSC 133 markers (TUIC owns its ZDOTDIR
+/// bootstrap). bash/fish merely get an env var the user must source, so
+/// requiring a marker there could stall for the whole bound.
+#[test]
+fn shell_emits_prompt_marker_is_true_only_for_zsh() {
+    assert!(shell_emits_prompt_marker("/bin/zsh"));
+    assert!(shell_emits_prompt_marker("/opt/homebrew/bin/zsh"));
+    assert!(shell_emits_prompt_marker("zsh"));
+    assert!(shell_emits_prompt_marker("\"/usr/bin/zsh\" -l"));
+    assert!(!shell_emits_prompt_marker("/bin/bash"));
+    assert!(!shell_emits_prompt_marker("/usr/bin/fish"));
+    assert!(!shell_emits_prompt_marker("/bin/sh"));
+    assert!(!shell_emits_prompt_marker("/usr/bin/zshell-wrapper"));
+    assert!(!shell_emits_prompt_marker(""));
+}
+
+/// The bug: the 500 ms silence fallback flips a still-starting shell (direnv
+/// evaluating a slow `.envrc` in precmd) to IDLE before any prompt exists. A
+/// marker-requiring gate must not accept that idle on its own, and must accept
+/// it as soon as the integration's first OSC 133 marker arrives.
+#[tokio::test]
+async fn wait_for_shell_prompt_with_marker_ignores_silence_idle_until_a_marker_arrives() {
+    use std::sync::atomic::AtomicU8;
+
+    let state = test_state();
+    insert_managed_test_session(&state, "prompt-gate", &std::env::temp_dir().to_string_lossy());
+    state.session_maps.shell_states.insert(
+        "prompt-gate".to_string(),
+        AtomicU8::new(crate::pty::SHELL_IDLE),
+    );
+
+    assert!(
+        !wait_for_shell_prompt(&state, "prompt-gate", 60, true).await,
+        "idle without any OSC 133 marker is a silence-timer guess, not a prompt"
+    );
+    assert!(
+        wait_for_shell_prompt(&state, "prompt-gate", 60, false).await,
+        "a caller that does not require a marker (bash/fish) keeps the idle-only behaviour"
+    );
+
+    let waiting_state = Arc::clone(&state);
+    let waiter =
+        tokio::spawn(
+            async move { wait_for_shell_prompt(&waiting_state, "prompt-gate", 2_000, true).await },
+        );
+    tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    state
+        .session_maps
+        .has_osc133_integration
+        .insert("prompt-gate".to_string(), ());
+    state.emit_pty_event(crate::state::AppEvent::PtyParsed {
+        session_id: "prompt-gate".to_string(),
+        parsed: serde_json::json!({"type": "shell-state", "state": "idle"}).into(),
+    });
+    assert!(
+        waiter.await.unwrap(),
+        "the first OSC 133 marker must release a marker-requiring gate"
+    );
+}
+
+/// A marker is not enough on its own: a shell still busy (command running, or
+/// startup output still arriving) is not at a prompt either.
+#[tokio::test]
+async fn wait_for_shell_prompt_with_marker_still_requires_idle() {
+    use std::sync::atomic::AtomicU8;
+
+    let state = test_state();
+    insert_managed_test_session(&state, "prompt-gate-busy", &std::env::temp_dir().to_string_lossy());
+    state.session_maps.shell_states.insert(
+        "prompt-gate-busy".to_string(),
+        AtomicU8::new(crate::pty::SHELL_BUSY),
+    );
+    state
+        .session_maps
+        .has_osc133_integration
+        .insert("prompt-gate-busy".to_string(), ());
+    assert!(!wait_for_shell_prompt(&state, "prompt-gate-busy", 60, true).await);
+}
+
+/// Pure decision table behind every prompt gate, including the hidden
+/// `shell_prompt_marker_timeout_ms` override (0 = marker requirement off).
+#[test]
+fn prompt_gate_for_shell_honours_the_override_and_non_zsh_shells() {
+    let zsh = prompt_gate_for_shell("/bin/zsh", 5_000, 15_000);
+    assert_eq!((zsh.require_marker, zsh.timeout_ms), (true, 15_000));
+    let off = prompt_gate_for_shell("/bin/zsh", 5_000, 0);
+    assert_eq!(
+        (off.require_marker, off.timeout_ms),
+        (false, 5_000),
+        "0 must restore the plain idle-only gate with its own bound"
+    );
+    let short = prompt_gate_for_shell("/bin/zsh", 5_000, 5_000);
+    assert_eq!((short.require_marker, short.timeout_ms), (true, 5_000));
+    assert_eq!(
+        prompt_gate_for_shell("/bin/zsh", 5_000, 1).timeout_ms,
+        MIN_PROMPT_MARKER_TIMEOUT_MS
+    );
+    assert_eq!(
+        prompt_gate_for_shell("/bin/zsh", 5_000, u64::MAX).timeout_ms,
+        MAX_PROMPT_MARKER_TIMEOUT_MS
+    );
+    let bash = prompt_gate_for_shell("/bin/bash", 5_000, 15_000);
+    assert_eq!((bash.require_marker, bash.timeout_ms), (false, 5_000));
+}
+
+/// `gate_new_shell_session` used to accept silence-idle alone, so MCP/HTTP
+/// session creation had the same early-release hole as the tmux path. A zsh
+/// session that is idle but has emitted no marker must stay gated, then be
+/// released by the first marker; with the override at 0 it passes at once.
+#[tokio::test]
+async fn gate_new_shell_session_holds_a_zsh_session_until_its_first_marker() {
+    use std::sync::atomic::AtomicU8;
+
+    let state = test_state();
+    insert_managed_test_session(&state, "gate-zsh", &std::env::temp_dir().to_string_lossy());
+    state
+        .session_maps
+        .sessions
+        .get("gate-zsh")
+        .unwrap()
+        .lock()
+        .shell = "/bin/zsh".to_string();
+    state.session_maps.shell_states.insert(
+        "gate-zsh".to_string(),
+        AtomicU8::new(crate::pty::SHELL_IDLE),
+    );
+
+    assert!(
+        !gate_new_shell_session_with(&state, "gate-zsh", 5_000, 1_000, "test").await,
+        "silence-idle with no marker must not release a zsh session before its bound"
+    );
+    assert!(
+        gate_new_shell_session_with(&state, "gate-zsh", 5_000, 0, "test").await,
+        "override 0 restores the idle-only gate"
+    );
+    state
+        .session_maps
+        .has_osc133_integration
+        .insert("gate-zsh".to_string(), ());
+    assert!(gate_new_shell_session_with(&state, "gate-zsh", 5_000, 1_000, "test").await);
+}
+
+/// Register a session whose child is `sh -c <script>` on a real PTY, so tests
+/// can observe the real line-discipline state through the master.
+#[cfg(unix)]
+fn insert_test_session_running(state: &Arc<AppState>, session_id: &str, script: &str) {
+    use crate::state::PtySession;
+    use portable_pty::{CommandBuilder, PtySize, native_pty_system};
+
+    let pair = native_pty_system()
+        .openpty(PtySize {
+            rows: 24,
+            cols: 80,
+            pixel_width: 0,
+            pixel_height: 0,
+        })
+        .expect("open test PTY");
+    let mut command = CommandBuilder::new("sh");
+    command.args(["-c", script]);
+    let child = pair.slave.spawn_command(command).expect("spawn test child");
+    let writer = pair.master.take_writer().expect("open test PTY writer");
+    state.session_maps.sessions.insert(
+        session_id.to_string(),
+        parking_lot::Mutex::new(PtySession {
+            launch_receipt: None,
+            writer: Arc::new(parking_lot::Mutex::new(writer)),
+            master: pair.master,
+            _child: child,
+            paused: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            worktree: None,
+            initial_cwd: None,
+            cwd: None,
+            display_name: None,
+            display_name_is_custom: false,
+            display_name_from_spawn: false,
+            is_remote: false,
+            shell: "sh".to_string(),
+        }),
+    );
+}
+
+#[test]
+fn longest_unbroken_line_counts_across_parts_and_resets_on_line_breaks() {
+    use crate::pty::longest_unbroken_line_bytes as longest;
+    assert_eq!(longest(&[]), 0);
+    assert_eq!(longest(&["abc\ndefgh\rij"]), 5);
+    assert_eq!(longest(&["abc", "def"]), 6, "a line can span two parts");
+    assert_eq!(longest(&["abc\n", "de"]), 3);
+}
+
+/// The truncation guard against a REAL line discipline: a PTY whose child is
+/// still in canonical mode holds a long line back, releases it once the child
+/// switches to raw (what zle does), never delays a short write, and fails open.
+#[cfg(unix)]
+#[tokio::test]
+async fn long_write_waits_for_the_line_editor_and_fails_open() {
+    use crate::pty::wait_for_line_editor_before_long_write as guard;
+    let long = "x".repeat(1_500);
+    let state = test_state();
+
+    // Child stays canonical for 0.6 s, then goes raw like zle taking the tty.
+    insert_test_session_running(&state, "canon-then-raw", "sleep 0.6; stty -icanon; sleep 30");
+    assert_eq!(
+        crate::pty::pty_is_canonical(&state, "canon-then-raw"),
+        Some(true),
+        "a fresh PTY is canonical until its reader changes the mode"
+    );
+    let started = std::time::Instant::now();
+    assert!(guard(&state, "canon-then-raw", &[long.as_str()], std::time::Duration::from_secs(8)).await);
+    let waited = started.elapsed();
+    assert!(
+        waited >= std::time::Duration::from_millis(400),
+        "must have held the long line while canonical, only waited {waited:?}"
+    );
+    assert_eq!(crate::pty::pty_is_canonical(&state, "canon-then-raw"), Some(false));
+
+    // A short write is never delayed, even on a canonical PTY.
+    insert_test_session_running(&state, "canon-forever", "sleep 30");
+    let started = std::time::Instant::now();
+    assert!(guard(&state, "canon-forever", &["ls\n"], std::time::Duration::from_secs(8)).await);
+    assert!(started.elapsed() < std::time::Duration::from_millis(200));
+
+    // A long write to a PTY that never leaves canonical mode fails open at the bound.
+    assert!(
+        !guard(&state, "canon-forever", &[long.as_str()], std::time::Duration::from_millis(150)).await
+    );
+    // Unknown session: nothing to wait for.
+    assert!(guard(&state, "no-such", &[long.as_str()], std::time::Duration::from_millis(150)).await);
+}

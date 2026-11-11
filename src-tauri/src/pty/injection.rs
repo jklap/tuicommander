@@ -3026,6 +3026,97 @@ pub(crate) fn clear_queued_commands(state: &AppState, session_id: &str) -> usize
         .unwrap_or(0)
 }
 
+/// A tty in canonical (line-edited) mode holds one pending line of at most
+/// `MAX_CANON` bytes (1024 on macOS; Linux's N_TTY allows more). Beyond that the
+/// kernel drops the extra bytes, rings the bell and discards the line's newline.
+/// 1000 leaves headroom for text already queued on the same line.
+pub(crate) const CANONICAL_LINE_GUARD_BYTES: usize = 1000;
+
+/// How long [`wait_for_line_editor_before_long_write`] holds a long line back
+/// before giving up and writing it anyway (fail-open: a foreground program that
+/// legitimately stays canonical, such as `cat`, must not wedge the caller).
+/// Must stay below every client's socket timeout for the write routes (see
+/// `tuic-cli`'s `IpcBackend::write`).
+pub(crate) const LINE_EDITOR_WAIT: std::time::Duration = std::time::Duration::from_secs(10);
+
+const LINE_EDITOR_POLL: std::time::Duration = std::time::Duration::from_millis(25);
+
+/// Longest run of bytes with no `\n`/`\r` across `parts`, treated as one
+/// continuous stream (a line can span two parts).
+pub(crate) fn longest_unbroken_line_bytes(parts: &[&str]) -> usize {
+    let (mut longest, mut current) = (0usize, 0usize);
+    for part in parts {
+        for byte in part.bytes() {
+            if byte == b'\n' || byte == b'\r' {
+                longest = longest.max(current);
+                current = 0;
+            } else {
+                current += 1;
+            }
+        }
+    }
+    longest.max(current)
+}
+
+/// Whether the PTY's line discipline is currently canonical: `Some(true)` means
+/// the foreground reader is not a line editor (a shell still starting up, a
+/// program using plain `read`), so a long line would be truncated. `None`
+/// when the platform or the session cannot say.
+#[cfg(unix)]
+pub(crate) fn pty_is_canonical(state: &AppState, session_id: &str) -> Option<bool> {
+    let termios = state
+        .session_maps
+        .sessions
+        .get(session_id)?
+        .lock()
+        .master
+        .get_termios()?;
+    Some(u64::from(termios.local_flags.bits()) & u64::from(libc::ICANON) != 0)
+}
+
+#[cfg(not(unix))]
+pub(crate) fn pty_is_canonical(_state: &AppState, _session_id: &str) -> Option<bool> {
+    None
+}
+
+/// Hold back a write that contains a line over [`CANONICAL_LINE_GUARD_BYTES`]
+/// until the PTY leaves canonical mode (zsh's zle, readline, any raw-mode
+/// reader), bounded by `max_wait` and fail-open. Returns `false` if it gave up.
+///
+/// Why this exists: input written while a shell is still in startup (direnv's
+/// precmd hook running a slow `.envrc`) sits in the tty's canonical buffer, and
+/// a line past `MAX_CANON` is truncated with its newline dropped — the swarm
+/// launch line (four sandbox proxy URLs) is exactly that long. Waiting costs
+/// nothing when the line editor is already up (one `tcgetattr`), and never
+/// touches short writes. Async and outside [`run_bounded_pty_input`]'s 2 s
+/// bound on purpose: the wait must not make the caller report an uncertain,
+/// do-not-resend delivery for a write that was merely deferred.
+pub(crate) async fn wait_for_line_editor_before_long_write(
+    state: &Arc<AppState>,
+    session_id: &str,
+    parts: &[&str],
+    max_wait: std::time::Duration,
+) -> bool {
+    if longest_unbroken_line_bytes(parts) < CANONICAL_LINE_GUARD_BYTES {
+        return true;
+    }
+    let deadline = std::time::Instant::now() + max_wait;
+    loop {
+        if pty_is_canonical(state, session_id) != Some(true) {
+            return true;
+        }
+        if std::time::Instant::now() >= deadline {
+            tracing::warn!(
+                session_id,
+                "long input line written while the PTY is still in canonical mode after {max_wait:?}; \
+                 the kernel may truncate it at MAX_CANON"
+            );
+            return false;
+        }
+        tokio::time::sleep(LINE_EDITOR_POLL).await;
+    }
+}
+
 /// Bound the caller's wait, not the kernel operation: a timed-out write may
 /// still complete. Never report this as a safe-to-retry rejection.
 pub(crate) async fn run_bounded_pty_input<T: Send + 'static>(

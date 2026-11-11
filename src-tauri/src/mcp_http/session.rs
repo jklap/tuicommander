@@ -196,6 +196,13 @@ pub(super) async fn write_to_session(
     Path(session_id): Path<String>,
     Json(body): Json<WriteRequest>,
 ) -> impl IntoResponse {
+    crate::pty::wait_for_line_editor_before_long_write(
+        &state,
+        &session_id,
+        &[body.data.as_str()],
+        crate::pty::LINE_EDITOR_WAIT,
+    )
+    .await;
     if let Err(e) =
         crate::pty::run_bounded_pty_input(move || write_pty_input(&state, &session_id, &body.data))
             .await
@@ -217,6 +224,16 @@ pub(super) async fn write_parts_to_session(
     Path(session_id): Path<String>,
     Json(body): Json<WritePartsRequest>,
 ) -> impl IntoResponse {
+    {
+        let parts: Vec<&str> = body.parts.iter().map(String::as_str).collect();
+        crate::pty::wait_for_line_editor_before_long_write(
+            &state,
+            &session_id,
+            &parts,
+            crate::pty::LINE_EDITOR_WAIT,
+        )
+        .await;
+    }
     if let Err(e) = crate::pty::run_bounded_pty_input(move || {
         let parts: Vec<&str> = body.parts.iter().map(String::as_str).collect();
         write_pty_input_parts(&state, &session_id, &parts)
