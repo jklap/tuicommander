@@ -693,23 +693,91 @@ pub(crate) async fn resolve_pr_target(
             )
             .is_empty())
     {
-        if let Err(e) = get_all_batch_with_intake_impl(
-            &[repo_path.to_string()],
-            false,
-            "disabled",
-            false,
-            state,
-            false,
-        )
-        .await
-        {
-            tracing::warn!(source = "github", %repo_path, "re-poll before a PR action failed: {e}");
-        }
+        repoll_checkout(state, repo_path).await;
         snapshot = state.git_cache.github_status.get(repo_path);
     }
     let snapshot = snapshot.as_deref().map(Vec::as_slice).unwrap_or(&[]);
     Ok(pick_pr_target(snapshot, pr_number, hint, &bound)?
         .unwrap_or_else(|| (owner.to_string(), repo.to_string())))
+}
+
+/// Run one poll of a single checkout so its PR snapshot and fork parentage are fresh.
+/// Best-effort: a failure is logged and the caller falls back to what it has.
+async fn repoll_checkout(state: &AppState, repo_path: &str) {
+    if let Err(e) = get_all_batch_with_intake_impl(
+        &[repo_path.to_string()],
+        false,
+        "disabled",
+        false,
+        state,
+        false,
+    )
+    .await
+    {
+        tracing::warn!(source = "github", %repo_path, "re-poll before a repo action failed: {e}");
+    }
+}
+
+/// The `(owner, repo)` an action that has no PR number (a workflow run id, the CI logs of a
+/// branch) must target: the checkout's bound repository unless the caller names one of the
+/// repositories this checkout watches (its `upstream` remote or GitHub's parent of the
+/// fork, or a repository a polled PR targets). Anything else is refused: the token is never
+/// pointed at an arbitrary repository. Like [`resolve_pr_target`], an unknown watch set is
+/// learned by one re-poll, and only when the caller actually named another repository.
+pub(crate) async fn resolve_watched_repo(
+    state: &AppState,
+    account: &crate::github_account::GitHubAccount,
+    repo_path: &str,
+    base_repo: Option<&str>,
+    owner: &str,
+    repo: &str,
+) -> Result<(String, String), String> {
+    let bound = format!("{owner}/{repo}");
+    let Some(hint) = parse_base_repo_hint(base_repo)? else {
+        return Ok((owner.to_string(), repo.to_string()));
+    };
+    if same_repo(hint, &bound) {
+        return Ok((owner.to_string(), repo.to_string()));
+    }
+    let watched = |state: &AppState| -> Option<(String, String)> {
+        let upstream = watched_upstreams(
+            state,
+            account,
+            &[(repo_path.to_string(), owner.to_string(), repo.to_string())],
+        );
+        let from_upstream = upstream
+            .into_iter()
+            .find(|(_, o, n)| same_repo(&format!("{o}/{n}"), hint))
+            .map(|(_, o, n)| (o, n));
+        from_upstream.or_else(|| {
+            state
+                .git_cache
+                .github_status
+                .get(repo_path)?
+                .iter()
+                .find(|pr| same_repo(&pr.base_repo, hint))
+                .and_then(|pr| pr.base_repo.split_once('/'))
+                .map(|(o, n)| (o.to_string(), n.to_string()))
+        })
+    };
+    if let Some(found) = watched(state) {
+        return Ok(found);
+    }
+    repoll_checkout(state, repo_path).await;
+    watched(state).ok_or_else(|| format!("{hint} is not a repository this checkout watches"))
+}
+
+/// [`resolve_repo_for_rest`], retargeted at a watched repository the caller names
+/// (see [`resolve_watched_repo`]).
+pub(crate) async fn resolve_repo_for_watched(
+    state: &AppState,
+    repo_path: &str,
+    base_repo: Option<&str>,
+) -> Result<(crate::github_account::GitHubAccount, String, String, String), String> {
+    let (account, token, owner, repo) = resolve_repo_for_rest(state, repo_path).await?;
+    let (owner, repo) =
+        resolve_watched_repo(state, &account, repo_path, base_repo, &owner, &repo).await?;
+    Ok((account, token, owner, repo))
 }
 
 /// [`resolve_repo_for_rest`], retargeted at the PR's own base repository when the
@@ -3920,6 +3988,7 @@ async fn fetch_ci_failure_logs_impl(
     branch: &str,
     check_url: Option<&str>,
     selected_head_sha: Option<&str>,
+    base_repo: Option<&str>,
     state: &AppState,
 ) -> Result<CiLogsOutcome, String> {
     let head_sha = match selected_head_sha {
@@ -3933,7 +4002,9 @@ async fn fetch_ci_failure_logs_impl(
                 .map_err(|error| error.to_string())??
         }
     };
-    let api = crate::github_pr_api::RepoApi::resolve(state, repo_path).await?;
+    // A PR opened against an upstream runs its workflows there: read that repo's runs.
+    let api =
+        crate::github_pr_api::RepoApi::resolve_for_watched(state, repo_path, base_repo).await?;
     ci_logs::fetch_with(&api, &api.owner, &api.repo, &head_sha, check_url).await
 }
 
@@ -3945,6 +4016,7 @@ pub(crate) async fn fetch_ci_failure_logs(
     branch: String,
     check_url: Option<String>,
     head_sha: Option<String>,
+    base_repo: Option<String>,
     state: State<'_, Arc<AppState>>,
 ) -> Result<String, String> {
     fetch_ci_failure_logs_with_state(
@@ -3952,6 +4024,7 @@ pub(crate) async fn fetch_ci_failure_logs(
         branch,
         check_url,
         head_sha,
+        base_repo,
         state.inner().clone(),
     )
     .await
@@ -3962,11 +4035,12 @@ pub(crate) async fn fetch_ci_failure_logs_with_state(
     branch: String,
     check_url: Option<String>,
     head_sha: Option<String>,
+    base_repo: Option<String>,
     state: Arc<AppState>,
 ) -> Result<String, String> {
     tokio::time::timeout(
         CI_SWEEP_TIMEOUT,
-        fetch_ci_failure_logs_inner(repo_path, branch, check_url, head_sha, state),
+        fetch_ci_failure_logs_inner(repo_path, branch, check_url, head_sha, base_repo, state),
     )
     .await
     .map_err(|_| "CI log fetch timed out".to_string())?
@@ -3977,6 +4051,7 @@ async fn fetch_ci_failure_logs_inner(
     branch: String,
     check_url: Option<String>,
     head_sha: Option<String>,
+    base_repo: Option<String>,
     state: Arc<AppState>,
 ) -> Result<String, String> {
     #[cfg(test)]
@@ -3997,6 +4072,7 @@ async fn fetch_ci_failure_logs_inner(
             &branch,
             check_url.as_deref(),
             selected_sha.as_deref(),
+            base_repo.as_deref(),
             &state,
         )
         .await?
@@ -4007,6 +4083,7 @@ async fn fetch_ci_failure_logs_inner(
         &branch,
         check_url.as_deref(),
         selected_sha.as_deref(),
+        base_repo.as_deref(),
         &state,
     )
     .await?;
@@ -4287,6 +4364,7 @@ mod tests {
             "feature".into(),
             Some(selected_url.into()),
             Some(head_sha),
+            None,
             Arc::new(crate::state::tests_support::make_test_app_state()),
         )
         .await

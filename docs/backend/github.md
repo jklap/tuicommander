@@ -95,7 +95,7 @@ An explicit disconnect is held in runtime state under the token lock. Status ref
 | `get_all_pr_statuses` | `(paths: Vec<String>, include_merged: bool) -> HashMap<String, Vec<BranchPrStatus>>` | Batch PR status across many repos in one GraphQL call |
 | `get_pr_diff` | `(repo_path: String, pr_number: i64, base_repo?: String) -> PrDiff {diff, headSha}` | Get PR diff content and the head commit it was read at (head read before and after the diff; a push in between is an error); falls back to a local-clone `git diff` when GitHub rejects oversized diffs |
 | `merge_pr_via_github` | `(repo_path: String, pr_number: i64, base_repo?: String, merge_method: String, expected_head_sha: String) -> String` | Merge PR via GitHub API, pinned to the reviewed head (409 → `PR head changed`) |
-| `fetch_ci_failure_logs` | `(repo_path: String, branch: String, check_url?: String, head_sha?: String) -> String` | Fetch failure logs for the local branch head during auto-heal or for a selected check at the PR head SHA |
+| `fetch_ci_failure_logs` | `(repo_path: String, branch: String, check_url?: String, head_sha?: String, base_repo?: String) -> String` | Fetch failure logs for the local branch head during auto-heal or for a selected check at the PR head SHA |
 | `create_issue_from_proposal` | `(repo_path: String, proposal: ImprovementProposal) -> CreatedIssue` | Explicit issue creation from a proposal; scan never creates issues automatically |
 
 ### Failing checks for auto-heal
@@ -395,9 +395,13 @@ repo for every polled checkout:
   and the answer (including "not a fork") is never refreshed. An unanswered (inaccessible)
   repo is not cached and is asked again. A cached parent joins the main query next cycle,
   and the `isFork`/`parent` selection is dropped for repos already known.
-- **Not covered by `base_repo`:** `rerun_failed_pr_jobs` (a run id is repo-scoped, still
-  resolved against the bound repo), `fetch_ci_failure_logs` (resolved by branch head SHA
-  against the bound repo), thread-id commands (`get_pr_thread_comments`,
+- **Actions with no PR number** (`rerun_failed_pr_jobs`, `fetch_ci_failure_logs`) take the
+  same optional `base_repo` but resolve it with `resolve_watched_repo`: a workflow run (and a
+  PR's check runs) belongs to the repository that ran it, which for a fork's PR is the
+  upstream. The hint must be the bound repo, the checkout's `upstream` remote, its cached
+  parent, or a repo a polled PR targets; anything else is refused, and an unknown watch set
+  is learned by one re-poll. Omitted, they act on the bound repo.
+- **Not covered by `base_repo`:** thread-id commands (`get_pr_thread_comments`,
   `set_pr_thread_resolved`, `reply_pr_thread`: GraphQL node ids are repo-independent) and
   `start_conflict_assist` (refuses `head_from_fork` PRs, which every fork→upstream PR is).
   The "diff too large" local fallback fetches `refs/pull/N/head` from the remote whose URL

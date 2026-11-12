@@ -461,6 +461,7 @@ pub(super) async fn ci_failure_logs(
             q.branch,
             q.check_url,
             q.head_sha,
+            q.base_repo,
             state,
         )
         .await,
@@ -730,6 +731,21 @@ mod pr_action_route_tests {
             Query::<PrDiffQuery>::try_from_uri(&uri("/x?path=%2Fr&pr=7&base_repo=org%2Fhello"))
                 .unwrap();
         assert_eq!(diff.0.base_repo.as_deref(), Some("org/hello"));
+    }
+
+    // Catches: the CI-log query dropping the repo whose workflow runs hold the logs.
+    #[test]
+    fn ci_failure_logs_query_accepts_an_optional_base_repo() {
+        use crate::mcp_http::types::CiFailureLogsQuery;
+        let uri = |q: &str| q.parse::<axum::http::Uri>().unwrap();
+        let hinted = Query::<CiFailureLogsQuery>::try_from_uri(&uri(
+            "/x?repoPath=%2Fr&branch=feat&headSha=abc&baseRepo=org%2Fhello",
+        ))
+        .unwrap();
+        assert_eq!(hinted.0.base_repo.as_deref(), Some("org/hello"));
+        let plain = Query::<CiFailureLogsQuery>::try_from_uri(&uri("/x?repoPath=%2Fr&branch=feat"))
+            .unwrap();
+        assert_eq!(plain.0.base_repo, None);
     }
 
     // Catches: a malformed base repo reaching GitHub instead of being refused up front.

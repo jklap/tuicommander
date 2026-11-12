@@ -953,3 +953,137 @@ async fn single_repo_refresh_keeps_prs_found_against_the_upstream() {
     assert_eq!(numbers, [1, 42]);
     fixture.close().await;
 }
+
+// ---------------------------------------------------------------------------
+// Repo-scoped actions with no PR number: workflow reruns and CI logs
+// ---------------------------------------------------------------------------
+
+// Catches: a rerun / CI-log request being sent to the fork when the run lives upstream.
+#[tokio::test]
+async fn a_watched_upstream_is_a_valid_target_without_a_pr_number() {
+    // The remote names it: no network needed.
+    let repo = repo_with_remotes(&[("origin", FORK), ("upstream", UPSTREAM)]);
+    let path = repo.path().to_string_lossy().into_owned();
+    let state = crate::state::tests_support::make_test_app_state();
+    let account = github_com_account(&state);
+    let up = resolve_watched_repo(&state, &account, &path, Some("ORG/hello"), "me", "hello")
+        .await
+        .unwrap();
+    assert_eq!(up, ("org".to_string(), "hello".to_string()));
+}
+
+#[tokio::test]
+async fn no_hint_or_the_bound_repo_stays_on_the_bound_repo_without_a_poll() {
+    let repo = repo_with_remotes(&[("origin", FORK)]);
+    let path = repo.path().to_string_lossy().into_owned();
+    let mut fixture = serve(forge(Some("org/hello"))).await;
+    let account = github_com_account(&fixture.state);
+    for hint in [None, Some("me/hello"), Some("  "), Some("ME/Hello")] {
+        let got = resolve_watched_repo(&fixture.state, &account, &path, hint, "me", "hello")
+            .await
+            .unwrap();
+        assert_eq!(got, ("me".to_string(), "hello".to_string()), "{hint:?}");
+    }
+    assert!(queries(&mut fixture).is_empty());
+    fixture.close().await;
+}
+
+// Catches: the parent being unknown on a fresh process making a legitimate upstream unreachable.
+#[tokio::test]
+async fn an_unknown_upstream_is_learned_by_one_repoll() {
+    let scratch = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+    let _config = crate::config::set_config_dir_override(scratch.path().join("config"));
+    std::fs::create_dir_all(scratch.path().join("config")).unwrap();
+    // No upstream remote and nothing cached: only GitHub knows the parent.
+    let repo = repo_with_remotes(&[("origin", FORK)]);
+    let path = repo.path().to_string_lossy().into_owned();
+    let mut fixture = serve(forge(Some("org/hello"))).await;
+    let account = github_com_account(&fixture.state);
+    let got = resolve_watched_repo(
+        &fixture.state,
+        &account,
+        &path,
+        Some("org/hello"),
+        "me",
+        "hello",
+    )
+    .await
+    .unwrap();
+    assert_eq!(got, ("org".to_string(), "hello".to_string()));
+    assert!(
+        !queries(&mut fixture).is_empty(),
+        "the watch set was learned by polling"
+    );
+    // Learned: the next call needs no request.
+    let again = resolve_watched_repo(
+        &fixture.state,
+        &account,
+        &path,
+        Some("org/hello"),
+        "me",
+        "hello",
+    )
+    .await
+    .unwrap();
+    assert_eq!(again, got);
+    assert!(queries(&mut fixture).is_empty());
+    fixture.close().await;
+}
+
+// Catches: a client-supplied repo (rerun run id, CI log read) pointing the token anywhere.
+#[tokio::test]
+async fn an_unwatched_or_malformed_repo_is_refused() {
+    let scratch = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+    let _config = crate::config::set_config_dir_override(scratch.path().join("config"));
+    std::fs::create_dir_all(scratch.path().join("config")).unwrap();
+    let repo = repo_with_remotes(&[("origin", FORK), ("upstream", UPSTREAM)]);
+    let path = repo.path().to_string_lossy().into_owned();
+    let fixture = serve(forge(Some("org/hello"))).await;
+    let account = github_com_account(&fixture.state);
+    let err = resolve_watched_repo(
+        &fixture.state,
+        &account,
+        &path,
+        Some("torvalds/linux"),
+        "me",
+        "hello",
+    )
+    .await
+    .unwrap_err();
+    assert!(
+        err.contains("not a repository this checkout watches"),
+        "{err}"
+    );
+    let err = resolve_watched_repo(
+        &fixture.state,
+        &account,
+        &path,
+        Some("nonsense"),
+        "me",
+        "hello",
+    )
+    .await
+    .unwrap_err();
+    assert!(err.contains("owner/name"), "{err}");
+    fixture.close().await;
+}
+
+// Catches: the repo of a polled PR being unusable for a run action once the remote/parent
+// facts are gone but the snapshot still names it.
+#[tokio::test]
+async fn a_repo_a_polled_pr_targets_is_watched() {
+    let repo = repo_with_remotes(&[("origin", FORK)]);
+    let path = repo.path().to_string_lossy().into_owned();
+    let state = crate::state::tests_support::make_test_app_state();
+    let account = github_com_account(&state);
+    state.git_cache.github_status.insert(
+        path.clone(),
+        Arc::new(vec![
+            parse_pr_node(&pr_node(42, "feature", "org/hello", "me/hello")).unwrap(),
+        ]),
+    );
+    let got = resolve_watched_repo(&state, &account, &path, Some("org/hello"), "me", "hello")
+        .await
+        .unwrap();
+    assert_eq!(got, ("org".to_string(), "hello".to_string()));
+}

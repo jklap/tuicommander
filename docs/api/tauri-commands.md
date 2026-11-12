@@ -273,7 +273,7 @@ Reconstructs a step-by-step, per-file edit review from a Claude Code session tra
 | `get_pr_diff` | `repo_path, pr_number, base_repo?` | `{diff, headSha}` | Get PR diff content and the head it was read at |
 | `get_merged_prs` | `repo_path, since_tag?` | `Vec<MergedPr>` | Merged PRs via GraphQL, optionally since a tag's date |
 | `start_conflict_assist` | `repo_path, pr_number` | `ConflictAssistResult` | Worktree on PR head + rebase onto base; reports verified/unverified clean or conflicts, base provenance/warning, and agent prompt (push gated, never auto-merge) |
-| `fetch_ci_failure_logs` | `repo_path, branch, check_url?, head_sha?` | `String` | Fetch failed-job logs for the local branch head, or select a check at the supplied PR head SHA; failing checks come from the paginated commit rollup and Actions logs from REST using the repository account on github.com or GHE; one 60-second sweep deadline |
+| `fetch_ci_failure_logs` | `repo_path, branch, check_url?, head_sha?, base_repo?` | `String` | Fetch failed-job logs for the local branch head, or select a check at the supplied PR head SHA; failing checks come from the paginated commit rollup and Actions logs from REST using the repository account on github.com or GHE; one 60-second sweep deadline |
 | `circleci_token_status` | — | `CircleCiTokenStatus` | Report token presence and source without returning the token |
 | `circleci_set_token` | `token` | `()` | Store a read-only CircleCI token |
 | `circleci_delete_token` | — | `()` | Remove the stored CircleCI token |
@@ -1013,7 +1013,7 @@ the prepared launch prompt, counting escaped stdout bytes before framing/marker.
 - `set_pr_auto_merge(repoPath, prNumber, baseRepo?, enabled, mergeMethod?, expectedHeadSha?)`: confirmed GraphQL payload. Enabling needs a valid merge/squash/rebase method and reviewed head.
 - `set_pr_merge_queue(repoPath, prNumber, baseRepo?, enqueued, expectedHeadSha?)`: confirmed GraphQL payload with mergeQueueEntry. Enqueue needs reviewed head; dequeue does not.
 - `merge_or_enqueue_pr(repoPath, prNumber, baseRepo?, mergeMethod, expectedHeadSha)`: `{action:"enqueued", mergeQueueEntry}` or `{action:"merged", sha}`. Queue-required branches enqueue.
-- `rerun_failed_pr_jobs(repoPath, runId)`: `{accepted:true, runId}` after GitHub accepts the failed-job rerun, not a claim the new run finished.
+- `rerun_failed_pr_jobs(repoPath, runId, baseRepo?)`: `{accepted:true, runId}` after GitHub accepts the failed-job rerun, not a claim the new run finished.
 
 Every PR-number command above (and `post_pr_review`) takes an optional `baseRepo` (`owner/name`): the repository the PR targets. It matters for a fork checkout whose PRs are opened against the upstream, where the same number can exist in both repos. Send `BranchPrStatus.base_repo`; see [GitHub backend](../backend/github.md#fork-checkouts-pull-requests-opened-against-the-upstream). Omitted, the backend resolves from its last poll and refuses an ambiguous number.
 

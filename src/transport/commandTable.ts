@@ -1394,7 +1394,7 @@ export const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 		map: (args) => ({
 			method: "POST",
 			path: "/repo/pr-rerun-failed",
-			body: { repoPath: args.repoPath, runId: args.runId },
+			body: { repoPath: args.repoPath, runId: args.runId, baseRepo: args.baseRepo },
 		}),
 	},
 	get_pr_line_threads: {
@@ -1456,7 +1456,7 @@ export const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 	fetch_ci_failure_logs: {
 		map: (_args, p) => ({
 			method: "GET",
-			path: `/repo/ci-failure-logs?repoPath=${p("repoPath")}&branch=${p("branch")}${_args.checkUrl ? `&checkUrl=${p("checkUrl")}` : ""}${_args.headSha ? `&headSha=${p("headSha")}` : ""}`,
+			path: `/repo/ci-failure-logs?repoPath=${p("repoPath")}&branch=${p("branch")}${_args.checkUrl ? `&checkUrl=${p("checkUrl")}` : ""}${_args.headSha ? `&headSha=${p("headSha")}` : ""}${_args.baseRepo ? `&baseRepo=${p("baseRepo")}` : ""}`,
 		}),
 	},
 	circleci_token_status: {

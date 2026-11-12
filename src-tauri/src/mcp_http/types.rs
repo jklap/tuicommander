@@ -824,6 +824,9 @@ pub(super) struct CiFailureLogsQuery {
     pub check_url: Option<String>,
     #[serde(rename = "headSha")]
     pub head_sha: Option<String>,
+    /// `owner/name` whose workflow runs hold the logs (a watched upstream for a fork's PR).
+    #[serde(default, rename = "baseRepo")]
+    pub base_repo: Option<String>,
 }
 
 #[derive(Deserialize)]

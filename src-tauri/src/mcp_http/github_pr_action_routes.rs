@@ -56,6 +56,8 @@ pub(super) struct MergeBody {
 pub(super) struct RerunBody {
     repo_path: String,
     run_id: u64,
+    /// `owner/name` of the repository the run belongs to (a watched upstream, not the fork).
+    base_repo: Option<String>,
 }
 
 pub(super) async fn state(
@@ -161,7 +163,8 @@ pub(super) async fn rerun(
         return e.into_response();
     }
     let result = async {
-        let api = RepoApi::resolve(&state, &q.repo_path).await?;
+        let api =
+            RepoApi::resolve_for_watched(&state, &q.repo_path, q.base_repo.as_deref()).await?;
         actions::rerun_failed_jobs(&api, q.run_id).await
     }
     .await;
@@ -220,5 +223,21 @@ mod tests {
             Query::<PrQuery>::try_from_uri(&uri).unwrap().0.base_repo,
             None
         );
+    }
+
+    // Catches: the rerun body dropping the repo its run id belongs to.
+    #[test]
+    fn rerun_body_accepts_an_optional_base_repo() {
+        let hinted: RerunBody = serde_json::from_value(
+            serde_json::json!({"repoPath": "/r", "runId": 9, "baseRepo": "org/hello"}),
+        )
+        .unwrap();
+        assert_eq!(
+            (hinted.run_id, hinted.base_repo.as_deref()),
+            (9, Some("org/hello"))
+        );
+        let plain: RerunBody =
+            serde_json::from_value(serde_json::json!({"repoPath": "/r", "runId": 9})).unwrap();
+        assert_eq!(plain.base_repo, None);
     }
 }

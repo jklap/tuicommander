@@ -83,6 +83,26 @@ describe("PrDetailContent — ego review result metadata", () => {
 		expect(getByText("No findings")).toBeTruthy();
 	});
 
+	// Catches: CI logs of a fork's PR being read from the fork instead of the upstream it targets.
+	it("names the PR's base repo when fetching a check log", async () => {
+		mockGithubStore.getBranchPrData.mockReturnValue({ ...basePr, base_repo: "org/hello" });
+		mockGithubStore.getCheckDetails.mockReturnValue([
+			{ context: "ci/circleci: test", state: "failure", html_url: "https://circleci.com/gh/org/hello/42" },
+		]);
+		mockRpc.mockResolvedValue("failed step");
+		const repo = nextRepo();
+		const { getByText, findByText } = render(() => <PrDetailContent repoPath={repo} branch="feature" />);
+		fireEvent.click(getByText("Log"));
+		expect(mockRpc).toHaveBeenCalledWith("fetch_ci_failure_logs", {
+			repoPath: repo,
+			branch: "feature",
+			checkUrl: "https://circleci.com/gh/org/hello/42",
+			headSha: "a".repeat(40),
+			baseRepo: "org/hello",
+		});
+		expect(await findByText("failed step")).toBeTruthy();
+	});
+
 	it("fetches and renders a failed CircleCI check log without opening its URL", async () => {
 		mockGithubStore.getCheckDetails.mockReturnValue([
 			{ context: "ci/circleci: test", state: "failure", html_url: "https://circleci.com/gh/acme/widget/42" },

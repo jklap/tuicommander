@@ -1549,7 +1549,7 @@ router only (the headless `tuic-remote` daemon exposes monitoring, not account/a
 
 ```
 GET  /github/viewer-login                       -> string (login)
-GET  /repo/ci-failure-logs?repoPath=&branch=&checkUrl=&headSha= -> string (logs; checkUrl and headSha optional)
+GET  /repo/ci-failure-logs?repoPath=&branch=&checkUrl=&headSha=&baseRepo= -> string (logs; checkUrl, headSha and baseRepo optional; baseRepo is the watched repo whose workflow runs hold the logs, e.g. the upstream of a fork)
 GET  /circleci/token                          -> CircleCiTokenStatus (no token value)
 POST /circleci/token       { token }           -> null (store read-only token)
 DELETE /circleci/token                         -> null
@@ -3944,7 +3944,7 @@ Draft submission rejects a moved reviewed head and pins REST `commit_id`. Thread
 | POST | `/repo/pr-auto-merge` | `{repoPath, prNumber, enabled, mergeMethod?, expectedHeadSha?}` |
 | POST | `/repo/pr-merge-queue` | `{repoPath, prNumber, enqueued, expectedHeadSha?}` |
 | POST | `/repo/pr-merge-or-enqueue` | `{repoPath, prNumber, mergeMethod, expectedHeadSha}` |
-| POST | `/repo/pr-rerun-failed` | `{repoPath, runId}` |
+| POST | `/repo/pr-rerun-failed` | `{repoPath, runId, baseRepo?}` |
 
 The routes share desktop command results. Enabling auto-merge and queue entry require the reviewed head. Merge policy read failures stop writes. The legacy `/repo/post-pr-review` and pinned `/repo/pr-draft-review` reject empty REQUEST_CHANGES bodies.
 

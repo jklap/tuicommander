@@ -53,6 +53,15 @@ describe("PrActionButtons", () => {
 		]);
 	});
 
+	// Catches: re-running a fork's runs when the PR (and its workflow runs) live in the upstream.
+	it("rerun names the PR's base repo", async () => {
+		stubBackend({});
+		render(() => <PrActionButtons repoPath="/r" pr={{ ...pr(), base_repo: "org/hello" }} checks={[failed(5, 1)]} />);
+		fireEvent.click(await screen.findByRole("button", { name: "Re-run failed jobs" }));
+		await screen.findByRole("status");
+		expect(writes()).toEqual([["rerun_failed_pr_jobs", { repoPath: "/r", runId: 5, baseRepo: "org/hello" }]]);
+	});
+
 	// Catches: a rerun button offered when no failed Actions run can be targeted.
 	it("offers no rerun without a failed Actions run", () => {
 		stubBackend({});

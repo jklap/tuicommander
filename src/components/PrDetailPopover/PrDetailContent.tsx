@@ -152,6 +152,7 @@ export const PrDetailContent: Component<PrDetailContentProps> = (props) => {
 				branch: props.branch,
 				checkUrl: url,
 				headSha: prData()?.head_ref_oid,
+				baseRepo: prData()?.base_repo,
 			});
 			setCircleCiLogs((logs) => ({ ...logs, [url]: { text } }));
 		} catch (error) {

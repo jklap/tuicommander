@@ -106,6 +106,24 @@ impl<'a> RepoApi<'a> {
             repo,
         })
     }
+    /// [`Self::resolve`], retargeted at a repository the checkout watches when the caller
+    /// names one (see `github::resolve_watched_repo`): workflow runs of a PR opened against
+    /// an upstream live in the upstream.
+    pub async fn resolve_for_watched(
+        state: &'a AppState,
+        path: &str,
+        base_repo: Option<&str>,
+    ) -> Result<Self, String> {
+        let (account, token, owner, repo) =
+            crate::github::resolve_repo_for_watched(state, path, base_repo).await?;
+        Ok(Self {
+            state,
+            account,
+            token,
+            owner,
+            repo,
+        })
+    }
     fn text_request(&self, endpoint: &str) -> reqwest::RequestBuilder {
         let path = format!("/repos/{}/{}/{}", self.owner, self.repo, endpoint);
         crate::github_debug::log_api("GET", &path, "CI job log download");

@@ -94,8 +94,9 @@ pub(crate) async fn merge_or_enqueue_pr(
 pub(crate) async fn rerun_failed_pr_jobs(
     repo_path: String,
     run_id: u64,
+    base_repo: Option<String>,
     state: tauri::State<'_, Arc<AppState>>,
 ) -> Result<Value, String> {
-    let api = RepoApi::resolve(&state, &repo_path).await?;
+    let api = RepoApi::resolve_for_watched(&state, &repo_path, base_repo.as_deref()).await?;
     actions::rerun_failed_jobs(&api, run_id).await
 }

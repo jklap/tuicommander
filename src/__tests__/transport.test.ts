@@ -5202,6 +5202,26 @@ describe("PR commands forward baseRepo over HTTP exactly when set", () => {
 		expect(unset.path).not.toMatch(/base_?[rR]epo/);
 	});
 
+	it("rerun_failed_pr_jobs puts baseRepo in the POST body only when set", () => {
+		const set = mapCommandToHttp("rerun_failed_pr_jobs", { repoPath: "/r", runId: 9, baseRepo: "up/stream" })!;
+		expect(set.path).toBe("/repo/pr-rerun-failed");
+		expect((set.body as Record<string, unknown>).baseRepo).toBe("up/stream");
+		const unset = mapCommandToHttp("rerun_failed_pr_jobs", { repoPath: "/r", runId: 9 })!;
+		expect((unset.body as Record<string, unknown>).baseRepo).toBeUndefined();
+	});
+
+	it("fetch_ci_failure_logs puts baseRepo in the GET query only when set", () => {
+		const args = { repoPath: "/r", branch: "feat", checkUrl: "https://x/y", headSha: "abc" };
+		const set = mapCommandToHttp("fetch_ci_failure_logs", { ...args, baseRepo: "up/stream" })!;
+		const url = new URL(set.path, "http://localhost");
+		expect(url.pathname).toBe("/repo/ci-failure-logs");
+		expect(url.searchParams.get("baseRepo")).toBe("up/stream");
+		expect(url.searchParams.get("checkUrl")).toBe("https://x/y");
+		expect(
+			new URL(mapCommandToHttp("fetch_ci_failure_logs", args)!.path, "http://localhost").searchParams.has("baseRepo"),
+		).toBe(false);
+	});
+
 	it("merge_pr_via_github sends expectedHeadSha", () => {
 		const m = mapCommandToHttp("merge_pr_via_github", { ...base, mergeMethod: "squash", expectedHeadSha: "abc" })!;
 		expect((m.body as Record<string, unknown>).expectedHeadSha).toBe("abc");

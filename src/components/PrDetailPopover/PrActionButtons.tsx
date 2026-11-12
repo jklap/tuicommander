@@ -83,7 +83,8 @@ export const PrActionButtons: Component<PrActionButtonsProps> = (props) => {
 
 	const rerun = () =>
 		run(t("prDetail.rerunAccepted", "Failed jobs re-run requested"), async () => {
-			for (const runId of runIds()) await invoke("rerun_failed_pr_jobs", { repoPath: props.repoPath, runId });
+			for (const runId of runIds())
+				await invoke("rerun_failed_pr_jobs", { repoPath: props.repoPath, runId, baseRepo: props.pr.base_repo });
 		});
 	const toggleAutoMerge = () =>
 		run(
