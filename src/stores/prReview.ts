@@ -118,7 +118,12 @@ function createPrReviewStore() {
 	}
 
 	/** Post the given findings to GitHub as inline review comments. */
-	async function post(repoPath: string, prNumber: number, findings: SelectableFinding[]): Promise<void> {
+	async function post(
+		repoPath: string,
+		prNumber: number,
+		findings: SelectableFinding[],
+		baseRepo?: string,
+	): Promise<void> {
 		const key = reviewKey(repoPath, prNumber);
 		if (findings.length === 0 || state.entries[key]?.posting) return;
 		setState("entries", key, "posting", true);
@@ -127,6 +132,7 @@ function createPrReviewStore() {
 			await invoke("post_pr_review", {
 				repoPath,
 				prNumber,
+				baseRepo,
 				body: "AI review findings",
 				event: "COMMENT",
 				comments: findings.map((finding) => ({

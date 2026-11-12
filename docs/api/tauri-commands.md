@@ -262,15 +262,15 @@ Reconstructs a step-by-step, per-file edit review from a Claude Code session tra
 | Command | Args | Returns | Description |
 |---------|------|---------|-------------|
 | `get_github_status` | `path` | `GitHubStatus` | PR + CI for current branch |
-| `get_ci_checks` | `path` | `Vec<JSON>` | CI check details |
-| `get_pr_review_threads` | `path, pr_number` | `{bot, human, ego}` | Unresolved review threads of one PR, split bot vs human vs ego (first comment carries `<!-- tuic:ego-review -->`) |
+| `get_ci_checks` | `path, pr_number, base_repo?` | `Vec<JSON>` | CI check details |
+| `get_pr_review_threads` | `path, pr_number, base_repo?` | `{bot, human, ego}` | Unresolved review threads of one PR, split bot vs human vs ego (first comment carries `<!-- tuic:ego-review -->`) |
 | `get_repo_pr_statuses` | `path, include_merged` | `Vec<BranchPrStatus>` | Batch PR status (all branches) |
-| `approve_pr` | `repo_path, pr_number` | `String` | Submit approving review via GitHub API |
-| `update_pr_branch` | `repo_path, pr_number, expected_head_sha` | `()` | Update a BEHIND PR branch from its base, pinned to the shown head |
-| `close_pr` | `repo_path, pr_number` | `()` | Close a PR without merging |
-| `merge_pr_via_github` | `repo_path, pr_number, merge_method, expected_head_sha` | `String` | Merge PR via GitHub API, pinned to the reviewed head |
+| `approve_pr` | `repo_path, pr_number, base_repo?` | `String` | Submit approving review via GitHub API |
+| `update_pr_branch` | `repo_path, pr_number, base_repo?, expected_head_sha` | `()` | Update a BEHIND PR branch from its base, pinned to the shown head |
+| `close_pr` | `repo_path, pr_number, base_repo?` | `()` | Close a PR without merging |
+| `merge_pr_via_github` | `repo_path, pr_number, base_repo?, merge_method, expected_head_sha` | `String` | Merge PR via GitHub API, pinned to the reviewed head |
 | `get_all_pr_statuses` | `path` | `Vec<BranchPrStatus>` | Batch PR status for all branches (includes merged) |
-| `get_pr_diff` | `repo_path, pr_number` | `{diff, headSha}` | Get PR diff content and the head it was read at |
+| `get_pr_diff` | `repo_path, pr_number, base_repo?` | `{diff, headSha}` | Get PR diff content and the head it was read at |
 | `get_merged_prs` | `repo_path, since_tag?` | `Vec<MergedPr>` | Merged PRs via GraphQL, optionally since a tag's date |
 | `start_conflict_assist` | `repo_path, pr_number` | `ConflictAssistResult` | Worktree on PR head + rebase onto base; reports verified/unverified clean or conflicts, base provenance/warning, and agent prompt (push gated, never auto-merge) |
 | `fetch_ci_failure_logs` | `repo_path, branch, check_url?, head_sha?` | `String` | Fetch failed-job logs for the local branch head, or select a check at the supplied PR head SHA; failing checks come from the paginated commit rollup and Actions logs from REST using the repository account on github.com or GHE; one 60-second sweep deadline |
@@ -1000,20 +1000,22 @@ the prepared launch prompt, counting escaped stdout bytes before framing/marker.
 
 ### PR line review commands
 
-- `get_pr_line_threads(repoPath, prNumber, after?)`: `{headSha, threads, hasNextPage, endCursor}`. Threads retain GitHub `line`, `originalLine`, `diffSide`, `isOutdated`, `isResolved`, and `comments` connection; every comment author carries `bot` (from the GraphQL actor type), and each thread carries a nullable `finding` parsed from its first comment by `tuic_git::review_bots` (`tool`, `title`, `severity`, `severityLabel`, `category`, `suggestion`, `agentPrompt`, `addressedIn`, `externalId`; untrusted text).
-- `get_pr_open_threads(repoPath, prNumber)`: the `{pr_open_threads}` smart-prompt variable. A string: a preface, then a fenced untrusted block with one line per unresolved, non-outdated thread (`- path:line · tool · severity · title · url`, most severe first, at most 30 plus `+N more open threads not listed`). Each value is flattened to one line without control characters, and the fence is longer than any backtick run in the data.
+- `get_pr_line_threads(repoPath, prNumber, baseRepo?, after?)`: `{headSha, threads, hasNextPage, endCursor}`. Threads retain GitHub `line`, `originalLine`, `diffSide`, `isOutdated`, `isResolved`, and `comments` connection; every comment author carries `bot` (from the GraphQL actor type), and each thread carries a nullable `finding` parsed from its first comment by `tuic_git::review_bots` (`tool`, `title`, `severity`, `severityLabel`, `category`, `suggestion`, `agentPrompt`, `addressedIn`, `externalId`; untrusted text).
+- `get_pr_open_threads(repoPath, prNumber, baseRepo?)`: the `{pr_open_threads}` smart-prompt variable. A string: a preface, then a fenced untrusted block with one line per unresolved, non-outdated thread (`- path:line · tool · severity · title · url`, most severe first, at most 30 plus `+N more open threads not listed`). Each value is flattened to one line without control characters, and the fence is longer than any backtick run in the data.
 - `get_pr_thread_comments(repoPath, threadId, after?)`: GitHub comments connection.
 - `set_pr_thread_resolved(repoPath, threadId, resolved)`: confirmed thread.
 - `reply_pr_thread(repoPath, threadId, body)`: posted comment.
-- `submit_pr_draft_review(repoPath, prNumber, draft)`: posted review. Draft `{headSha, body, event, comments}` accepts COMMENT, APPROVE, REQUEST_CHANGES; request changes needs a body. Inline comments retain path/line/side/body.
+- `submit_pr_draft_review(repoPath, prNumber, baseRepo?, draft)`: posted review. Draft `{headSha, body, event, comments}` accepts COMMENT, APPROVE, REQUEST_CHANGES; request changes needs a body. Inline comments retain path/line/side/body.
 
 ### PR action commands
 
-- `get_pr_action_state(repoPath, prNumber)`: `{id, headSha, baseRefName, state, isDraft, autoMergeRequest, mergeQueueEntry, queueRequired}`. Queue entries retain id/position/state; auto-merge requests retain enabledAt/mergeMethod.
-- `set_pr_auto_merge(repoPath, prNumber, enabled, mergeMethod?, expectedHeadSha?)`: confirmed GraphQL payload. Enabling needs a valid merge/squash/rebase method and reviewed head.
-- `set_pr_merge_queue(repoPath, prNumber, enqueued, expectedHeadSha?)`: confirmed GraphQL payload with mergeQueueEntry. Enqueue needs reviewed head; dequeue does not.
-- `merge_or_enqueue_pr(repoPath, prNumber, mergeMethod, expectedHeadSha)`: `{action:"enqueued", mergeQueueEntry}` or `{action:"merged", sha}`. Queue-required branches enqueue.
+- `get_pr_action_state(repoPath, prNumber, baseRepo?)`: `{id, headSha, baseRefName, state, isDraft, autoMergeRequest, mergeQueueEntry, queueRequired}`. Queue entries retain id/position/state; auto-merge requests retain enabledAt/mergeMethod.
+- `set_pr_auto_merge(repoPath, prNumber, baseRepo?, enabled, mergeMethod?, expectedHeadSha?)`: confirmed GraphQL payload. Enabling needs a valid merge/squash/rebase method and reviewed head.
+- `set_pr_merge_queue(repoPath, prNumber, baseRepo?, enqueued, expectedHeadSha?)`: confirmed GraphQL payload with mergeQueueEntry. Enqueue needs reviewed head; dequeue does not.
+- `merge_or_enqueue_pr(repoPath, prNumber, baseRepo?, mergeMethod, expectedHeadSha)`: `{action:"enqueued", mergeQueueEntry}` or `{action:"merged", sha}`. Queue-required branches enqueue.
 - `rerun_failed_pr_jobs(repoPath, runId)`: `{accepted:true, runId}` after GitHub accepts the failed-job rerun, not a claim the new run finished.
+
+Every PR-number command above (and `post_pr_review`) takes an optional `baseRepo` (`owner/name`): the repository the PR targets. It matters for a fork checkout whose PRs are opened against the upstream, where the same number can exist in both repos. Send `BranchPrStatus.base_repo`; see [GitHub backend](../backend/github.md#fork-checkouts-pull-requests-opened-against-the-upstream). Omitted, the backend resolves from its last poll and refuses an ambiguous number.
 
 `post_pr_review` and `submit_pr_draft_review` require a nonempty body for REQUEST_CHANGES and reject unsupported event values.
 

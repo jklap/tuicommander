@@ -103,6 +103,8 @@ export interface PrDiffTab extends BaseTab {
 	diff: string;
 	/** PR head the diff was fetched at; replaced whenever the diff is reopened */
 	headSha?: string;
+	/** "owner/name" the PR targets; sent as `baseRepo` so number-only PR commands are unambiguous. */
+	baseRepo?: string;
 }
 
 /** HTML preview tab (renders HTML in a sandboxed iframe) */
@@ -711,13 +713,23 @@ function createMdTabsStore() {
 			return base._addTab({ type: "tasks", id, title: "Tasks", pinned: true } as TasksTab);
 		},
 
-		/** Add a PR diff tab (or reuse existing for same repo+prNumber, updating diff content) */
-		addPrDiff(repoPath: string, prNumber: number, prTitle: string, diff: string, headSha?: string): string {
+		/** Add a PR diff tab (or reuse an existing one for the same repo, PR number and base repo,
+		 *  updating diff content). PR numbers are per repository, so a fork PR and an upstream PR
+		 *  can share one: the base repo keeps them in separate tabs. */
+		addPrDiff(
+			repoPath: string,
+			prNumber: number,
+			prTitle: string,
+			diff: string,
+			headSha?: string,
+			baseRepo?: string,
+		): string {
 			const existing = Object.values(base.state.tabs).find(
 				(tab) =>
 					tab.type === "pr-diff" &&
 					(tab as PrDiffTab).repoPath === repoPath &&
-					(tab as PrDiffTab).prNumber === prNumber,
+					(tab as PrDiffTab).prNumber === prNumber &&
+					(tab as PrDiffTab).baseRepo === baseRepo,
 			) as PrDiffTab | undefined;
 			if (existing) {
 				// Update diff content in case it changed
@@ -738,6 +750,7 @@ function createMdTabsStore() {
 				prTitle,
 				diff,
 				headSha,
+				baseRepo,
 				pinned: false,
 			} as PrDiffTab);
 			return tabId;

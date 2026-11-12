@@ -40,7 +40,7 @@ The integration is **account-centric**: the primary key is a stable `GitHubAccou
 - **`GitHubHost`** — canonical (lowercased, validated) host. `is_cloud()` → github.com; `graphql_url()` / `rest_base()` return `api.github.com` (+`/graphql`) for cloud and `https://{host}/api/graphql` / `https://{host}/api/v3` for GHE. `is_ambient_default()` routes the global-vs-per-account branch points.
 - **Account kinds** — `GithubComOAuth` / `GithubComEnv` / `GithubComGhCli` (the ambient default, existing auth chain), additional named github.com accounts, and `GhePat` (GitHub Enterprise Server via pasted PAT).
 - **Credential storage** — github.com keeps `Credential::GithubOauthToken` (`github/oauth-token`) unchanged; per-account PATs use `Credential::GithubToken(account_id)` → `github/account/{id}/token`.
-- **Repo bindings** — `{repo_path → account_id, owner, repo, remote_name}` persisted per canonical repo root (worktrees resolve to the main root). `resolve_repo_account(repo_path)` returns `RepoResolution::{Bound | NeedsBind(candidates) | NeedsAccount | Unmonitored}` — binding-first, a single candidate returns `Bound` without persisting a binding, and multiple candidates return `NeedsBind` for every consumer (never a silent `origin` pick). Fork and upstream remotes on the same account still identify different repositories and require a remote choice.
+- **Repo bindings** — `{repo_path → account_id, owner, repo, remote_name}` persisted per canonical repo root (worktrees resolve to the main root). `resolve_repo_account(repo_path)` returns `RepoResolution::{Bound | NeedsBind(candidates) | NeedsAccount | Unmonitored}` — binding-first, a single candidate returns `Bound` without persisting a binding, and multiple candidates return `NeedsBind` for every consumer (never a silent `origin` pick). One exception: when the extra candidates all come from a remote named `upstream` and the rest name a single account/repository (the standard fork layout, `origin` = fork), the repo resolves to that repository without a prompt; the upstream repo is then watched additionally (see [Fork checkouts](#fork-checkouts-pull-requests-opened-against-the-upstream)). A persisted binding still wins outright.
 - **Concurrent saves** — Binding maps use `ConfigFile::save_delta`, so changes to different repositories compose. Account additions and removals mutate the latest registry under `ConfigFile::update_with`; the on-disk array is never replaced from a stale account snapshot.
 - **Per-account isolation (hybrid)** — github.com keeps the global breaker/viewer/rate/cooldown fields byte-for-byte; GHE accounts get isolated `ghe_state: DashMap<AccountId, GheAccountState>`. The poller groups repos by resolved account and runs one batch per account, so a fault on one never opens another's breaker. Cooldown keys: `owner/repo` (cloud, unchanged) vs `{account_id}:owner/repo` (GHE).
 - **CI logs** — github.com and GitHub Enterprise use the repo-resolved account token and REST host. Actions runs, jobs and logs use the account circuit breaker. Log redirects remove bearer credentials when the storage host changes.
@@ -86,15 +86,15 @@ An explicit disconnect is held in runtime state under the token lock. Status ref
 | Command | Signature | Description |
 |---------|-----------|-------------|
 | `get_github_status` | `(path: String) -> GitHubStatus` | Remote presence, current branch, ahead/behind counts |
-| `get_ci_checks` | `(path: String, pr_number: i64) -> Vec<Value>` | Detailed CI check list for one PR |
-| `get_pr_review_threads` | `(path: String, pr_number: i64) -> ReviewThreadCounts` | Unresolved review threads of one PR, bot vs human vs ego (GraphQL, 1 point per page). Ego threads start with a comment that holds `review_bots::EGO_MARKER`. The batch poll only carries `BranchPrStatus.unresolved_threads` |
+| `get_ci_checks` | `(path: String, pr_number: i64, base_repo?: String) -> Vec<Value>` | Detailed CI check list for one PR |
+| `get_pr_review_threads` | `(path: String, pr_number: i64, base_repo?: String) -> ReviewThreadCounts` | Unresolved review threads of one PR, bot vs human vs ego (GraphQL, 1 point per page). Ego threads start with a comment that holds `review_bots::EGO_MARKER`. The batch poll only carries `BranchPrStatus.unresolved_threads` |
 | `get_repo_pr_statuses` | `(path: String, include_merged: Option<bool>) -> Vec<BranchPrStatus>` | PR status for every branch of one repo (TTL-cached unless `include_merged`) |
-| `approve_pr` | `(repo_path: String, pr_number: i64) -> ()` | Submit approving review via the REST reviews endpoint |
-| `update_pr_branch` | `(repo_path: String, pr_number: i64, expected_head_sha: String) -> ()` | Merge the base branch into the PR branch (REST `PUT /pulls/{n}/update-branch`, same operation as GraphQL `updatePullRequestBranch`), pinned to the head the UI showed; 422 head mismatch → `PR head changed` |
-| `close_pr` | `(repo_path: String, pr_number: i64) -> ()` | Close a PR without merging (REST `PATCH /pulls/{n}` `state=closed`) |
+| `approve_pr` | `(repo_path: String, pr_number: i64, base_repo?: String) -> ()` | Submit approving review via the REST reviews endpoint |
+| `update_pr_branch` | `(repo_path: String, pr_number: i64, base_repo?: String, expected_head_sha: String) -> ()` | Merge the base branch into the PR branch (REST `PUT /pulls/{n}/update-branch`, same operation as GraphQL `updatePullRequestBranch`), pinned to the head the UI showed; 422 head mismatch → `PR head changed` |
+| `close_pr` | `(repo_path: String, pr_number: i64, base_repo?: String) -> ()` | Close a PR without merging (REST `PATCH /pulls/{n}` `state=closed`) |
 | `get_all_pr_statuses` | `(paths: Vec<String>, include_merged: bool) -> HashMap<String, Vec<BranchPrStatus>>` | Batch PR status across many repos in one GraphQL call |
-| `get_pr_diff` | `(repo_path: String, pr_number: i64) -> PrDiff {diff, headSha}` | Get PR diff content and the head commit it was read at (head read before and after the diff; a push in between is an error); falls back to a local-clone `git diff` when GitHub rejects oversized diffs |
-| `merge_pr_via_github` | `(repo_path: String, pr_number: i64, merge_method: String, expected_head_sha: String) -> String` | Merge PR via GitHub API, pinned to the reviewed head (409 → `PR head changed`) |
+| `get_pr_diff` | `(repo_path: String, pr_number: i64, base_repo?: String) -> PrDiff {diff, headSha}` | Get PR diff content and the head commit it was read at (head read before and after the diff; a push in between is an error); falls back to a local-clone `git diff` when GitHub rejects oversized diffs |
+| `merge_pr_via_github` | `(repo_path: String, pr_number: i64, base_repo?: String, merge_method: String, expected_head_sha: String) -> String` | Merge PR via GitHub API, pinned to the reviewed head (409 → `PR head changed`) |
 | `fetch_ci_failure_logs` | `(repo_path: String, branch: String, check_url?: String, head_sha?: String) -> String` | Fetch failure logs for the local branch head during auto-heal or for a selected check at the PR head SHA |
 | `create_issue_from_proposal` | `(repo_path: String, proposal: ImprovementProposal) -> CreatedIssue` | Explicit issue creation from a proposal; scan never creates issues automatically |
 
@@ -210,6 +210,8 @@ struct BranchPrStatus {
     merge_commit_allowed: bool,  // Repo-level merge settings
     squash_merge_allowed: bool,
     rebase_merge_allowed: bool,
+    base_repo: String,           // "owner/name" the PR targets; != the checkout's repo for a fork PR opened against its upstream
+    head_repo: String,           // "owner/name" holding the head branch ("" if deleted)
 }
 ```
 
@@ -346,6 +348,62 @@ PR data. `gh pr list` is used only as the parity oracle in tests.
 call per tick, so the cost does not scale with repo count. Intervals: `BASE_INTERVAL`
 60 s when visible, `HIDDEN_INTERVAL` 120 s when hidden, backing off to `MAX_INTERVAL`
 300 s on failures or a critically low rate budget.
+
+### Fork checkouts: pull requests opened against the upstream
+
+A PR pushed from a fork is created in the **upstream** repository, so the fork's own
+`pullRequests` never lists it. `poll_one_account` therefore also queries an upstream
+repo for every polled checkout:
+
+- **Which upstream:** the repo of the `upstream` remote (same host, different
+  `owner/repo` — `github_account::upstream_watch_target`), added to the batch query as
+  a PR-only `u{i}` alias. For a fork with no `upstream` remote, the batch query's
+  `isFork`/`parent` fields name the parent (learned once, cached below) and a second,
+  best-effort PR-only query fetches it in the same cycle (a failure there never fails the
+  fork's own poll); later cycles carry the cached parent in the main query. Nothing to
+  configure.
+- **Only the fork's PRs are kept** (`adopt_upstream_prs`): a PR from the upstream is added
+  only when its `headRepository` equals the checkout's own repo (case-insensitive).
+  Other contributors' PRs, and PRs whose head repo was deleted, are dropped. This also
+  prevents an upstream PR from another fork attaching to a local branch that merely
+  shares its name. The viewer PR search (`viewerPrs`) covers the upstream repo too, so a
+  PR outside the newest-N list is still found.
+- **No partial snapshots:** upstream PRs are merged only into a checkout whose own poll
+  produced a snapshot, so a failed fork poll is never replaced by an upstream-only list.
+  A branch that already has a PR keeps it.
+- **Actions follow the PR** (`resolve_pr_target`, used by `resolve_repo_for_pr` and
+  `RepoApi::resolve_for_pr`): merge, approve, update-branch, close, diff, refs, CI checks,
+  review threads, post/submit review, open/line threads and the auto-merge/merge-queue/
+  merge-or-enqueue commands act on the PR's own base repository, not the checkout's bound
+  one. PR numbers are per repository, so a fork PR #5 and an upstream PR #5 can coexist;
+  every one of those commands therefore takes an optional `base_repo` (`owner/name`, IPC
+  `baseRepo`, HTTP `baseRepo` in bodies and camelCase queries, `base_repo` in the
+  snake_case `/repo/ci`, `/repo/pr-review-threads` and `/repo/pr-diff` queries). The
+  frontend always sends `BranchPrStatus.base_repo`, which settles the ambiguity.
+  Resolution order: a hint equal to the bound repo wins with no lookup; otherwise the last
+  poll's snapshot (`github_status`) is consulted. A hint names a repository that holds that
+  PR number in the snapshot or the call is refused (`pick_pr_target`): the token is never
+  pointed at an arbitrary repository. With no hint, one match is used, none falls back to
+  the bound repo, and **two matches are an error** (acting on the wrong PR is not
+  recoverable), so an older client that omits `baseRepo` fails closed.
+- **An expired snapshot is re-polled, not guessed:** when the cache entry is gone and the
+  checkout watches another repository (an `upstream` remote, a cached parent, or the caller
+  named one), `resolve_pr_target` runs one poll of that checkout first. A checkout with
+  nothing upstream never pays for it.
+- **Fork status is cached for the process** (`github_repo_parents`, `host/owner/name`
+  lowercase → parent or `None`): whether a repo is a fork never changes, so it is asked once
+  and the answer (including "not a fork") is never refreshed. An unanswered (inaccessible)
+  repo is not cached and is asked again. A cached parent joins the main query next cycle,
+  and the `isFork`/`parent` selection is dropped for repos already known.
+- **Not covered by `base_repo`:** `rerun_failed_pr_jobs` (a run id is repo-scoped, still
+  resolved against the bound repo), `fetch_ci_failure_logs` (resolved by branch head SHA
+  against the bound repo), thread-id commands (`get_pr_thread_comments`,
+  `set_pr_thread_resolved`, `reply_pr_thread`: GraphQL node ids are repo-independent) and
+  `start_conflict_assist` (refuses `head_from_fork` PRs, which every fork→upstream PR is).
+  The "diff too large" local fallback fetches `refs/pull/N/head` from the remote whose URL
+  is the PR's repo (`remote_name_for_repo`), never blindly from `origin`.
+- `get_repo_pr_statuses` (single-repo, fork only) keeps the previously found upstream PRs
+  rather than dropping them on a refresh.
 
 ## PR Approval & Merge
 

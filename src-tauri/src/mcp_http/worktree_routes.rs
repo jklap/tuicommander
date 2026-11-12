@@ -657,9 +657,10 @@ pub(super) async fn merge_pr_via_github_http(
     if let Err(e) = validate_repo_path(&body.repo_path) {
         return e.into_response();
     }
-    match crate::github::merge_pr_github_impl(
+    match crate::github::merge_pr_github_targeted(
         &body.repo_path,
         body.pr_number,
+        body.base_repo.as_deref(),
         &body.merge_method,
         &body.expected_head_sha,
         &state,

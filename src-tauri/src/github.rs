@@ -599,6 +599,135 @@ pub(crate) async fn resolve_repo_for_rest(
     .map_err(|e| format!("repo resolution task panicked: {e}"))?
 }
 
+/// `owner/name` equality as GitHub does it (case-insensitive).
+fn same_repo(a: &str, b: &str) -> bool {
+    a.eq_ignore_ascii_case(b)
+}
+
+/// Pick the repository a PR action must target from the last poll's snapshot.
+///
+/// `Ok(None)` means "the checkout's own (bound) repository": nothing in the snapshot says
+/// otherwise. PR numbers are per repository, so a fork PR and an upstream PR can share a
+/// number. With a `hint` (the `owner/name` the caller's PR object carries) the choice is
+/// exact, and a hint naming a repository that has no such PR in the snapshot is refused
+/// rather than trusted: the token must not be pointed at an arbitrary repository. Without a
+/// hint, two candidates are an error (an action on the wrong PR is not recoverable).
+fn pick_pr_target(
+    snapshot: &[BranchPrStatus],
+    pr_number: i64,
+    hint: Option<&str>,
+    bound: &str,
+) -> Result<Option<(String, String)>, String> {
+    let split = |repo: &str| {
+        repo.split_once('/')
+            .map(|(o, n)| (o.to_string(), n.to_string()))
+    };
+    let mut bases: Vec<&str> = snapshot
+        .iter()
+        .filter(|pr| i64::from(pr.number) == pr_number && !pr.base_repo.is_empty())
+        .map(|pr| pr.base_repo.as_str())
+        .collect();
+    bases.sort_unstable_by_key(|b| b.to_ascii_lowercase());
+    bases.dedup_by(|a, b| same_repo(a, b));
+    if let Some(hint) = hint {
+        if same_repo(hint, bound) {
+            return Ok(None);
+        }
+        return match bases.iter().find(|b| same_repo(b, hint)) {
+            Some(found) => Ok(split(found)),
+            None => Err(format!(
+                "PR #{pr_number} of {hint} is not one of this checkout's watched pull requests"
+            )),
+        };
+    }
+    match bases.as_slice() {
+        [] => Ok(None),
+        [one] => Ok(split(one)),
+        _ => Err(format!(
+            "PR #{pr_number} exists in more than one watched repository ({}); \
+             the caller must say which one (baseRepo)",
+            bases.join(", ")
+        )),
+    }
+}
+
+/// Validate a caller-supplied `owner/name` hint.
+fn parse_base_repo_hint(base_repo: Option<&str>) -> Result<Option<&str>, String> {
+    match base_repo.map(str::trim).filter(|b| !b.is_empty()) {
+        None => Ok(None),
+        Some(b) if b.split('/').count() == 2 && b.split('/').all(|p| !p.is_empty()) => Ok(Some(b)),
+        Some(b) => Err(format!(
+            "Invalid base repository {b:?}: expected owner/name"
+        )),
+    }
+}
+
+/// The `(owner, repo)` a PR action targets: the checkout's bound repository
+/// (`owner`/`repo`) unless the PR lives in another watched repository (see
+/// [`pick_pr_target`]).
+///
+/// The snapshot is the last poll's PR list. When it has expired and the checkout watches
+/// another repository (or the caller names one), the poll is re-run first, so a PR found
+/// only upstream is not sent to the fork just because a cache entry aged out.
+pub(crate) async fn resolve_pr_target(
+    state: &AppState,
+    account: &crate::github_account::GitHubAccount,
+    repo_path: &str,
+    pr_number: i64,
+    base_repo: Option<&str>,
+    owner: &str,
+    repo: &str,
+) -> Result<(String, String), String> {
+    let bound = format!("{owner}/{repo}");
+    let hint = parse_base_repo_hint(base_repo)?;
+    if hint.is_some_and(|h| same_repo(h, &bound)) {
+        return Ok((owner.to_string(), repo.to_string()));
+    }
+    let mut snapshot = state.git_cache.github_status.get(repo_path);
+    if snapshot.is_none()
+        && (hint.is_some()
+            || !watched_upstreams(
+                state,
+                account,
+                &[(repo_path.to_string(), owner.to_string(), repo.to_string())],
+            )
+            .is_empty())
+    {
+        if let Err(e) = get_all_batch_with_intake_impl(
+            &[repo_path.to_string()],
+            false,
+            "disabled",
+            false,
+            state,
+            false,
+        )
+        .await
+        {
+            tracing::warn!(source = "github", %repo_path, "re-poll before a PR action failed: {e}");
+        }
+        snapshot = state.git_cache.github_status.get(repo_path);
+    }
+    let snapshot = snapshot.as_deref().map(Vec::as_slice).unwrap_or(&[]);
+    Ok(pick_pr_target(snapshot, pr_number, hint, &bound)?
+        .unwrap_or_else(|| (owner.to_string(), repo.to_string())))
+}
+
+/// [`resolve_repo_for_rest`], retargeted at the PR's own base repository when the
+/// PR was opened against an upstream (see [`resolve_pr_target`]).
+pub(crate) async fn resolve_repo_for_pr(
+    state: &AppState,
+    repo_path: &str,
+    pr_number: i64,
+    base_repo: Option<&str>,
+) -> Result<(crate::github_account::GitHubAccount, String, String, String), String> {
+    let (account, token, owner, repo) = resolve_repo_for_rest(state, repo_path).await?;
+    let (owner, repo) = resolve_pr_target(
+        state, &account, repo_path, pr_number, base_repo, &owner, &repo,
+    )
+    .await?;
+    Ok((account, token, owner, repo))
+}
+
 /// Async wrapper around [`crate::github_auth::resolve_token_for_account`] — the
 /// keychain shell-out runs on a blocking thread so it never stalls the runtime.
 async fn resolve_token_for_account_async(
@@ -1166,14 +1295,30 @@ async fn poll_one_account(
     };
     let include_issues = !matches!(filter_mode, "" | "disabled");
 
-    let (query, aliases) = tuic_git::github::build_unified_batch_query_with_intake(
-        repos,
-        include_merged,
-        filter_mode,
-        &viewer,
-        pr_hide_drafts,
-        intake_label,
-    );
+    // A fork's PRs are opened against its upstream, which the fork's own PR list
+    // never shows: watch the `upstream` remote's repo and GitHub's cached parent.
+    let upstream = watched_upstreams(state, account, repos);
+    let known_forks: Vec<String> = repos
+        .iter()
+        .filter(|(_, owner, name)| {
+            state
+                .git_cache
+                .github_repo_parents
+                .contains_key(&parent_cache_key(account, owner, name))
+        })
+        .map(|(path, _, _)| path.clone())
+        .collect();
+    let (query, aliases, upstream_aliases) =
+        tuic_git::github::build_unified_batch_query_with_upstream(
+            repos,
+            &upstream,
+            &known_forks,
+            include_merged,
+            filter_mode,
+            &viewer,
+            pr_hide_drafts,
+            intake_label,
+        );
     let mut response = graphql_with_retry(
         state,
         account,
@@ -1322,7 +1467,296 @@ async fn poll_one_account(
         pr_results,
         issue_results,
     )
-    .await
+    .await?;
+    adopt_upstream_prs(
+        state,
+        account,
+        repos,
+        &upstream,
+        &upstream_aliases,
+        include_merged,
+        &viewer,
+        &response,
+        pr_results,
+    )
+    .await;
+
+    // Learn each repository's parentage once (it never changes), then query a parent
+    // that is not watched yet (PRs only) so a fork with no `upstream` remote and no
+    // earlier cycle still has its PRs found without any git config.
+    let parents = learn_fork_parents(state, account, repos, &aliases, &upstream, &response);
+    if !parents.is_empty() {
+        let (query, _, parent_aliases) = tuic_git::github::build_unified_batch_query_with_upstream(
+            &[],
+            &parents,
+            &[],
+            include_merged,
+            "disabled",
+            &viewer,
+            pr_hide_drafts,
+            None,
+        );
+        // Best-effort: a parent the token cannot read (or a transient failure)
+        // must not fail the fork's own poll, which is already adopted.
+        match graphql_with_retry(
+            state,
+            account,
+            &query,
+            serde_json::Value::Null,
+            prefetched_token,
+        )
+        .await
+        {
+            Ok(parent_response) => {
+                adopt_upstream_prs(
+                    state,
+                    account,
+                    repos,
+                    &parents,
+                    &parent_aliases,
+                    include_merged,
+                    &viewer,
+                    &parent_response,
+                    pr_results,
+                )
+                .await;
+            }
+            Err(e) => {
+                tracing::warn!(source = "github", account = %account.id, error = %e, "parent repository PR poll failed");
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Key of [`GitCacheState::github_repo_parents`](crate::state::GitCacheState).
+fn parent_cache_key(
+    account: &crate::github_account::GitHubAccount,
+    owner: &str,
+    name: &str,
+) -> String {
+    format!("{}/{owner}/{name}", account.host.as_str()).to_lowercase()
+}
+
+/// The upstream repositories to poll next to `repos`, as `(local path, owner, name)`:
+/// each checkout's `upstream` remote plus the parent GitHub reported for its repository
+/// on an earlier poll (cached, never re-asked). Duplicates (the usual case: the remote
+/// names the parent) are dropped, as is anything equal to the checkout's own repository.
+fn watched_upstreams(
+    state: &AppState,
+    account: &crate::github_account::GitHubAccount,
+    repos: &[(String, String, String)],
+) -> Vec<(String, String, String)> {
+    let mut out: Vec<(String, String, String)> = Vec::new();
+    for (path, owner, name) in repos {
+        let remote = crate::github_account::upstream_watch_target(
+            std::path::Path::new(path),
+            &account.host,
+            owner,
+            name,
+        );
+        let cached = state
+            .git_cache
+            .github_repo_parents
+            .get(&parent_cache_key(account, owner, name))
+            .and_then(|parent| parent.value().clone())
+            .and_then(|p| {
+                p.split_once('/')
+                    .map(|(o, n)| (o.to_string(), n.to_string()))
+            });
+        for (o, n) in remote.into_iter().chain(cached) {
+            let own = o.eq_ignore_ascii_case(owner) && n.eq_ignore_ascii_case(name);
+            let dup = out.iter().any(|(p, eo, en)| {
+                p == path && eo.eq_ignore_ascii_case(&o) && en.eq_ignore_ascii_case(&n)
+            });
+            if !own && !dup {
+                out.push((path.clone(), o, n));
+            }
+        }
+    }
+    out
+}
+
+/// Record the fork parentage a batch response carries and return the parents that still
+/// need their PRs polled (not already in `upstream`, which already covers them).
+///
+/// Only an alias that answered with an `isFork` boolean is cached, so an inaccessible
+/// repository is asked again next cycle; a non-fork is cached as such (`None`).
+fn learn_fork_parents(
+    state: &AppState,
+    account: &crate::github_account::GitHubAccount,
+    repos: &[(String, String, String)],
+    aliases: &[(String, String)],
+    upstream: &[(String, String, String)],
+    response: &serde_json::Value,
+) -> Vec<(String, String, String)> {
+    let mut parents = Vec::new();
+    for (i, (alias, path)) in aliases.iter().enumerate() {
+        let repo_json = &response["data"][alias];
+        let Some(is_fork) = repo_json["isFork"].as_bool() else {
+            continue;
+        };
+        let (_, owner, name) = &repos[i];
+        let parent = if is_fork {
+            repo_json["parent"]["nameWithOwner"]
+                .as_str()
+                .filter(|p| p.contains('/'))
+                .map(str::to_string)
+        } else {
+            None
+        };
+        state
+            .git_cache
+            .github_repo_parents
+            .insert(parent_cache_key(account, owner, name), parent.clone());
+        let Some((po, pn)) = parent.as_deref().and_then(|p| p.split_once('/')) else {
+            continue;
+        };
+        let watched = upstream
+            .iter()
+            .any(|(p, o, n)| p == path && o.eq_ignore_ascii_case(po) && n.eq_ignore_ascii_case(pn));
+        if !watched {
+            parents.push((path.clone(), po.to_string(), pn.to_string()));
+        }
+    }
+    parents
+}
+
+/// Merge PRs that target an upstream repository into the fork checkout's results.
+///
+/// Only PRs whose head lives in the checkout's own (fork) repository are kept:
+/// the sidebar shows the user's PRs, not everyone else's against the upstream.
+/// A checkout whose own poll produced no snapshot is skipped, so a failed fork
+/// poll is never replaced by a partial, upstream-only list.
+#[allow(clippy::too_many_arguments)]
+async fn adopt_upstream_prs(
+    state: &AppState,
+    account: &crate::github_account::GitHubAccount,
+    repos: &[(String, String, String)],
+    upstream: &[(String, String, String)],
+    upstream_aliases: &[(String, String)],
+    include_merged: bool,
+    viewer: &str,
+    response: &serde_json::Value,
+    pr_results: &mut std::collections::HashMap<String, Vec<BranchPrStatus>>,
+) {
+    if upstream.is_empty() {
+        return;
+    }
+    let fork_of: std::collections::HashMap<&str, String> = repos
+        .iter()
+        .map(|(path, owner, name)| (path.as_str(), format!("{owner}/{name}").to_lowercase()))
+        .collect();
+    let from_fork = |pr: &BranchPrStatus, path: &str| {
+        fork_of
+            .get(path)
+            .is_some_and(|fork| pr.head_repo.to_lowercase() == *fork)
+    };
+    let mut found: Vec<(String, BranchPrStatus)> = Vec::new();
+
+    for (i, (alias, path)) in upstream_aliases.iter().enumerate() {
+        let repo_json = &response["data"][alias];
+        let Some(nodes) = repo_json["pullRequests"]["nodes"].as_array() else {
+            continue;
+        };
+        let (_, owner, name) = &upstream[i];
+        let mut statuses: Vec<BranchPrStatus> = nodes
+            .iter()
+            .filter_map(parse_pr_node)
+            .filter(|pr| from_fork(pr, path))
+            .collect();
+        stamp_merge_policy(&mut statuses, repo_json);
+        settle_truncated_threads(
+            &state.git_cache.settled_review_threads,
+            &format!("{}/{owner}", account.host.as_str()),
+            name,
+            &mut statuses,
+            |n| fetch_review_thread_counts(state, account, owner, name, n),
+        )
+        .await;
+        found.extend(statuses.into_iter().map(|pr| (path.clone(), pr)));
+    }
+
+    // The viewer search finds PRs outside the top-N by activity.
+    if !viewer.is_empty()
+        && let Some(nodes) = response["data"]["viewerPrs"]["nodes"].as_array()
+    {
+        let mut by_name: std::collections::HashMap<String, Vec<&str>> =
+            std::collections::HashMap::new();
+        for (path, owner, name) in upstream {
+            by_name
+                .entry(format!("{owner}/{name}").to_lowercase())
+                .or_default()
+                .push(path.as_str());
+        }
+        for node in nodes {
+            let repo_name = node["repository"]["nameWithOwner"]
+                .as_str()
+                .unwrap_or("")
+                .to_lowercase();
+            let Some(paths) = by_name.get(&repo_name) else {
+                continue;
+            };
+            let Some(mut pr) = parse_pr_node(node) else {
+                continue;
+            };
+            let Some((owner, name)) = pr
+                .base_repo
+                .clone()
+                .split_once('/')
+                .map(|(o, n)| (o.to_string(), n.to_string()))
+            else {
+                continue;
+            };
+            settle_truncated_threads(
+                &state.git_cache.settled_review_threads,
+                &format!("{}/{owner}", account.host.as_str()),
+                &name,
+                std::slice::from_mut(&mut pr),
+                |n| fetch_review_thread_counts(state, account, &owner, &name, n),
+            )
+            .await;
+            for path in paths {
+                if from_fork(&pr, path) {
+                    found.push((path.to_string(), pr.clone()));
+                }
+            }
+        }
+    }
+
+    let mut touched: std::collections::HashSet<String> = Default::default();
+    for (path, pr) in found {
+        // Already hold a PR for this branch → keep it; the fork's own PR list is authoritative.
+        let Some(entry) = pr_results.get_mut(&path) else {
+            continue;
+        };
+        if entry
+            .iter()
+            .any(|e| e.branch == pr.branch && e.number == pr.number && e.base_repo == pr.base_repo)
+            || entry.iter().any(|e| e.branch == pr.branch)
+        {
+            continue;
+        }
+        if include_merged && pr.state == "MERGED" && !pr.head_ref_oid.is_empty() {
+            let tips = local_branch_tips(PathBuf::from(&path)).await;
+            if tips
+                .get(&pr.branch)
+                .is_some_and(|tip| tip != &pr.head_ref_oid)
+            {
+                continue;
+            }
+        }
+        entry.push(pr);
+        touched.insert(path);
+    }
+    for path in touched {
+        if let Some(all) = pr_results.get(&path) {
+            state
+                .git_cache
+                .github_status
+                .insert(path, Arc::new(all.clone()));
+        }
+    }
 }
 
 /// Adopt each accessible alias independently; a denied alias must not erase its siblings.
@@ -1929,6 +2363,7 @@ pub(crate) async fn get_repo_pr_statuses_impl(
     };
 
     // Reuse the multi-repo query builder for consistent state filtering
+    let own_repo = format!("{owner}/{repo}");
     let repos = vec![(path.to_string(), owner, repo)];
     let (query, aliases) = build_multi_repo_pr_query(&repos, include_merged);
 
@@ -1963,6 +2398,19 @@ pub(crate) async fn get_repo_pr_statuses_impl(
                         None => true,
                     }
                 });
+            }
+
+            // This single-repo query only sees the fork. Keep the PRs the last batch
+            // poll found against its upstream, or one refresh would drop them.
+            if let Some(previous) = state.git_cache.github_status.get(path) {
+                for pr in previous.iter() {
+                    if !pr.base_repo.is_empty()
+                        && !pr.base_repo.eq_ignore_ascii_case(&own_repo)
+                        && !nodes.iter().any(|n| n.branch == pr.branch)
+                    {
+                        nodes.push(pr.clone());
+                    }
+                }
             }
 
             Ok(nodes)
@@ -2220,9 +2668,10 @@ query PRChecks($owner: String!, $repo: String!, $number: Int!) {
 "#;
 
 /// Core logic for fetching CI check details via GitHub GraphQL API (no caching).
-pub(crate) async fn get_ci_checks_impl(
+pub(crate) async fn get_ci_checks_targeted(
     path: &str,
     pr_number: i64,
+    base_repo: Option<&str>,
     state: &AppState,
 ) -> Vec<serde_json::Value> {
     let repo_path = PathBuf::from(path);
@@ -2239,6 +2688,24 @@ pub(crate) async fn get_ci_checks_impl(
     let (owner, repo) = match parse_remote_url(&remote_url) {
         Some(pair) => pair,
         None => return vec![],
+    };
+    // A PR opened against the fork's upstream lives (and runs CI) there.
+    let (owner, repo) = match resolve_pr_target(
+        state,
+        &github_com_account(state),
+        path,
+        pr_number,
+        base_repo,
+        &owner,
+        &repo,
+    )
+    .await
+    {
+        Ok(target) => target,
+        Err(e) => {
+            tracing::warn!(source = "github", "{e}");
+            return vec![];
+        }
     };
 
     let variables = serde_json::json!({
@@ -2426,9 +2893,10 @@ async fn settle_truncated_threads<W, Fut>(
 
 /// Unresolved review threads of one PR split by bot vs human. One page costs one GraphQL point,
 /// which is why the split is not part of the batch poll.
-pub(crate) async fn get_pr_review_threads_impl(
+pub(crate) async fn get_pr_review_threads_targeted(
     path: &str,
     pr_number: i64,
+    base_repo: Option<&str>,
     state: &AppState,
 ) -> Result<ReviewThreadCounts, String> {
     let repo_path = PathBuf::from(path);
@@ -2436,6 +2904,16 @@ pub(crate) async fn get_pr_review_threads_impl(
         get_github_remote_url(&repo_path).ok_or_else(|| "No GitHub remote".to_string())?;
     let (owner, repo) =
         parse_remote_url(&remote_url).ok_or_else(|| "Unrecognised GitHub remote".to_string())?;
+    let (owner, repo) = resolve_pr_target(
+        state,
+        &github_com_account(state),
+        path,
+        pr_number,
+        base_repo,
+        &owner,
+        &repo,
+    )
+    .await?;
     fetch_review_thread_counts(state, &github_com_account(state), &owner, &repo, pr_number)
         .await
         .map(|(counts, _)| counts)
@@ -2447,17 +2925,19 @@ pub(crate) async fn get_pr_review_threads_impl(
 pub(crate) async fn get_pr_review_threads(
     path: String,
     pr_number: i64,
+    base_repo: Option<String>,
     state: State<'_, Arc<AppState>>,
 ) -> Result<ReviewThreadCounts, String> {
     let state = state.inner().clone();
-    get_pr_review_threads_impl(&path, pr_number, &state).await
+    get_pr_review_threads_targeted(&path, pr_number, base_repo.as_deref(), &state).await
 }
 
 /// Merge a PR via GitHub REST API using the specified merge method, pinned to
 /// `expected_head_sha` (the head the caller displayed).
-pub(crate) async fn merge_pr_github_impl(
+pub(crate) async fn merge_pr_github_targeted(
     repo_path: &str,
     pr_number: i64,
+    base_repo: Option<&str>,
     merge_method: &str,
     expected_head_sha: &str,
     state: &AppState,
@@ -2465,7 +2945,8 @@ pub(crate) async fn merge_pr_github_impl(
     if expected_head_sha.trim().is_empty() {
         return Err("Cannot merge without the head commit the PR was reviewed at".to_string());
     }
-    let (account, token, owner, repo) = resolve_repo_for_rest(state, repo_path).await?;
+    let (account, token, owner, repo) =
+        resolve_repo_for_pr(state, repo_path, pr_number, base_repo).await?;
 
     let path = format!("/repos/{owner}/{repo}/pulls/{pr_number}/merge");
     let url = crate::github_account::github_rest_url(&account.host, &path);
@@ -2511,14 +2992,16 @@ pub(crate) async fn merge_pr_github_impl(
 pub(crate) async fn merge_pr_via_github(
     repo_path: String,
     pr_number: i64,
+    base_repo: Option<String>,
     merge_method: String,
     expected_head_sha: String,
     state: State<'_, Arc<AppState>>,
 ) -> Result<String, String> {
     let state = state.inner().clone();
-    merge_pr_github_impl(
+    merge_pr_github_targeted(
         &repo_path,
         pr_number,
+        base_repo.as_deref(),
         &merge_method,
         &expected_head_sha,
         &state,
@@ -2532,10 +3015,11 @@ pub(crate) async fn merge_pr_via_github(
 pub(crate) async fn get_ci_checks(
     path: String,
     pr_number: i64,
+    base_repo: Option<String>,
     state: State<'_, Arc<AppState>>,
 ) -> Result<Vec<serde_json::Value>, String> {
     let state = state.inner().clone();
-    Ok(get_ci_checks_impl(&path, pr_number, &state).await)
+    Ok(get_ci_checks_targeted(&path, pr_number, base_repo.as_deref(), &state).await)
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -2748,16 +3232,18 @@ pub(crate) async fn create_issue_impl(
     create_issue_with(&api, title, body).await
 }
 
-pub(crate) async fn post_pr_review_impl(
+pub(crate) async fn post_pr_review_targeted(
     repo_path: &str,
     pr_number: i64,
+    base_repo: Option<&str>,
     body: &str,
     event: Option<&str>,
     comments: &[PrReviewInlineComment],
     state: &AppState,
 ) -> Result<PostedPrReview, String> {
     crate::github_pr_actions::validate_review_event(body, event.unwrap_or("COMMENT"))?;
-    let api = crate::github_pr_api::RepoApi::resolve(state, repo_path).await?;
+    let api = crate::github_pr_api::RepoApi::resolve_for_pr(state, repo_path, pr_number, base_repo)
+        .await?;
     post_pr_review_with(&api, pr_number, body, event, comments).await
 }
 
@@ -2793,15 +3279,17 @@ pub(crate) async fn create_issue(
 pub(crate) async fn post_pr_review(
     repo_path: String,
     pr_number: i64,
+    base_repo: Option<String>,
     body: String,
     event: Option<String>,
     comments: Vec<PrReviewInlineComment>,
     state: State<'_, Arc<AppState>>,
 ) -> Result<PostedPrReview, String> {
     let state = state.inner().clone();
-    post_pr_review_impl(
+    post_pr_review_targeted(
         &repo_path,
         pr_number,
+        base_repo.as_deref(),
         &body,
         event.as_deref(),
         &comments,
@@ -2812,12 +3300,14 @@ pub(crate) async fn post_pr_review(
 
 /// Approve a PR via GitHub REST API.
 /// Creates a review with event=APPROVE.
-pub(crate) async fn approve_pr_impl(
+pub(crate) async fn approve_pr_targeted(
     repo_path: &str,
     pr_number: i64,
+    base_repo: Option<&str>,
     state: &AppState,
 ) -> Result<(), String> {
-    let (account, token, owner, repo) = resolve_repo_for_rest(state, repo_path).await?;
+    let (account, token, owner, repo) =
+        resolve_repo_for_pr(state, repo_path, pr_number, base_repo).await?;
 
     let path = format!("/repos/{owner}/{repo}/pulls/{pr_number}/reviews");
     let url = crate::github_account::github_rest_url(&account.host, &path);
@@ -2891,10 +3381,11 @@ fn friendly_approve_error(status: u16, raw: &str) -> String {
 pub(crate) async fn approve_pr(
     repo_path: String,
     pr_number: i64,
+    base_repo: Option<String>,
     state: State<'_, Arc<AppState>>,
 ) -> Result<(), String> {
     let state = state.inner().clone();
-    approve_pr_impl(&repo_path, pr_number, &state).await
+    approve_pr_targeted(&repo_path, pr_number, base_repo.as_deref(), &state).await
 }
 
 /// Map a failed update-branch response. GitHub answers 422 when the pinned
@@ -2912,16 +3403,18 @@ fn update_branch_failure_message(status: u16, raw: &str) -> String {
 /// pinned to `expected_head_sha` (the same operation as GraphQL
 /// `updatePullRequestBranch` with `expectedHeadOid`). GitHub answers 202: the
 /// merge commit lands asynchronously, so the caller re-polls.
-pub(crate) async fn update_pr_branch_impl(
+pub(crate) async fn update_pr_branch_targeted(
     repo_path: &str,
     pr_number: i64,
+    base_repo: Option<&str>,
     expected_head_sha: &str,
     state: &AppState,
 ) -> Result<(), String> {
     if expected_head_sha.trim().is_empty() {
         return Err("Cannot update the branch without the head commit the PR showed".to_string());
     }
-    let (account, token, owner, repo) = resolve_repo_for_rest(state, repo_path).await?;
+    let (account, token, owner, repo) =
+        resolve_repo_for_pr(state, repo_path, pr_number, base_repo).await?;
 
     let path = format!("/repos/{owner}/{repo}/pulls/{pr_number}/update-branch");
     let url = crate::github_account::github_rest_url(&account.host, &path);
@@ -2959,20 +3452,30 @@ pub(crate) async fn update_pr_branch_impl(
 pub(crate) async fn update_pr_branch(
     repo_path: String,
     pr_number: i64,
+    base_repo: Option<String>,
     expected_head_sha: String,
     state: State<'_, Arc<AppState>>,
 ) -> Result<(), String> {
     let state = state.inner().clone();
-    update_pr_branch_impl(&repo_path, pr_number, &expected_head_sha, &state).await
+    update_pr_branch_targeted(
+        &repo_path,
+        pr_number,
+        base_repo.as_deref(),
+        &expected_head_sha,
+        &state,
+    )
+    .await
 }
 
 /// Close a PR without merging via the REST pulls endpoint.
-pub(crate) async fn close_pr_impl(
+pub(crate) async fn close_pr_targeted(
     repo_path: &str,
     pr_number: i64,
+    base_repo: Option<&str>,
     state: &AppState,
 ) -> Result<(), String> {
-    let (account, token, owner, repo) = resolve_repo_for_rest(state, repo_path).await?;
+    let (account, token, owner, repo) =
+        resolve_repo_for_pr(state, repo_path, pr_number, base_repo).await?;
 
     let path = format!("/repos/{owner}/{repo}/pulls/{pr_number}");
     let url = crate::github_account::github_rest_url(&account.host, &path);
@@ -3010,10 +3513,11 @@ pub(crate) async fn close_pr_impl(
 pub(crate) async fn close_pr(
     repo_path: String,
     pr_number: i64,
+    base_repo: Option<String>,
     state: State<'_, Arc<AppState>>,
 ) -> Result<(), String> {
     let state = state.inner().clone();
-    close_pr_impl(&repo_path, pr_number, &state).await
+    close_pr_targeted(&repo_path, pr_number, base_repo.as_deref(), &state).await
 }
 
 /// A PR diff together with the head commit it was read at.
@@ -3031,7 +3535,17 @@ pub(crate) async fn get_pr_diff_impl(
     pr_number: i64,
     state: &AppState,
 ) -> Result<String, String> {
-    let (account, token, owner, repo) = resolve_repo_for_rest(state, repo_path).await?;
+    get_pr_diff_targeted(repo_path, pr_number, None, state).await
+}
+
+pub(crate) async fn get_pr_diff_targeted(
+    repo_path: &str,
+    pr_number: i64,
+    base_repo: Option<&str>,
+    state: &AppState,
+) -> Result<String, String> {
+    let (account, token, owner, repo) =
+        resolve_repo_for_pr(state, repo_path, pr_number, base_repo).await?;
 
     let path = format!("/repos/{owner}/{repo}/pulls/{pr_number}");
     let url = crate::github_account::github_rest_url(&account.host, &path);
@@ -3065,7 +3579,7 @@ pub(crate) async fn get_pr_diff_impl(
                 pr_number,
                 "GitHub PR diff too large; falling back to local clone diff"
             );
-            get_pr_diff_from_local_clone(repo_path, pr_number, state)
+            get_pr_diff_from_local_clone(repo_path, pr_number, base_repo, state)
                 .await
                 .map_err(|fallback_err| {
                     format!(
@@ -3080,16 +3594,17 @@ pub(crate) async fn get_pr_diff_impl(
 
 /// The diff plus the head it belongs to. The head is read before and after the
 /// diff: a push in between would pair line numbers of one commit with another.
-pub(crate) async fn get_pr_diff_pinned_impl(
+pub(crate) async fn get_pr_diff_pinned_targeted(
     repo_path: &str,
     pr_number: i64,
+    base_repo: Option<&str>,
     state: &AppState,
 ) -> Result<PrDiff, String> {
-    let before = get_pr_refs_impl(repo_path, pr_number, state)
+    let before = get_pr_refs_targeted(repo_path, pr_number, base_repo, state)
         .await?
         .head_sha;
-    let diff = get_pr_diff_impl(repo_path, pr_number, state).await?;
-    let after = get_pr_refs_impl(repo_path, pr_number, state)
+    let diff = get_pr_diff_targeted(repo_path, pr_number, base_repo, state).await?;
+    let after = get_pr_refs_targeted(repo_path, pr_number, base_repo, state)
         .await?
         .head_sha;
     pin_diff_head(diff, before, after)
@@ -3125,25 +3640,62 @@ fn is_github_diff_too_large(status: reqwest::StatusCode, body: &str) -> bool {
 async fn get_pr_diff_from_local_clone(
     repo_path: &str,
     pr_number: i64,
+    base_repo: Option<&str>,
     state: &AppState,
 ) -> Result<String, String> {
-    let refs = get_pr_refs_impl(repo_path, pr_number, state).await?;
+    let refs = get_pr_refs_targeted(repo_path, pr_number, base_repo, state).await?;
+    // The PR's refs live in its base repository: fetch from the remote that points at it
+    // (`origin` is the fork for a PR opened against an upstream).
+    let (account, _token, owner, repo) =
+        resolve_repo_for_pr(state, repo_path, pr_number, base_repo).await?;
+    let remote = remote_name_for_repo(Path::new(repo_path), &account.host, &owner, &repo)
+        .ok_or_else(|| {
+            format!(
+                "No git remote points at {owner}/{repo}, so its PR diff cannot be fetched locally"
+            )
+        })?;
     let repo_path = repo_path.to_string();
-    tokio::task::spawn_blocking(move || local_pr_diff(&repo_path, pr_number, &refs))
+    tokio::task::spawn_blocking(move || local_pr_diff_from(&repo_path, pr_number, &refs, &remote))
         .await
         .map_err(|e| format!("local diff task panicked: {e}"))?
 }
 
-fn local_pr_diff(repo_path: &str, pr_number: i64, refs: &PrRefs) -> Result<String, String> {
+/// The name of the remote whose URL is `owner/repo` on `host` (`origin` first, else the
+/// first match), if any.
+fn remote_name_for_repo(
+    repo_path: &Path,
+    host: &crate::github_account::GitHubHost,
+    owner: &str,
+    repo: &str,
+) -> Option<String> {
+    let mut matches: Vec<String> = crate::git::list_remotes(repo_path)
+        .into_iter()
+        .filter(|(_, url)| {
+            crate::github_account::parse_remote_url(url).is_some_and(|(h, o, r)| {
+                &h == host && o.eq_ignore_ascii_case(owner) && r.eq_ignore_ascii_case(repo)
+            })
+        })
+        .map(|(name, _)| name)
+        .collect();
+    matches.sort_by_key(|name| name != "origin");
+    matches.into_iter().next()
+}
+
+fn local_pr_diff_from(
+    repo_path: &str,
+    pr_number: i64,
+    refs: &PrRefs,
+    remote: &str,
+) -> Result<String, String> {
     let repo = Path::new(repo_path);
-    let base_remote_ref = format!("refs/remotes/origin/{}", refs.base_ref);
-    let head_remote_ref = format!("refs/remotes/origin/pr/{pr_number}");
+    let base_remote_ref = format!("refs/remotes/{remote}/{}", refs.base_ref);
+    let head_remote_ref = format!("refs/remotes/{remote}/pr/{pr_number}");
 
     let mut fetch_errors = Vec::new();
     let base_refspec = format!("+refs/heads/{}:{base_remote_ref}", refs.base_ref);
     if let Err(e) = crate::git_cli::git_cmd(repo)
         .timeout(crate::git_cli::FETCH_TIMEOUT)
-        .args(["fetch", "--no-tags", "origin", &base_refspec])
+        .args(["fetch", "--no-tags", remote, &base_refspec])
         .run()
     {
         fetch_errors.push(format!("base {}: {e}", refs.base_ref));
@@ -3152,14 +3704,14 @@ fn local_pr_diff(repo_path: &str, pr_number: i64, refs: &PrRefs) -> Result<Strin
     let pull_refspec = format!("+refs/pull/{pr_number}/head:{head_remote_ref}");
     let mut fetched_head = crate::git_cli::git_cmd(repo)
         .timeout(crate::git_cli::FETCH_TIMEOUT)
-        .args(["fetch", "--no-tags", "origin", &pull_refspec])
+        .args(["fetch", "--no-tags", remote, &pull_refspec])
         .run()
         .is_ok();
     if !fetched_head && !refs.head_from_fork {
         let head_refspec = format!("+refs/heads/{}:{head_remote_ref}", refs.head_ref);
         match crate::git_cli::git_cmd(repo)
             .timeout(crate::git_cli::FETCH_TIMEOUT)
-            .args(["fetch", "--no-tags", "origin", &head_refspec])
+            .args(["fetch", "--no-tags", remote, &head_refspec])
             .run()
         {
             Ok(_) => fetched_head = true,
@@ -3199,7 +3751,17 @@ pub(crate) async fn get_pr_refs_impl(
     pr_number: i64,
     state: &AppState,
 ) -> Result<PrRefs, String> {
-    let (account, token, owner, repo) = resolve_repo_for_rest(state, repo_path).await?;
+    get_pr_refs_targeted(repo_path, pr_number, None, state).await
+}
+
+pub(crate) async fn get_pr_refs_targeted(
+    repo_path: &str,
+    pr_number: i64,
+    base_repo: Option<&str>,
+    state: &AppState,
+) -> Result<PrRefs, String> {
+    let (account, token, owner, repo) =
+        resolve_repo_for_pr(state, repo_path, pr_number, base_repo).await?;
     let path = format!("/repos/{owner}/{repo}/pulls/{pr_number}");
     let url = crate::github_account::github_rest_url(&account.host, &path);
     crate::github_debug::log_api("GET", &url, "get_pr_refs_impl");
@@ -3524,10 +4086,11 @@ async fn fetch_ci_failure_logs_inner(
 pub(crate) async fn get_pr_diff(
     repo_path: String,
     pr_number: i64,
+    base_repo: Option<String>,
     state: State<'_, Arc<AppState>>,
 ) -> Result<PrDiff, String> {
     let state = state.inner().clone();
-    get_pr_diff_pinned_impl(&repo_path, pr_number, &state).await
+    get_pr_diff_pinned_targeted(&repo_path, pr_number, base_repo.as_deref(), &state).await
 }
 
 #[cfg(test)]
@@ -3537,6 +4100,10 @@ mod write_tests;
 #[cfg(test)]
 #[path = "github_partial_tests.rs"]
 pub(crate) mod partial_tests;
+
+#[cfg(test)]
+#[path = "github_upstream_tests.rs"]
+mod upstream_tests;
 
 #[cfg(test)]
 mod tests {
@@ -4405,7 +4972,7 @@ mod tests {
     #[tokio::test]
     async fn merge_without_expected_head_is_rejected_before_any_request() {
         let state = crate::state::tests_support::make_test_app_state();
-        let err = merge_pr_github_impl("/nonexistent", 1, "squash", "", &state)
+        let err = merge_pr_github_targeted("/nonexistent", 1, None, "squash", "", &state)
             .await
             .expect_err("empty sha must be rejected");
         assert!(err.contains("head commit"), "{err}");
@@ -4428,7 +4995,7 @@ mod tests {
     #[tokio::test]
     async fn update_branch_without_expected_head_is_rejected_before_any_request() {
         let state = crate::state::tests_support::make_test_app_state();
-        let err = update_pr_branch_impl("/nonexistent", 1, "", &state)
+        let err = update_pr_branch_targeted("/nonexistent", 1, None, "", &state)
             .await
             .expect_err("empty sha must be rejected");
         assert!(err.contains("head commit"), "{err}");
@@ -4439,7 +5006,7 @@ mod tests {
     #[tokio::test]
     async fn merge_with_blank_expected_head_is_rejected_before_any_request() {
         let state = crate::state::tests_support::make_test_app_state();
-        let err = merge_pr_github_impl("/nonexistent", 1, "squash", "  ", &state)
+        let err = merge_pr_github_targeted("/nonexistent", 1, None, "squash", "  ", &state)
             .await
             .expect_err("blank sha must be rejected");
         assert!(err.contains("head commit"), "{err}");
@@ -7052,7 +7619,7 @@ mod critic2_tests {
     #[tokio::test]
     async fn update_branch_blank_expected_head_is_rejected_before_any_request() {
         let state = crate::state::tests_support::make_test_app_state();
-        let err = update_pr_branch_impl("/nonexistent", 1, "  \t", &state)
+        let err = update_pr_branch_targeted("/nonexistent", 1, None, "  \t", &state)
             .await
             .expect_err("blank sha must be rejected");
         assert!(err.contains("head commit"), "{err}");
@@ -7711,7 +8278,7 @@ mod pr_panel_mutant_tests {
     #[tokio::test]
     async fn review_threads_of_a_path_without_a_github_remote_is_an_error() {
         let state = crate::state::tests_support::make_test_app_state();
-        let err = get_pr_review_threads_impl("/nonexistent", 1, &state)
+        let err = get_pr_review_threads_targeted("/nonexistent", 1, None, &state)
             .await
             .expect_err("no remote, no threads");
         assert_eq!(err, "No GitHub remote");
@@ -7722,7 +8289,7 @@ mod pr_panel_mutant_tests {
     #[tokio::test]
     async fn close_pr_of_an_unresolvable_repo_is_an_error() {
         let state = crate::state::tests_support::make_test_app_state();
-        close_pr_impl("/nonexistent", 1, &state)
+        close_pr_targeted("/nonexistent", 1, None, &state)
             .await
             .expect_err("nothing was closed, so it must not succeed");
     }

@@ -56,7 +56,11 @@ Open **Settings > Git & GitHub > Repository Bindings**. Each workspace repo show
 - **Needs binding** — the repo matches more than one account or GitHub remote. TUICommander does **not** guess `origin`; pick the right account/remote from the chooser to bind it.
 - **Needs account** — a github.com repo with no account configured yet; add one first.
 
-A repo with exactly one matching account/remote resolves automatically without a saved binding. Repository Bindings stays hidden in this single-account setup. A fork and an upstream repository on the same account still require a remote choice because they have different PRs and issues. Worktrees share their main checkout's binding.
+A repo with exactly one matching account/remote resolves automatically without a saved binding. Repository Bindings stays hidden in this single-account setup. A fork with an `upstream` remote (`origin` = your fork) also resolves automatically to the fork, with no prompt. Worktrees share their main checkout's binding.
+
+### Pull requests from a fork
+
+A PR pushed from your fork is created in the upstream repository. TUICommander watches the upstream automatically (the `upstream` remote, or the parent GitHub reports for the fork) and shows only the PRs whose branch lives in **your fork**; other people's upstream PRs are not listed. Merge, approve, close, diff and CI details for such a PR act on the upstream repository where it lives.
 
 ### How multiple accounts behave
 

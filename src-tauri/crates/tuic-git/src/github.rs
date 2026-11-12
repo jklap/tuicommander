@@ -216,6 +216,14 @@ pub struct BranchPrStatus {
     /// The poll fetch walks the remaining pages and clears this ([`Self::settle_review_threads`]);
     /// it stays set only when that walk failed or ran out of pages.
     pub unresolved_threads_truncated: bool,
+    /// `owner/name` of the repository the PR targets (its base). Empty when the
+    /// node carried no `baseRepository`. Actions on the PR (merge, approve, ...)
+    /// must target this repo, which differs from the checkout's bound repo when
+    /// the PR was opened from a fork against its upstream.
+    pub base_repo: String,
+    /// `owner/name` of the repository the PR's head branch lives in (empty when
+    /// the head repository was deleted or not selected).
+    pub head_repo: String,
 }
 
 impl BranchPrStatus {
@@ -486,6 +494,14 @@ pub fn parse_pr_node(v: &serde_json::Value) -> Option<BranchPrStatus> {
         rebase_merge_allowed: true,
         unresolved_threads,
         unresolved_threads_truncated,
+        base_repo: v["baseRepository"]["nameWithOwner"]
+            .as_str()
+            .unwrap_or("")
+            .to_string(),
+        head_repo: v["headRepository"]["nameWithOwner"]
+            .as_str()
+            .unwrap_or("")
+            .to_string(),
     })
 }
 
@@ -749,6 +765,42 @@ pub fn build_unified_batch_query_with_intake(
     hide_drafts: bool,
     intake_label: Option<&str>,
 ) -> (String, Vec<(String, String)>) {
+    let (query, aliases, _) = build_unified_batch_query_with_upstream(
+        repos,
+        &[],
+        &[],
+        include_merged,
+        filter_mode,
+        viewer,
+        hide_drafts,
+        intake_label,
+    );
+    (query, aliases)
+}
+
+/// `(query, repo aliases, upstream aliases)`; each alias list is `(alias, local path)`.
+pub type UpstreamBatchQuery = (String, Vec<(String, String)>, Vec<(String, String)>);
+
+/// Like [`build_unified_batch_query_with_intake`], plus `upstream` repositories
+/// (`(local path, owner, name)`) whose open PRs are fetched in the same request.
+/// A fork checkout opens its PRs against the upstream repo, where the fork's own
+/// `pullRequests` list never shows them. Upstream repos get a PR section only
+/// (no issues) and join the viewer's PR search. The third return value maps each
+/// upstream alias to its local path, in `upstream` order.
+///
+/// `known_forks` lists the local paths whose fork status is already cached: their
+/// `isFork`/`parent` selection is omitted, since the answer never changes.
+#[allow(clippy::too_many_arguments)] // One query's independent knobs; a struct would just rename them.
+pub fn build_unified_batch_query_with_upstream(
+    repos: &[(String, String, String)],
+    upstream: &[(String, String, String)],
+    known_forks: &[String],
+    include_merged: bool,
+    filter_mode: &str,
+    viewer: &str,
+    hide_drafts: bool,
+    intake_label: Option<&str>,
+) -> UpstreamBatchQuery {
     let states = if include_merged {
         "[OPEN, MERGED]"
     } else {
@@ -758,6 +810,7 @@ pub fn build_unified_batch_query_with_intake(
     let pr_first = if hide_drafts { 40 } else { 20 };
     let pr_node_fields = format!(
         r#"number title state url headRefName headRefOid baseRefName isDraft
+        baseRepository {{ nameWithOwner }} headRepository {{ nameWithOwner }}
         additions deletions mergeable mergeStateStatus reviewDecision
         viewerLatestReview {{ state }}
         createdAt updatedAt
@@ -798,10 +851,24 @@ pub fn build_unified_batch_query_with_intake(
         if let Some(label) = intake_label {
             issues_section.push_str(&format!("\n    {}", intake_issues_section(label, None)));
         }
+        let parent_probe = if known_forks.contains(path) {
+            ""
+        } else {
+            "\n    isFork\n    parent { nameWithOwner }"
+        };
         parts.push(format!(
-            "  {alias}: repository(owner: \"{owner}\", name: \"{name}\") {{\n    mergeCommitAllowed\n    squashMergeAllowed\n    rebaseMergeAllowed\n    pullRequests(first: {pr_first}, states: {states}, orderBy: {{field: UPDATED_AT, direction: DESC}}) {{\n      nodes {{ {pr_node_fields} }}\n    }}{issues_section}\n  }}"
+            "  {alias}: repository(owner: \"{owner}\", name: \"{name}\") {{\n    mergeCommitAllowed\n    squashMergeAllowed\n    rebaseMergeAllowed{parent_probe}\n    pullRequests(first: {pr_first}, states: {states}, orderBy: {{field: UPDATED_AT, direction: DESC}}) {{\n      nodes {{ {pr_node_fields} }}\n    }}{issues_section}\n  }}"
         ));
         aliases.push((alias, path.clone()));
+    }
+
+    let mut upstream_aliases: Vec<(String, String)> = Vec::new();
+    for (i, (path, owner, name)) in upstream.iter().enumerate() {
+        let alias = format!("u{i}");
+        parts.push(format!(
+            "  {alias}: repository(owner: \"{owner}\", name: \"{name}\") {{\n    mergeCommitAllowed\n    squashMergeAllowed\n    rebaseMergeAllowed\n    pullRequests(first: {pr_first}, states: {states}, orderBy: {{field: UPDATED_AT, direction: DESC}}) {{\n      nodes {{ {pr_node_fields} }}\n    }}\n  }}"
+        ));
+        upstream_aliases.push((alias, path.clone()));
     }
 
     // Supplemental search for viewer's own open PRs across all queried repos.
@@ -809,6 +876,7 @@ pub fn build_unified_batch_query_with_intake(
     if !viewer.is_empty() {
         let repo_filters: String = repos
             .iter()
+            .chain(upstream.iter())
             .map(|(_, owner, name)| format!("repo:{owner}/{name}"))
             .collect::<Vec<_>>()
             .join(" ");
@@ -822,7 +890,7 @@ pub fn build_unified_batch_query_with_intake(
     parts.push("  rateLimit { cost remaining resetAt }".to_string());
     parts.push("}".to_string());
 
-    (parts.join("\n"), aliases)
+    (parts.join("\n"), aliases, upstream_aliases)
 }
 
 /// Result of a unified batch poll.
@@ -1065,6 +1133,55 @@ mod tests {
         assert_eq!(parse_pr_node(&node).unwrap().unresolved_threads, 2);
         node.as_object_mut().unwrap().remove("reviewThreads");
         assert_eq!(parse_pr_node(&node).unwrap().unresolved_threads, 0);
+    }
+
+    // Catches: actions on a fork's PR opened against an upstream going to the wrong repo
+    // because the PR's own repositories were never read.
+    #[test]
+    fn pr_node_carries_its_base_and_head_repositories() {
+        let mut node = serde_json::json!({
+            "number": 7, "headRefName": "feat/x", "state": "OPEN",
+            "baseRepository": {"nameWithOwner": "org/hello"},
+            "headRepository": {"nameWithOwner": "me/hello"},
+        });
+        let pr = parse_pr_node(&node).unwrap();
+        assert_eq!(
+            (pr.base_repo.as_str(), pr.head_repo.as_str()),
+            ("org/hello", "me/hello")
+        );
+        // A deleted head repository is `null`, not absent: both read as "unknown".
+        node["headRepository"] = serde_json::Value::Null;
+        node.as_object_mut().unwrap().remove("baseRepository");
+        let pr = parse_pr_node(&node).unwrap();
+        assert_eq!((pr.base_repo.as_str(), pr.head_repo.as_str()), ("", ""));
+    }
+
+    #[test]
+    fn the_batch_query_selects_both_repositories_of_every_pr_it_lists() {
+        let repos = vec![("/p".to_string(), "me".to_string(), "hello".to_string())];
+        let upstream = vec![("/p".to_string(), "org".to_string(), "hello".to_string())];
+        let (query, aliases, upstream_aliases) = build_unified_batch_query_with_upstream(
+            &repos,
+            &upstream,
+            &[],
+            false,
+            "disabled",
+            "",
+            false,
+            None,
+        );
+        assert_eq!(aliases, [("r0".to_string(), "/p".to_string())]);
+        assert_eq!(upstream_aliases, [("u0".to_string(), "/p".to_string())]);
+        // Once per PR selection: the repo's own and the upstream's.
+        assert_eq!(query.matches("headRepository { nameWithOwner }").count(), 2);
+        assert_eq!(query.matches("baseRepository { nameWithOwner }").count(), 2);
+        // The fork probe belongs to the fork's own section only.
+        assert_eq!(query.matches("isFork").count(), 1);
+        // No upstream, no `u` alias, and the legacy entry point is unchanged in shape.
+        let (plain, _) =
+            build_unified_batch_query_with_intake(&repos, false, "disabled", "", false, None);
+        assert!(!plain.contains("u0:"));
+        assert!(plain.contains("r0: repository"));
     }
 
     /// Catches: a PR whose first 50 threads are resolved and later ones open reporting a

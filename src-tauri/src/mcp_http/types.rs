@@ -233,12 +233,17 @@ pub(super) struct OptionalRepoQuery {
 pub(super) struct CiChecksQuery {
     pub path: String,
     pub pr_number: i64,
+    /// `owner/name` of the PR's base repository (see `github::resolve_pr_target`).
+    #[serde(default)]
+    pub base_repo: Option<String>,
 }
 
 #[derive(Deserialize)]
 pub(super) struct PrDiffQuery {
     pub path: String,
     pub pr: i64,
+    #[serde(default)]
+    pub base_repo: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -291,6 +296,9 @@ pub(super) struct UpdatePrBranchRequest {
     pub repo_path: String,
     #[serde(rename = "prNumber")]
     pub pr_number: i64,
+    /// `owner/name` of the PR's base repository (see `github::resolve_pr_target`).
+    #[serde(default, rename = "baseRepo")]
+    pub base_repo: Option<String>,
     /// Head commit the user saw; GitHub refuses the update if the PR head moved.
     #[serde(rename = "expectedHeadSha")]
     pub expected_head_sha: String,
@@ -302,6 +310,9 @@ pub(super) struct ApprovePrRequest {
     pub repo_path: String,
     #[serde(rename = "prNumber")]
     pub pr_number: i64,
+    /// `owner/name` of the PR's base repository (see `github::resolve_pr_target`).
+    #[serde(default, rename = "baseRepo")]
+    pub base_repo: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -330,6 +341,9 @@ pub(super) struct PostPrReviewRequest {
     pub repo_path: String,
     #[serde(rename = "prNumber")]
     pub pr_number: i64,
+    /// `owner/name` of the PR's base repository (see `github::resolve_pr_target`).
+    #[serde(default, rename = "baseRepo")]
+    pub base_repo: Option<String>,
     pub body: String,
     pub event: Option<String>,
     #[serde(default)]
@@ -742,6 +756,9 @@ pub(super) struct MergePrRequest {
     pub repo_path: String,
     #[serde(rename = "prNumber")]
     pub pr_number: i64,
+    /// `owner/name` of the PR's base repository (see `github::resolve_pr_target`).
+    #[serde(default, rename = "baseRepo")]
+    pub base_repo: Option<String>,
     /// "merge", "squash", or "rebase"
     #[serde(rename = "mergeMethod")]
     pub merge_method: String,

@@ -24,6 +24,8 @@ export interface PrDiffTabProps {
 	onPin?: (headSha: string) => void;
 	/** Local checkout, used to read `.gitattributes` for `linguist-generated` patterns. */
 	repoPath?: string;
+	/** "owner/name" the PR targets, forwarded as `baseRepo` to line-thread/review commands. */
+	baseRepo?: string;
 }
 
 export const PrDiffTab: Component<PrDiffTabProps> = (props) => {
@@ -44,7 +46,7 @@ export const PrDiffTab: Component<PrDiffTabProps> = (props) => {
 
 	// Line threads and the draft review need the checkout path to resolve the GitHub account.
 	const session = props.repoPath
-		? createReviewSession(props.repoPath, props.prNumber, props.headSha, (sha) => props.onPin?.(sha))
+		? createReviewSession(props.repoPath, props.prNumber, props.headSha, (sha) => props.onPin?.(sha), props.baseRepo)
 		: undefined;
 	onMount(() => void session?.refresh());
 	// Reopening the diff swaps its head on the live tab; the session must follow it.

@@ -5388,6 +5388,12 @@ pub(crate) struct GitCacheState {
     /// Excluded from batch queries until the cooldown expires (24 hours).
     /// NOT a TTL value cache — kept as a plain `DashMap` set with custom expiry.
     pub(crate) github_repo_cooldown: DashMap<String, Instant>,
+    /// Fork parentage learned from GitHub, keyed by `host/owner/name` (lowercase): the
+    /// parent's `owner/name`, or `None` for a repository that is not a fork. Whether a
+    /// repository is a fork is fixed for its lifetime, so an entry is never refreshed or
+    /// expired; it lives for the process. An entry exists only once GitHub answered for the
+    /// repository, so an inaccessible repo is retried.
+    pub(crate) github_repo_parents: DashMap<String, Option<String>>,
     pub(crate) github_repo_access_errors: DashMap<String, crate::github::RepoAccessFailure>,
     /// Settled review-thread totals of PRs with more threads than the batch poll reads, keyed by
     /// "host/owner/name#number". Not a TTL cache: an entry is valid while the PR's `updatedAt` and head
@@ -5411,6 +5417,7 @@ impl GitCacheState {
             git_status: build_git_cache(GIT_CACHE_TTL, Arc::clone(&ttl_fallbacks)),
             worktree_paths: build_git_cache(GIT_CACHE_TTL, Arc::clone(&ttl_fallbacks)),
             github_repo_cooldown: DashMap::new(),
+            github_repo_parents: DashMap::new(),
             github_repo_access_errors: DashMap::new(),
             settled_review_threads: DashMap::new(),
             ttl_fallbacks,

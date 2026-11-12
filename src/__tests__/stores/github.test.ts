@@ -380,6 +380,25 @@ describe("githubStore", () => {
 				expect(details[1].html_url).toBe("");
 			});
 		});
+
+		it("passes baseRepo to get_ci_checks only when given", async () => {
+			await testInScopeAsync(async () => {
+				store.updateRepoData("/repo1", [makePrStatus()]);
+				mockInvoke.mockResolvedValue([]);
+
+				await store.loadCheckDetails("/repo1", "feature/x", 42, "upstream/repo");
+				expect(mockInvoke).toHaveBeenCalledWith("get_ci_checks", {
+					path: "/repo1",
+					prNumber: 42,
+					baseRepo: "upstream/repo",
+				});
+
+				mockInvoke.mockClear();
+				await store.loadCheckDetails("/repo1", "feature/x", 42);
+				const call = mockInvoke.mock.calls.find((c) => c[0] === "get_ci_checks");
+				expect((call![1] as { baseRepo?: string }).baseRepo).toBeUndefined();
+			});
+		});
 	});
 
 	describe("getBranchPrData()", () => {

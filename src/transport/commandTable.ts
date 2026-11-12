@@ -1345,9 +1345,9 @@ export const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 		}),
 	},
 	get_pr_action_state: {
-		map: (_args, p) => ({
+		map: (args, p) => ({
 			method: "GET",
-			path: `/repo/pr-action-state?repoPath=${p("repoPath")}&prNumber=${p("prNumber")}`,
+			path: `/repo/pr-action-state?repoPath=${p("repoPath")}&prNumber=${p("prNumber")}${args.baseRepo ? `&baseRepo=${p("baseRepo")}` : ""}`,
 		}),
 	},
 	set_pr_auto_merge: {
@@ -1357,6 +1357,7 @@ export const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 			body: {
 				repoPath: args.repoPath,
 				prNumber: args.prNumber,
+				baseRepo: args.baseRepo,
 				enabled: args.enabled,
 				mergeMethod: args.mergeMethod,
 				expectedHeadSha: args.expectedHeadSha,
@@ -1370,6 +1371,7 @@ export const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 			body: {
 				repoPath: args.repoPath,
 				prNumber: args.prNumber,
+				baseRepo: args.baseRepo,
 				enqueued: args.enqueued,
 				expectedHeadSha: args.expectedHeadSha,
 			},
@@ -1382,6 +1384,7 @@ export const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 			body: {
 				repoPath: args.repoPath,
 				prNumber: args.prNumber,
+				baseRepo: args.baseRepo,
 				mergeMethod: args.mergeMethod,
 				expectedHeadSha: args.expectedHeadSha,
 			},
@@ -1397,13 +1400,13 @@ export const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 	get_pr_line_threads: {
 		map: (args, p) => ({
 			method: "GET",
-			path: `/repo/pr-line-threads?repoPath=${p("repoPath")}&prNumber=${p("prNumber")}${args.after ? `&after=${p("after")}` : ""}`,
+			path: `/repo/pr-line-threads?repoPath=${p("repoPath")}&prNumber=${p("prNumber")}${args.baseRepo ? `&baseRepo=${p("baseRepo")}` : ""}${args.after ? `&after=${p("after")}` : ""}`,
 		}),
 	},
 	get_pr_open_threads: {
-		map: (_args, p) => ({
+		map: (args, p) => ({
 			method: "GET",
-			path: `/repo/pr-open-threads?repoPath=${p("repoPath")}&prNumber=${p("prNumber")}`,
+			path: `/repo/pr-open-threads?repoPath=${p("repoPath")}&prNumber=${p("prNumber")}${args.baseRepo ? `&baseRepo=${p("baseRepo")}` : ""}`,
 		}),
 	},
 	get_pr_thread_comments: {
@@ -1430,7 +1433,7 @@ export const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 		map: (args) => ({
 			method: "POST",
 			path: "/repo/pr-draft-review",
-			body: { repoPath: args.repoPath, prNumber: args.prNumber, draft: args.draft },
+			body: { repoPath: args.repoPath, prNumber: args.prNumber, baseRepo: args.baseRepo, draft: args.draft },
 		}),
 	},
 	post_pr_review: {
@@ -1440,6 +1443,7 @@ export const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 			body: {
 				repoPath: args.repoPath,
 				prNumber: args.prNumber,
+				baseRepo: args.baseRepo,
 				body: args.body,
 				event: args.event,
 				comments: args.comments ?? [],
@@ -1673,12 +1677,15 @@ export const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 		map: (_args, p) => ({ method: "GET", path: `/repo/diff-stats/batch?path=${p("repoPath")}` }),
 	},
 	get_ci_checks: {
-		map: (_args, p) => ({ method: "GET", path: `/repo/ci?path=${p("path")}&pr_number=${p("prNumber")}` }),
+		map: (args, p) => ({
+			method: "GET",
+			path: `/repo/ci?path=${p("path")}&pr_number=${p("prNumber")}${args.baseRepo ? `&base_repo=${p("baseRepo")}` : ""}`,
+		}),
 	},
 	get_pr_review_threads: {
-		map: (_args, p) => ({
+		map: (args, p) => ({
 			method: "GET",
-			path: `/repo/pr-review-threads?path=${p("path")}&pr_number=${p("prNumber")}`,
+			path: `/repo/pr-review-threads?path=${p("path")}&pr_number=${p("prNumber")}${args.baseRepo ? `&base_repo=${p("baseRepo")}` : ""}`,
 		}),
 	},
 	rename_branch: {
@@ -1925,13 +1932,19 @@ export const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 		map: (args) => ({
 			method: "POST",
 			path: "/repo/merge-pr",
-			body: { repoPath: args.repoPath, prNumber: args.prNumber, mergeMethod: args.mergeMethod },
+			body: {
+				repoPath: args.repoPath,
+				prNumber: args.prNumber,
+				baseRepo: args.baseRepo,
+				mergeMethod: args.mergeMethod,
+				expectedHeadSha: args.expectedHeadSha,
+			},
 		}),
 	},
 	get_pr_diff: {
 		map: (args, p) => ({
 			method: "GET",
-			path: `/repo/pr-diff?path=${p("repoPath")}&pr=${args.prNumber}`,
+			path: `/repo/pr-diff?path=${p("repoPath")}&pr=${args.prNumber}${args.baseRepo ? `&base_repo=${p("baseRepo")}` : ""}`,
 		}),
 	},
 	get_merged_prs: {
@@ -1982,21 +1995,26 @@ export const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 		map: (args) => ({
 			method: "POST",
 			path: "/repo/approve-pr",
-			body: { repoPath: args.repoPath, prNumber: args.prNumber },
+			body: { repoPath: args.repoPath, prNumber: args.prNumber, baseRepo: args.baseRepo },
 		}),
 	},
 	update_pr_branch: {
 		map: (args) => ({
 			method: "POST",
 			path: "/repo/update-pr-branch",
-			body: { repoPath: args.repoPath, prNumber: args.prNumber, expectedHeadSha: args.expectedHeadSha },
+			body: {
+				repoPath: args.repoPath,
+				prNumber: args.prNumber,
+				baseRepo: args.baseRepo,
+				expectedHeadSha: args.expectedHeadSha,
+			},
 		}),
 	},
 	close_pr: {
 		map: (args) => ({
 			method: "POST",
 			path: "/repo/close-pr",
-			body: { repoPath: args.repoPath, prNumber: args.prNumber },
+			body: { repoPath: args.repoPath, prNumber: args.prNumber, baseRepo: args.baseRepo },
 		}),
 	},
 	list_local_branches: {

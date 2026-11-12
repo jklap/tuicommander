@@ -150,7 +150,7 @@ export const RemoteOnlyPrPopover: Component<{
 			const preferred =
 				repoSettingsStore.getEffective(props.repoPath)?.prMergeStrategy ?? repoDefaultsStore.state.prMergeStrategy;
 			const startMethod = effectiveMergeMethod(pr, preferred);
-			const usedMethod = await mergeWithFallback(props.repoPath, pr.number, startMethod, pr.head_ref_oid);
+			const usedMethod = await mergeWithFallback(props.repoPath, pr.number, startMethod, pr.head_ref_oid, pr.base_repo);
 			// Persist the working method so future merges use it directly
 			if (usedMethod !== preferred) {
 				const repo = repositoriesStore.get(props.repoPath);
@@ -198,6 +198,7 @@ export const RemoteOnlyPrPopover: Component<{
 			await invoke("approve_pr", {
 				repoPath: props.repoPath,
 				prNumber: pr.number,
+				baseRepo: pr.base_repo,
 			});
 			appLogger.info("github", `Approved PR #${pr.number}`);
 			githubStore.pollRepo(props.repoPath);
@@ -216,8 +217,9 @@ export const RemoteOnlyPrPopover: Component<{
 			const { diff, headSha } = await invoke<{ diff: string; headSha: string }>("get_pr_diff", {
 				repoPath: props.repoPath,
 				prNumber: pr.number,
+				baseRepo: pr.base_repo,
 			});
-			mdTabsStore.addPrDiff(props.repoPath, pr.number, pr.title, diff, headSha);
+			mdTabsStore.addPrDiff(props.repoPath, pr.number, pr.title, diff, headSha, pr.base_repo);
 		} catch (e) {
 			const msg = String(e);
 			appLogger.error("github", `Failed to load PR #${pr.number} diff`, { error: msg });

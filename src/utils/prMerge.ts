@@ -66,6 +66,7 @@ export async function mergeWithFallback(
 	prNumber: number,
 	preferred: MergeStrategy,
 	expectedHeadSha: string,
+	baseRepo?: string,
 ): Promise<MergeStrategy> {
 	const methodOrder = [preferred, ...MERGE_METHODS.filter((m) => m !== preferred)];
 	let lastError: unknown;
@@ -76,6 +77,7 @@ export async function mergeWithFallback(
 				prNumber,
 				mergeMethod: method,
 				expectedHeadSha,
+				baseRepo,
 			});
 			return method;
 		} catch (e) {

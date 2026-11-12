@@ -223,13 +223,19 @@ function createGitHubStore() {
 	/** Lazy-load CI check details for a PR and populate the store.
 	 *  Called when PrDetailPopover opens to avoid fetching check details on every poll.
 	 *  Also recomputes CheckSummary from the fresh data so the badge/ring stay in sync. */
-	async function loadCheckDetails(repoPath: string, branch: string, prNumber: number): Promise<void> {
+	async function loadCheckDetails(
+		repoPath: string,
+		branch: string,
+		prNumber: number,
+		baseRepo?: string,
+	): Promise<void> {
 		try {
 			const rawChecks = await invoke<{ name: string; status: string; conclusion: string; html_url: string }[]>(
 				"get_ci_checks",
 				{
 					path: repoPath,
 					prNumber,
+					baseRepo,
 				},
 			);
 			const details: CheckDetail[] = rawChecks.map((c) => ({

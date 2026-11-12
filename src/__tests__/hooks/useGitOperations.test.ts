@@ -1650,6 +1650,8 @@ describe("useGitOperations", () => {
 			rebase_merge_allowed: true,
 			unresolved_threads: 0,
 			unresolved_threads_truncated: false,
+			// A fork's PR opened against its upstream: the merge must name the repo it lives in.
+			base_repo: "org/hello",
 		};
 
 		beforeEach(() => {
@@ -1669,7 +1671,7 @@ describe("useGitOperations", () => {
 
 			await gitOps.handleMergeAndArchive("/repo", "feature/x", "main", "archive");
 
-			expect(mockRepo.mergePrViaGithub).toHaveBeenCalledWith("/repo", 99, "squash", "abc1234");
+			expect(mockRepo.mergePrViaGithub).toHaveBeenCalledWith("/repo", 99, "squash", "abc1234", "org/hello");
 			expect(mockRepo.mergeAndArchiveWorktree).not.toHaveBeenCalled();
 			expect(mockRepo.finalizeMergedWorktree).toHaveBeenCalledWith("/repo", "feature/x", "archive");
 		});
@@ -1726,7 +1728,7 @@ describe("useGitOperations", () => {
 
 			await gitOps.handleMergeAndArchive("/repo", "feature/x", "main", "archive");
 
-			expect(mockRepo.mergePrViaGithub).toHaveBeenCalledWith("/repo", 99, "squash", "abc1234");
+			expect(mockRepo.mergePrViaGithub).toHaveBeenCalledWith("/repo", 99, "squash", "abc1234", "org/hello");
 		});
 
 		it("re-throws 405 error instead of silently falling back to local merge", async () => {

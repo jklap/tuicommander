@@ -214,3 +214,57 @@ describe("RemoteOnlyPrPopover — outside dismissal", () => {
 		expect(defaultProps.onClose).not.toHaveBeenCalled();
 	});
 });
+
+describe("RemoteOnlyPrPopover — baseRepo forwarding", () => {
+	beforeEach(() => {
+		vi.clearAllMocks();
+		repoSettingsStore.getOrCreate("/repo", "Repo");
+		repoSettingsStore.update("/repo", { prMergeStrategy: null });
+	});
+
+	const openRow = (container: HTMLElement) => fireEvent.click(container.querySelector(".remoteOnlyRow")!);
+	const clickByTooltip = (container: HTMLElement, tooltip: string) =>
+		fireEvent.click(container.querySelector(`button[data-tooltip="${tooltip}"]`)!);
+
+	it("sends the PR's base_repo with the diff request", async () => {
+		mockInvoke.mockResolvedValue({ diff: "", headSha: "abc" });
+		const pr = { ...mergeablePr, base_repo: "upstream/repo" };
+		const { container } = render(() => <RemoteOnlyPrPopover {...defaultProps} prs={[pr]} />);
+		openRow(container);
+		clickByTooltip(container, "View PR diff");
+		await waitFor(() =>
+			expect(mockInvoke).toHaveBeenCalledWith("get_pr_diff", {
+				repoPath: "/repo",
+				prNumber: 42,
+				baseRepo: "upstream/repo",
+			}),
+		);
+	});
+
+	it("sends no baseRepo with the diff request when the PR has none", async () => {
+		mockInvoke.mockResolvedValue({ diff: "", headSha: "abc" });
+		const { container } = render(() => <RemoteOnlyPrPopover {...defaultProps} />);
+		openRow(container);
+		clickByTooltip(container, "View PR diff");
+		await waitFor(() => expect(mockInvoke).toHaveBeenCalledWith("get_pr_diff", expect.anything()));
+		const call = mockInvoke.mock.calls.find((c) => c[0] === "get_pr_diff");
+		expect((call![1] as { baseRepo?: string }).baseRepo).toBeUndefined();
+	});
+
+	it("sends the PR's base_repo when merging", async () => {
+		mockInvoke.mockResolvedValue("sha");
+		const pr = { ...mergeablePr, base_repo: "upstream/repo" };
+		const { container } = render(() => <RemoteOnlyPrPopover {...defaultProps} prs={[pr]} />);
+		openRow(container);
+		const mergeBtn = Array.from(container.querySelectorAll("button")).find((b) =>
+			["Merge", "Squash & Merge", "Rebase & Merge"].includes(b.textContent ?? ""),
+		) as HTMLButtonElement;
+		fireEvent.click(mergeBtn);
+		await waitFor(() =>
+			expect(mockInvoke).toHaveBeenCalledWith(
+				"merge_pr_via_github",
+				expect.objectContaining({ baseRepo: "upstream/repo", expectedHeadSha: "abc" }),
+			),
+		);
+	});
+});

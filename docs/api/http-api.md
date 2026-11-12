@@ -1621,8 +1621,10 @@ Removes an orphan worktree by filesystem path. The worktree path is validated ag
 POST /repo/merge-pr
 Content-Type: application/json
 
-{ "repoPath": "/path/to/repo", "prNumber": 42, "mergeMethod": "squash", "expectedHeadSha": "<head sha the caller reviewed>" }
+{ "repoPath": "/path/to/repo", "prNumber": 42, "baseRepo": "owner/name", "mergeMethod": "squash", "expectedHeadSha": "<head sha the caller reviewed>" }
 ```
+
+`baseRepo` (optional on this and every PR-number route below) is the `owner/name` of the repository the PR targets (`BranchPrStatus.base_repo`). It matters for a fork checkout whose PRs are opened against its upstream: PR numbers are per repository, so the same number can exist in both. A `baseRepo` that is not a watched repository holding that PR number is refused; with it omitted, an ambiguous number is refused too. Query-string routes take `baseRepo=` (camelCase routes) or `base_repo=` (`/repo/ci`, `/repo/pr-review-threads`, `/repo/pr-diff`).
 
 Merges a PR via the GitHub API. `mergeMethod` must be `"merge"`, `"squash"`, or `"rebase"`. `expectedHeadSha` is required and is sent to GitHub as `sha`: if the PR head moved since the caller saw it, GitHub answers 409 and the route returns an error starting with `PR head changed`; the caller must refresh and review, never retry with the new head. Returns `{"sha": "..."}` on success.
 
@@ -1632,7 +1634,7 @@ Merges a PR via the GitHub API. `mergeMethod` must be `"merge"`, `"squash"`, or 
 POST /repo/approve-pr
 Content-Type: application/json
 
-{ "repoPath": "/path/to/repo", "prNumber": 42 }
+{ "repoPath": "/path/to/repo", "prNumber": 42, "baseRepo": "owner/name" }
 ```
 
 Submits an approving review on a PR via the GitHub API.
@@ -1643,7 +1645,7 @@ Submits an approving review on a PR via the GitHub API.
 POST /repo/update-pr-branch
 Content-Type: application/json
 
-{ "repoPath": "/path/to/repo", "prNumber": 42, "expectedHeadSha": "<head sha the caller saw>" }
+{ "repoPath": "/path/to/repo", "prNumber": 42, "baseRepo": "owner/name", "expectedHeadSha": "<head sha the caller saw>" }
 ```
 
 Merges the base branch into the PR branch (GitHub update-branch, 202 accepted; the merge commit lands asynchronously). `expectedHeadSha` is required: if the PR head moved, the route returns an error starting with `PR head changed`. Returns `{"ok": true}`.
@@ -1654,7 +1656,7 @@ Merges the base branch into the PR branch (GitHub update-branch, 202 accepted; t
 POST /repo/close-pr
 Content-Type: application/json
 
-{ "repoPath": "/path/to/repo", "prNumber": 42 }
+{ "repoPath": "/path/to/repo", "prNumber": 42, "baseRepo": "owner/name" }
 ```
 
 Closes the PR without merging. Returns `{"ok": true}`.
@@ -1662,7 +1664,7 @@ Closes the PR without merging. Returns `{"ok": true}`.
 ### CI Checks
 
 ```
-GET /repo/ci?path=/path/to/repo
+GET /repo/ci?path=/path/to/repo&pr_number=42&base_repo=owner/name
 ```
 
 Returns detailed CI check list.
@@ -1670,7 +1672,7 @@ Returns detailed CI check list.
 ### Unresolved Review Threads
 
 ```
-GET /repo/pr-review-threads?path=/path/to/repo&pr_number=42
+GET /repo/pr-review-threads?path=/path/to/repo&pr_number=42&base_repo=owner/name
 ```
 
 Returns `{"bot": N, "human": M, "ego": E}`: unresolved review threads of one PR, split by the first comment. A first comment that holds `<!-- tuic:ego-review -->` (appended to every finding posted from the PR review) counts as ego, not human. One GraphQL point per page of 100 threads.
@@ -1678,7 +1680,7 @@ Returns `{"bot": N, "human": M, "ego": E}`: unresolved review threads of one PR,
 ### PR Diff
 
 ```
-GET /repo/pr-diff?path=/path/to/repo&pr=42
+GET /repo/pr-diff?path=/path/to/repo&pr=42&base_repo=owner/name
 ```
 
 Returns `{"diff": "...", "headSha": "..."}`. `headSha` is the commit the diff was read at; the call fails with 502 if the PR head moves while the diff loads.

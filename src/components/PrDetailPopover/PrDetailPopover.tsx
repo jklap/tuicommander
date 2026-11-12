@@ -191,7 +191,13 @@ export const PrDetailPopover: Component<PrDetailPopoverProps> = (props) => {
 			const preferred = preferredMergeStrategy(props.repoPath);
 			const startMethod = effectiveMergeMethod(pr, preferred);
 			try {
-				const usedMethod = await mergeWithFallback(props.repoPath, pr.number, startMethod, pr.head_ref_oid);
+				const usedMethod = await mergeWithFallback(
+					props.repoPath,
+					pr.number,
+					startMethod,
+					pr.head_ref_oid,
+					pr.base_repo,
+				);
 				// Persist the working method so future merges use it directly
 				if (usedMethod !== preferred) {
 					const repo = repositoriesStore.get(props.repoPath);
@@ -249,8 +255,9 @@ export const PrDetailPopover: Component<PrDetailPopoverProps> = (props) => {
 			const { diff, headSha } = await invoke<{ diff: string; headSha: string }>("get_pr_diff", {
 				repoPath: props.repoPath,
 				prNumber: pr.number,
+				baseRepo: pr.base_repo,
 			});
-			mdTabsStore.addPrDiff(props.repoPath, pr.number, pr.title, diff, headSha);
+			mdTabsStore.addPrDiff(props.repoPath, pr.number, pr.title, diff, headSha, pr.base_repo);
 			props.onClose();
 		} catch (e) {
 			const msg = String(e);

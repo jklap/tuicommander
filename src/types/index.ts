@@ -171,6 +171,10 @@ export interface BranchPrStatus {
 	unresolved_threads: number;
 	/** More than 50 threads exist: `unresolved_threads` is a lower bound, 0 does not mean none open. */
 	unresolved_threads_truncated: boolean;
+	/** `owner/name` of the repo the PR targets. Differs from the checkout's own repo for a fork PR opened against its upstream. */
+	base_repo?: string;
+	/** `owner/name` of the repo holding the PR's head branch. */
+	head_repo?: string;
 }
 
 /** A single match from cross-terminal buffer search */

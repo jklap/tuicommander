@@ -29,6 +29,7 @@ interface WorktreeWorkflowCoordinatorDeps {
 			prNumber: number,
 			mergeMethod: string,
 			expectedHeadSha: string,
+			baseRepo?: string,
 		) => Promise<string>;
 		mergeAndArchiveWorktree: (
 			repoPath: string,
@@ -215,7 +216,7 @@ export function createWorktreeWorkflowCoordinator(deps: WorktreeWorkflowCoordina
 					throw new Error("PR head changed: the PR head commit is unknown. Refresh and review before merging.");
 				}
 				try {
-					await deps.repo.mergePrViaGithub(repoPath, pr.number, method, pr.head_ref_oid);
+					await deps.repo.mergePrViaGithub(repoPath, pr.number, method, pr.head_ref_oid, pr.base_repo);
 				} catch (githubErr) {
 					if (isMergeMethodNotAllowed(githubErr) || isMergeHeadChanged(githubErr)) {
 						// Surface 405 (branch protection disallows the method) and head-moved (unreviewed

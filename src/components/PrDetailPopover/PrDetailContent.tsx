@@ -194,7 +194,7 @@ export const PrDetailContent: Component<PrDetailContentProps> = (props) => {
 		const findings = selectedFindings();
 		if (!pr || findings.length === 0 || reviewPosting()) return;
 		if (!window.confirm(t("prDetail.postReviewConfirm", "Post selected AI review findings to GitHub?"))) return;
-		void prReviewStore.post(props.repoPath, pr.number, findings);
+		void prReviewStore.post(props.repoPath, pr.number, findings, pr.base_repo);
 	}
 
 	// Lazy-load CI check details when this content mounts.
@@ -210,9 +210,10 @@ export const PrDetailContent: Component<PrDetailContentProps> = (props) => {
 		if (pr) {
 			const { repoPath, branch } = props;
 			const prNumber = pr.number;
+			const baseRepo = pr.base_repo;
 			queueMicrotask(() => {
 				githubStore
-					.loadCheckDetails(repoPath, branch, prNumber)
+					.loadCheckDetails(repoPath, branch, prNumber, baseRepo)
 					.catch((e) => appLogger.warn("github", "Failed to load check details", { error: String(e) }));
 			});
 		}
@@ -258,14 +259,16 @@ export const PrDetailContent: Component<PrDetailContentProps> = (props) => {
 		() => {
 			const pr = prData();
 			return pr && (pr.unresolved_threads > 0 || pr.unresolved_threads_truncated) && !isTerminalState()
-				? { path: props.repoPath, prNumber: pr.number, unresolved: pr.unresolved_threads }
+				? { path: props.repoPath, prNumber: pr.number, baseRepo: pr.base_repo, unresolved: pr.unresolved_threads }
 				: null;
 		},
-		({ path, prNumber }) =>
-			rpc<{ bot: number; human: number; ego: number }>("get_pr_review_threads", { path, prNumber }).catch((e) => {
-				appLogger.warn("github", "Failed to load review threads", { error: String(e) });
-				return null;
-			}),
+		({ path, prNumber, baseRepo }) =>
+			rpc<{ bot: number; human: number; ego: number }>("get_pr_review_threads", { path, prNumber, baseRepo }).catch(
+				(e) => {
+					appLogger.warn("github", "Failed to load review threads", { error: String(e) });
+					return null;
+				},
+			),
 	);
 
 	// Keyed on the conflict state, not the readiness verdict: the verdict ranks "draft" above

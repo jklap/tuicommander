@@ -185,6 +185,45 @@ pub(crate) enum RepoResolution {
     Unmonitored,
 }
 
+/// When some candidate comes from a remote named `upstream`, drop those and, if
+/// the rest all name one account/repository, return it. Anything still
+/// ambiguous (several accounts or several repositories) returns `None` so the
+/// user is still asked to choose.
+fn fork_candidate_without_upstream(candidates: &[BindCandidate]) -> Option<BindCandidate> {
+    if !candidates.iter().any(|c| c.remote_name == "upstream") {
+        return None;
+    }
+    let mut rest = candidates.iter().filter(|c| c.remote_name != "upstream");
+    let first = rest.next()?;
+    rest.all(|c| {
+        c.account_id == first.account_id
+            && c.host == first.host
+            && c.owner.eq_ignore_ascii_case(&first.owner)
+            && c.repo.eq_ignore_ascii_case(&first.repo)
+    })
+    .then(|| first.clone())
+}
+
+/// The upstream repository to watch in addition to a checkout's own (fork)
+/// repository: the `upstream` remote's `owner/repo`, when it lives on the same
+/// host as the bound repository and differs from it. PRs opened from the fork
+/// land there, not in the fork.
+pub(crate) fn upstream_watch_target(
+    repo_path: &std::path::Path,
+    host: &GitHubHost,
+    owner: &str,
+    repo: &str,
+) -> Option<(String, String)> {
+    crate::git::list_remotes(repo_path)
+        .into_iter()
+        .filter(|(name, _)| name == "upstream")
+        .filter_map(|(_, url)| parse_remote_url(&url))
+        .find(|(h, o, r)| {
+            h == host && !(o.eq_ignore_ascii_case(owner) && r.eq_ignore_ascii_case(repo))
+        })
+        .map(|(_, o, r)| (o, r))
+}
+
 /// Resolve which account a repo belongs to.
 ///
 /// Binding-first: a persisted binding wins outright. Otherwise every remote is
@@ -269,6 +308,13 @@ pub(crate) fn resolve_repo_account(
                 candidates.push(cand);
             }
         }
+    }
+
+    // A fork checkout conventionally has `origin` (the fork) plus `upstream`.
+    // That pairing is not ambiguous: the fork is what the user works in, and the
+    // upstream repo is watched additionally (see `upstream_watch_target`).
+    if let Some(own) = fork_candidate_without_upstream(&candidates) {
+        candidates = vec![own];
     }
 
     match candidates.len() {
@@ -880,8 +926,38 @@ mod tests {
 
     #[test]
     fn resolve_multiple_remotes_needs_bind_choice() {
-        // origin + upstream both on github.com (different owners) → ambiguous,
-        // the user must choose (no silent origin pick).
+        // Two unrelated remotes on github.com (different owners, neither named
+        // `upstream`) → ambiguous, the user must choose (no silent origin pick).
+        let dir = tempfile::tempdir().expect("tempdir");
+        let repo = make_repo_with_remotes(
+            dir.path(),
+            "main",
+            &[
+                ("origin", "git@github.com:octocat/hello.git"),
+                ("mirror", "git@github.com:other/hello.git"),
+            ],
+        );
+        let default = github_com_default();
+        let res = resolve_repo_account(
+            &repo,
+            &GitHubAccountRegistry::default(),
+            &RepoBindingStore::default(),
+            Some(&default),
+        );
+        match res {
+            RepoResolution::NeedsBind(c) => {
+                assert_eq!(c.len(), 2);
+                let owners: Vec<&str> = c.iter().map(|b| b.owner.as_str()).collect();
+                assert!(owners.contains(&"octocat") && owners.contains(&"other"));
+            }
+            other => panic!("expected NeedsBind([2]), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn resolve_fork_with_upstream_remote_binds_to_the_fork_automatically() {
+        // origin (fork) + upstream is the standard fork layout: resolve to the
+        // fork without a bind prompt; the upstream repo is watched separately.
         let dir = tempfile::tempdir().expect("tempdir");
         let repo = make_repo_with_remotes(
             dir.path(),
@@ -899,13 +975,68 @@ mod tests {
             Some(&default),
         );
         match res {
-            RepoResolution::NeedsBind(c) => {
-                assert_eq!(c.len(), 2);
-                let owners: Vec<&str> = c.iter().map(|b| b.owner.as_str()).collect();
-                assert!(owners.contains(&"octocat") && owners.contains(&"upstream"));
+            RepoResolution::Bound {
+                owner, repo: name, ..
+            } => {
+                assert_eq!((owner.as_str(), name.as_str()), ("octocat", "hello"));
             }
-            other => panic!("expected NeedsBind([2]), got {other:?}"),
+            other => panic!("expected Bound(octocat/hello), got {other:?}"),
         }
+    }
+
+    #[test]
+    fn upstream_watch_target_is_the_upstream_remote_when_it_differs() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let repo = make_repo_with_remotes(
+            dir.path(),
+            "main",
+            &[
+                ("origin", "git@github.com:octocat/hello.git"),
+                ("upstream", "https://github.com/upstream/hello.git"),
+            ],
+        );
+        let host = parse_remote_url("git@github.com:octocat/hello.git")
+            .expect("github.com remote")
+            .0;
+        assert_eq!(
+            upstream_watch_target(&repo, &host, "octocat", "hello"),
+            Some(("upstream".to_string(), "hello".to_string()))
+        );
+        // Bound to the upstream itself → nothing extra to watch.
+        assert_eq!(
+            upstream_watch_target(&repo, &host, "upstream", "Hello"),
+            None
+        );
+    }
+
+    #[test]
+    fn upstream_watch_target_ignores_other_hosts_and_missing_upstream() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let repo = make_repo_with_remotes(
+            dir.path(),
+            "main",
+            &[
+                ("origin", "git@github.com:octocat/hello.git"),
+                ("upstream", "git@ghe.acme.com:team/hello.git"),
+            ],
+        );
+        let host = parse_remote_url("git@github.com:octocat/hello.git")
+            .expect("github.com remote")
+            .0;
+        assert_eq!(
+            upstream_watch_target(&repo, &host, "octocat", "hello"),
+            None
+        );
+        let solo = tempfile::tempdir().expect("tempdir");
+        let repo = make_repo_with_remotes(
+            solo.path(),
+            "main",
+            &[("origin", "git@github.com:octocat/hello.git")],
+        );
+        assert_eq!(
+            upstream_watch_target(&repo, &host, "octocat", "hello"),
+            None
+        );
     }
 
     #[test]

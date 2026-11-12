@@ -12,9 +12,10 @@ use std::sync::Arc;
 pub(crate) async fn get_pr_action_state(
     repo_path: String,
     pr_number: i64,
+    base_repo: Option<String>,
     state: tauri::State<'_, Arc<AppState>>,
 ) -> Result<PrActionState, String> {
-    let api = RepoApi::resolve(&state, &repo_path).await?;
+    let api = RepoApi::resolve_for_pr(&state, &repo_path, pr_number, base_repo.as_deref()).await?;
     actions::action_state(&api, api.variables(pr_number)).await
 }
 #[cfg(feature = "desktop")]
@@ -22,12 +23,13 @@ pub(crate) async fn get_pr_action_state(
 pub(crate) async fn set_pr_auto_merge(
     repo_path: String,
     pr_number: i64,
+    base_repo: Option<String>,
     enabled: bool,
     merge_method: Option<String>,
     expected_head_sha: Option<String>,
     state: tauri::State<'_, Arc<AppState>>,
 ) -> Result<Value, String> {
-    let api = RepoApi::resolve(&state, &repo_path).await?;
+    let api = RepoApi::resolve_for_pr(&state, &repo_path, pr_number, base_repo.as_deref()).await?;
     let action = if enabled {
         PrAction::EnableAutoMerge
     } else {
@@ -47,11 +49,12 @@ pub(crate) async fn set_pr_auto_merge(
 pub(crate) async fn set_pr_merge_queue(
     repo_path: String,
     pr_number: i64,
+    base_repo: Option<String>,
     enqueued: bool,
     expected_head_sha: Option<String>,
     state: tauri::State<'_, Arc<AppState>>,
 ) -> Result<Value, String> {
-    let api = RepoApi::resolve(&state, &repo_path).await?;
+    let api = RepoApi::resolve_for_pr(&state, &repo_path, pr_number, base_repo.as_deref()).await?;
     let action = if enqueued {
         PrAction::Enqueue
     } else {
@@ -71,11 +74,12 @@ pub(crate) async fn set_pr_merge_queue(
 pub(crate) async fn merge_or_enqueue_pr(
     repo_path: String,
     pr_number: i64,
+    base_repo: Option<String>,
     merge_method: String,
     expected_head_sha: String,
     state: tauri::State<'_, Arc<AppState>>,
 ) -> Result<Value, String> {
-    let api = RepoApi::resolve(&state, &repo_path).await?;
+    let api = RepoApi::resolve_for_pr(&state, &repo_path, pr_number, base_repo.as_deref()).await?;
     actions::merge_or_enqueue(
         &api,
         api.variables(pr_number),

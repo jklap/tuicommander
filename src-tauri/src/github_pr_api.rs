@@ -88,6 +88,24 @@ impl<'a> RepoApi<'a> {
             repo,
         })
     }
+    /// [`Self::resolve`], retargeted at the repository the PR lives in (see
+    /// `github::resolve_pr_target`): a fork's PR opened against its upstream is not in the fork.
+    pub async fn resolve_for_pr(
+        state: &'a AppState,
+        path: &str,
+        pr_number: i64,
+        base_repo: Option<&str>,
+    ) -> Result<Self, String> {
+        let (account, token, owner, repo) =
+            crate::github::resolve_repo_for_pr(state, path, pr_number, base_repo).await?;
+        Ok(Self {
+            state,
+            account,
+            token,
+            owner,
+            repo,
+        })
+    }
     fn text_request(&self, endpoint: &str) -> reqwest::RequestBuilder {
         let path = format!("/repos/{}/{}/{}", self.owner, self.repo, endpoint);
         crate::github_debug::log_api("GET", &path, "CI job log download");

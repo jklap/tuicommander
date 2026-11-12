@@ -68,7 +68,11 @@ pub(super) async fn repo_ci_checks(
     }
     let path = q.path;
     let pr_number = q.pr_number;
-    Json(crate::github::get_ci_checks_impl(&path, pr_number, &state).await).into_response()
+    Json(
+        crate::github::get_ci_checks_targeted(&path, pr_number, q.base_repo.as_deref(), &state)
+            .await,
+    )
+    .into_response()
 }
 
 pub(super) async fn repo_pr_review_threads(
@@ -78,7 +82,15 @@ pub(super) async fn repo_pr_review_threads(
     if let Err(e) = validate_repo_path(&q.path) {
         return e.into_response();
     }
-    json_result(crate::github::get_pr_review_threads_impl(&q.path, q.pr_number, &state).await)
+    json_result(
+        crate::github::get_pr_review_threads_targeted(
+            &q.path,
+            q.pr_number,
+            q.base_repo.as_deref(),
+            &state,
+        )
+        .await,
+    )
 }
 
 pub(super) async fn repo_approve_pr(
@@ -91,7 +103,7 @@ pub(super) async fn repo_approve_pr(
     let path = body.repo_path;
     let pr = body.pr_number;
     upstream_json_result(
-        crate::github::approve_pr_impl(&path, pr, &state)
+        crate::github::approve_pr_targeted(&path, pr, body.base_repo.as_deref(), &state)
             .await
             .map(|()| serde_json::json!({"ok": true})),
     )
@@ -105,9 +117,10 @@ pub(super) async fn repo_update_pr_branch(
         return e.into_response();
     }
     upstream_json_result(
-        crate::github::update_pr_branch_impl(
+        crate::github::update_pr_branch_targeted(
             &body.repo_path,
             body.pr_number,
+            body.base_repo.as_deref(),
             &body.expected_head_sha,
             &state,
         )
@@ -124,9 +137,14 @@ pub(super) async fn repo_close_pr(
         return e.into_response();
     }
     upstream_json_result(
-        crate::github::close_pr_impl(&body.repo_path, body.pr_number, &state)
-            .await
-            .map(|()| serde_json::json!({"ok": true})),
+        crate::github::close_pr_targeted(
+            &body.repo_path,
+            body.pr_number,
+            body.base_repo.as_deref(),
+            &state,
+        )
+        .await
+        .map(|()| serde_json::json!({"ok": true})),
     )
 }
 
@@ -171,9 +189,10 @@ pub(super) async fn repo_post_pr_review(
         return e.into_response();
     }
     upstream_json_result(
-        crate::github::post_pr_review_impl(
+        crate::github::post_pr_review_targeted(
             &body.repo_path,
             body.pr_number,
+            body.base_repo.as_deref(),
             &body.body,
             body.event.as_deref(),
             &body.comments,
@@ -192,7 +211,9 @@ pub(super) async fn repo_pr_diff(
     }
     let path = q.path;
     let pr = q.pr;
-    upstream_json_result(crate::github::get_pr_diff_pinned_impl(&path, pr, &state).await)
+    upstream_json_result(
+        crate::github::get_pr_diff_pinned_targeted(&path, pr, q.base_repo.as_deref(), &state).await,
+    )
 }
 
 pub(super) async fn repo_merged_prs(
@@ -600,6 +621,7 @@ mod pr_action_route_tests {
             Query(CiChecksQuery {
                 path: "/nonexistent".into(),
                 pr_number: 1,
+                base_repo: None,
             }),
         )
         .await;
@@ -617,6 +639,7 @@ mod pr_action_route_tests {
                 repo_path: "/nonexistent".into(),
                 pr_number: 1,
                 expected_head_sha: String::new(),
+                base_repo: None,
             }),
         )
         .await;
@@ -632,6 +655,7 @@ mod pr_action_route_tests {
             Json(ApprovePrRequest {
                 repo_path: "/nonexistent".into(),
                 pr_number: 1,
+                base_repo: None,
             }),
         )
         .await;
@@ -650,10 +674,86 @@ mod pr_action_route_tests {
                 pr_number: 1,
                 merge_method: "squash".into(),
                 expected_head_sha: String::new(),
+                base_repo: None,
             }),
         )
         .await;
         assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
         assert!(error_body(response).await.contains("head commit"));
+    }
+
+    // Catches: baseRepo silently dropped by (or breaking) a request type, over either
+    // transport: JSON bodies use camelCase, the snake_case GET queries use `base_repo`.
+    #[test]
+    fn base_repo_is_accepted_and_optional_on_every_action_request() {
+        use crate::mcp_http::types::{PostPrReviewRequest, PrDiffQuery};
+        let with = |extra: serde_json::Value| {
+            let mut base = serde_json::json!({"repoPath": "/r", "prNumber": 7,
+                "expectedHeadSha": "abc", "mergeMethod": "squash", "body": "b"});
+            base.as_object_mut()
+                .unwrap()
+                .extend(extra.as_object().unwrap().clone());
+            base
+        };
+        let hint = serde_json::json!({"baseRepo": "org/hello"});
+        let none = serde_json::json!({});
+        let approve: ApprovePrRequest = serde_json::from_value(with(hint.clone())).unwrap();
+        assert_eq!(approve.base_repo.as_deref(), Some("org/hello"));
+        assert_eq!(
+            serde_json::from_value::<ApprovePrRequest>(with(none.clone()))
+                .unwrap()
+                .base_repo,
+            None
+        );
+        let update: UpdatePrBranchRequest = serde_json::from_value(with(hint.clone())).unwrap();
+        assert_eq!(update.base_repo.as_deref(), Some("org/hello"));
+        let merge: MergePrRequest = serde_json::from_value(with(hint.clone())).unwrap();
+        assert_eq!(merge.base_repo.as_deref(), Some("org/hello"));
+        assert_eq!(
+            serde_json::from_value::<MergePrRequest>(with(none.clone()))
+                .unwrap()
+                .base_repo,
+            None
+        );
+        let review: PostPrReviewRequest = serde_json::from_value(with(hint)).unwrap();
+        assert_eq!(review.base_repo.as_deref(), Some("org/hello"));
+
+        let uri = |q: &str| q.parse::<axum::http::Uri>().unwrap();
+        let ci = Query::<CiChecksQuery>::try_from_uri(&uri(
+            "/x?path=%2Fr&pr_number=7&base_repo=org%2Fhello",
+        ))
+        .unwrap();
+        assert_eq!(ci.0.base_repo.as_deref(), Some("org/hello"));
+        let ci = Query::<CiChecksQuery>::try_from_uri(&uri("/x?path=%2Fr&pr_number=7")).unwrap();
+        assert_eq!(ci.0.base_repo, None);
+        let diff =
+            Query::<PrDiffQuery>::try_from_uri(&uri("/x?path=%2Fr&pr=7&base_repo=org%2Fhello"))
+                .unwrap();
+        assert_eq!(diff.0.base_repo.as_deref(), Some("org/hello"));
+    }
+
+    // Catches: a malformed base repo reaching GitHub instead of being refused up front.
+    #[tokio::test]
+    async fn a_malformed_base_repo_is_refused_by_the_route_not_sent_to_github() {
+        let dir = crate::state::tests_support::create_temp_git_repo();
+        std::process::Command::new("git")
+            .args(["remote", "add", "origin", "https://github.com/me/hello.git"])
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+        let state = state();
+        *state.github.token.write() = Some("test-only-credential".into());
+        let response = repo_approve_pr(
+            State(state),
+            Json(ApprovePrRequest {
+                repo_path: dir.path().to_string_lossy().into_owned(),
+                pr_number: 7,
+                base_repo: Some("not-a-repo".into()),
+            }),
+        )
+        .await;
+        assert_ne!(response.status(), StatusCode::OK);
+        let error = error_body(response).await;
+        assert!(error.contains("Invalid base repository"), "{error}");
     }
 }

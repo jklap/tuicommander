@@ -43,6 +43,7 @@ export function createReviewSession(
 	prNumber: number,
 	pin?: string,
 	onPin?: (headSha: string) => void,
+	baseRepo?: string,
 ): ReviewSession {
 	const [threads, setThreads] = createSignal<ReviewThread[]>([]);
 	const [drafts, setDrafts] = createSignal<DraftComment[]>([]);
@@ -70,6 +71,7 @@ export function createReviewSession(
 				const page: ReviewThreadsPage = await invoke<ReviewThreadsPage>("get_pr_line_threads", {
 					repoPath,
 					prNumber,
+					baseRepo,
 					after,
 				});
 				head = page.headSha;
@@ -172,6 +174,7 @@ export function createReviewSession(
 				await invoke("submit_pr_draft_review", {
 					repoPath,
 					prNumber,
+					baseRepo,
 					draft: {
 						headSha: head,
 						body,

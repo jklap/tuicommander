@@ -44,9 +44,14 @@ export const PrActionButtons: Component<PrActionButtonsProps> = (props) => {
 	const [requesting, setRequesting] = createSignal(false);
 	const [body, setBody] = createSignal("");
 	const [actionState, { refetch }] = createResource(
-		() => ({ repoPath: props.repoPath, prNumber: props.pr.number, head: props.pr.head_ref_oid }),
-		({ repoPath, prNumber }) =>
-			invoke<PrActionState>("get_pr_action_state", { repoPath, prNumber }).catch((e) => {
+		() => ({
+			repoPath: props.repoPath,
+			prNumber: props.pr.number,
+			head: props.pr.head_ref_oid,
+			baseRepo: props.pr.base_repo,
+		}),
+		({ repoPath, prNumber, baseRepo }) =>
+			invoke<PrActionState>("get_pr_action_state", { repoPath, prNumber, baseRepo }).catch((e) => {
 				appLogger.warn("github", "Failed to load PR action state", { error: String(e) });
 				return null;
 			}),
@@ -89,6 +94,7 @@ export const PrActionButtons: Component<PrActionButtonsProps> = (props) => {
 				invoke("set_pr_auto_merge", {
 					repoPath: props.repoPath,
 					prNumber: props.pr.number,
+					baseRepo: props.pr.base_repo,
 					enabled: !autoMergeOn(),
 					mergeMethod: mergeMethod(),
 					expectedHeadSha: props.pr.head_ref_oid,
@@ -105,12 +111,14 @@ export const PrActionButtons: Component<PrActionButtonsProps> = (props) => {
 					? invoke("set_pr_merge_queue", {
 							repoPath: props.repoPath,
 							prNumber: props.pr.number,
+							baseRepo: props.pr.base_repo,
 							enqueued: false,
 							expectedHeadSha: props.pr.head_ref_oid,
 						})
 					: invoke("merge_or_enqueue_pr", {
 							repoPath: props.repoPath,
 							prNumber: props.pr.number,
+							baseRepo: props.pr.base_repo,
 							mergeMethod: mergeMethod(),
 							expectedHeadSha: props.pr.head_ref_oid,
 						}),
@@ -123,6 +131,7 @@ export const PrActionButtons: Component<PrActionButtonsProps> = (props) => {
 				invoke("post_pr_review", {
 					repoPath: props.repoPath,
 					prNumber: props.pr.number,
+					baseRepo: props.pr.base_repo,
 					body: body().trim(),
 					event: "REQUEST_CHANGES",
 					comments: [],

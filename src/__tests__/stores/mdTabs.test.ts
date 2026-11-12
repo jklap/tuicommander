@@ -321,6 +321,25 @@ describe("mdTabsStore", () => {
 			});
 		});
 
+		// PR numbers are per repository: a fork PR #5 and an upstream PR #5 are different PRs.
+		it("keeps a PR number shared by two base repositories in separate tabs", () => {
+			testInScope(() => {
+				const own = store.addPrDiff("/repo", 5, "Own", "diff-own", "sha1", "me/hello");
+				const upstream = store.addPrDiff("/repo", 5, "Upstream", "diff-up", "sha2", "org/hello");
+				expect(upstream).not.toBe(own);
+				expect(store.getCount()).toBe(2);
+				// Reopening each finds its own tab, with its own base repo and diff.
+				expect(store.addPrDiff("/repo", 5, "Own", "diff-own-2", "sha1", "me/hello")).toBe(own);
+				expect(store.addPrDiff("/repo", 5, "Upstream", "diff-up-2", "sha2", "org/hello")).toBe(upstream);
+				expect(store.getCount()).toBe(2);
+				const tab = store.get(upstream);
+				if (tab?.type === "pr-diff") {
+					expect(tab.baseRepo).toBe("org/hello");
+					expect(tab.diff).toBe("diff-up-2");
+				}
+			});
+		});
+
 		it("updates diff content when reopening same PR", () => {
 			testInScope(() => {
 				store.addPrDiff("/repo", 42, "Fix bug", "old diff");

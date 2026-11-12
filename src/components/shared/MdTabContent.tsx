@@ -51,6 +51,7 @@ export const MdTabContent: Component<{ tab: MdTabData; onClose: () => void; visi
 							prTitle={pr.prTitle}
 							diff={pr.diff}
 							headSha={pr.headSha}
+							baseRepo={pr.baseRepo}
 							onPin={(sha) => mdTabsStore.pinPrDiffHead(pr.id, sha)}
 							repoPath={pr.repoPath}
 						/>

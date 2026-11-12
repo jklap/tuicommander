@@ -616,8 +616,15 @@ export function useRepository() {
 		prNumber: number,
 		mergeMethod: string,
 		expectedHeadSha: string,
+		baseRepo?: string,
 	): Promise<string> {
-		return await invoke<string>("merge_pr_via_github", { repoPath, prNumber, mergeMethod, expectedHeadSha });
+		return await invoke<string>("merge_pr_via_github", {
+			repoPath,
+			prNumber,
+			mergeMethod,
+			expectedHeadSha,
+			baseRepo,
+		});
 	}
 
 	/** List local branch names for a repository */

@@ -188,7 +188,7 @@ impl PollHttpFixture {
         .await
     }
 
-    async fn with_response(
+    pub(crate) async fn with_response(
         response: impl Fn(&serde_json::Value) -> serde_json::Value + Send + Sync + 'static,
     ) -> Self {
         let response = std::sync::Arc::new(response);

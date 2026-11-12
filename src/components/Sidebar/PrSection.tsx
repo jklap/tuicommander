@@ -141,7 +141,7 @@ export const PrSection: Component<PrSectionProps> = (props) => {
 				repoSettingsStore.getEffectiveField(props.repoPath, "prMergeStrategy") ??
 				repoDefaultsStore.state.prMergeStrategy;
 			const startMethod = effectiveMergeMethod(pr, preferred);
-			const usedMethod = await mergeWithFallback(props.repoPath, pr.number, startMethod, pr.head_ref_oid);
+			const usedMethod = await mergeWithFallback(props.repoPath, pr.number, startMethod, pr.head_ref_oid, pr.base_repo);
 			if (usedMethod !== preferred) {
 				const repo = repositoriesStore.get(props.repoPath);
 				repoSettingsStore.getOrCreate(props.repoPath, repo?.displayName ?? props.repoPath);
@@ -175,7 +175,7 @@ export const PrSection: Component<PrSectionProps> = (props) => {
 		setApproving(pr.number, true);
 		setRowError(pr.number, null);
 		try {
-			await invoke("approve_pr", { repoPath: props.repoPath, prNumber: pr.number });
+			await invoke("approve_pr", { repoPath: props.repoPath, prNumber: pr.number, baseRepo: pr.base_repo });
 			appLogger.info("github", `Approved PR #${pr.number}`);
 			githubStore.pollRepo(props.repoPath);
 		} catch (e) {
@@ -200,6 +200,7 @@ export const PrSection: Component<PrSectionProps> = (props) => {
 				repoPath: props.repoPath,
 				prNumber: pr.number,
 				expectedHeadSha: pr.head_ref_oid,
+				baseRepo: pr.base_repo,
 			});
 			holdUpdateBranch(pr);
 			appLogger.info("github", `Requested branch update for PR #${pr.number}`);
@@ -221,7 +222,7 @@ export const PrSection: Component<PrSectionProps> = (props) => {
 		setBusy(pr.number, true);
 		setRowError(pr.number, null);
 		try {
-			await invoke("close_pr", { repoPath: props.repoPath, prNumber: pr.number });
+			await invoke("close_pr", { repoPath: props.repoPath, prNumber: pr.number, baseRepo: pr.base_repo });
 			appLogger.info("github", `Closed PR #${pr.number}`);
 			githubStore.pollRepo(props.repoPath);
 		} catch (e) {
@@ -239,8 +240,9 @@ export const PrSection: Component<PrSectionProps> = (props) => {
 			const { diff, headSha } = await invoke<{ diff: string; headSha: string }>("get_pr_diff", {
 				repoPath: props.repoPath,
 				prNumber: pr.number,
+				baseRepo: pr.base_repo,
 			});
-			mdTabsStore.addPrDiff(props.repoPath, pr.number, pr.title, diff, headSha);
+			mdTabsStore.addPrDiff(props.repoPath, pr.number, pr.title, diff, headSha, pr.base_repo);
 		} catch (e) {
 			const msg = String(e);
 			appLogger.error("github", `Failed to load PR #${pr.number} diff`, { error: msg });

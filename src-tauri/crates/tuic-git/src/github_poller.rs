@@ -261,6 +261,8 @@ mod tests {
             rebase_merge_allowed: true,
             unresolved_threads: 0,
             unresolved_threads_truncated: false,
+            base_repo: String::new(),
+            head_repo: String::new(),
         }
     }
 

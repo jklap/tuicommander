@@ -180,13 +180,14 @@ pub(crate) async fn submit_review(
     crate::github::parse_posted_review(response)
 }
 
-pub(crate) async fn get_pr_line_threads_impl(
+pub(crate) async fn get_pr_line_threads_targeted(
     path: &str,
     number: i64,
+    base_repo: Option<&str>,
     after: Option<String>,
     state: &AppState,
 ) -> Result<ReviewThreadsPage, String> {
-    let api = RepoApi::resolve(state, path).await?;
+    let api = RepoApi::resolve_for_pr(state, path, number, base_repo).await?;
     read_threads(&api, api.variables(number), after).await
 }
 
@@ -195,10 +196,11 @@ pub(crate) async fn get_pr_line_threads_impl(
 pub(crate) async fn get_pr_line_threads(
     repo_path: String,
     pr_number: i64,
+    base_repo: Option<String>,
     after: Option<String>,
     state: tauri::State<'_, std::sync::Arc<AppState>>,
 ) -> Result<ReviewThreadsPage, String> {
-    get_pr_line_threads_impl(&repo_path, pr_number, after, &state).await
+    get_pr_line_threads_targeted(&repo_path, pr_number, base_repo.as_deref(), after, &state).await
 }
 
 #[cfg(feature = "desktop")]
@@ -242,10 +244,11 @@ pub(crate) async fn reply_pr_thread(
 pub(crate) async fn submit_pr_draft_review(
     repo_path: String,
     pr_number: i64,
+    base_repo: Option<String>,
     draft: DraftReview,
     state: tauri::State<'_, std::sync::Arc<AppState>>,
 ) -> Result<crate::github::PostedPrReview, String> {
-    let api = RepoApi::resolve(&state, &repo_path).await?;
+    let api = RepoApi::resolve_for_pr(&state, &repo_path, pr_number, base_repo.as_deref()).await?;
     submit_review(&api, api.variables(pr_number), pr_number, draft).await
 }
 

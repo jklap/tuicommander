@@ -5159,3 +5159,51 @@ it("maps a queue claim to the send-now HTTP route", () => {
 		path: "/sessions/pending/queue/17/send-now",
 	});
 });
+
+// Catches: a browser client dropping baseRepo so a fork/upstream PR number resolves ambiguously.
+describe("PR commands forward baseRepo over HTTP exactly when set", () => {
+	const base = { repoPath: "/r", path: "/r", prNumber: 7 };
+	const withRepo = { ...base, baseRepo: "up/stream" };
+	const postCommands: Array<[string, string]> = [
+		["approve_pr", "/repo/approve-pr"],
+		["update_pr_branch", "/repo/update-pr-branch"],
+		["close_pr", "/repo/close-pr"],
+		["merge_pr_via_github", "/repo/merge-pr"],
+		["post_pr_review", "/repo/post-pr-review"],
+		["set_pr_auto_merge", "/repo/pr-auto-merge"],
+		["set_pr_merge_queue", "/repo/pr-merge-queue"],
+		["merge_or_enqueue_pr", "/repo/pr-merge-or-enqueue"],
+		["submit_pr_draft_review", "/repo/pr-draft-review"],
+	];
+
+	it.each(postCommands)("%s puts baseRepo in the POST body", (cmd, path) => {
+		const set = mapCommandToHttp(cmd, withRepo)!;
+		expect(set.method).toBe("POST");
+		expect(set.path).toBe(path);
+		expect((set.body as Record<string, unknown>).baseRepo).toBe("up/stream");
+		const unset = mapCommandToHttp(cmd, base)!;
+		expect((unset.body as Record<string, unknown>).baseRepo).toBeUndefined();
+	});
+
+	const getCommands: Array<[string, string]> = [
+		["get_ci_checks", "base_repo"],
+		["get_pr_review_threads", "base_repo"],
+		["get_pr_diff", "base_repo"],
+		["get_pr_action_state", "baseRepo"],
+		["get_pr_line_threads", "baseRepo"],
+		["get_pr_open_threads", "baseRepo"],
+	];
+
+	it.each(getCommands)("%s puts the base repo in the GET query", (cmd, key) => {
+		const set = mapCommandToHttp(cmd, withRepo)!;
+		expect(set.method).toBe("GET");
+		expect(new URL(set.path, "http://localhost").searchParams.get(key)).toBe("up/stream");
+		const unset = mapCommandToHttp(cmd, base)!;
+		expect(unset.path).not.toMatch(/base_?[rR]epo/);
+	});
+
+	it("merge_pr_via_github sends expectedHeadSha", () => {
+		const m = mapCommandToHttp("merge_pr_via_github", { ...base, mergeMethod: "squash", expectedHeadSha: "abc" })!;
+		expect((m.body as Record<string, unknown>).expectedHeadSha).toBe("abc");
+	});
+});
