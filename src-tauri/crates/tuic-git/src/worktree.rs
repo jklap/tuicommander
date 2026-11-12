@@ -6020,8 +6020,17 @@ mod tests {
                     .unwrap();
             }
             fs::remove_dir_all(&missing).unwrap();
-            let missing_spelling =
-                tuic_core::path_spelling::portable_spelling(&missing.to_string_lossy());
+            // Git records a checkout's physical path. `missing` no longer exists, so it cannot be
+            // canonicalized itself; canonicalize its parent instead, or a symlinked TMPDIR
+            // (macOS `/var` -> `/private/var`, a sandbox's `/tmp/<id>`) reads as a different path.
+            let missing_spelling = tuic_core::path_spelling::portable_spelling(
+                &root
+                    .path()
+                    .canonicalize()
+                    .unwrap()
+                    .join("missing")
+                    .to_string_lossy(),
+            );
             let live_spelling = tuic_core::path_spelling::portable_spelling(
                 &live.canonicalize().unwrap().to_string_lossy(),
             );
