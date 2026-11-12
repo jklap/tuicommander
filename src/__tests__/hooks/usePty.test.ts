@@ -238,9 +238,8 @@ describe("usePty", () => {
 
 			await pty.sendCommand("wrapped-codex", "review this", null);
 
-			expect(writes.map(({ data }) => data)).toEqual(["\x15", "review this", "\r"]);
-			expect(writes[1].at - writes[0].at).toBeGreaterThanOrEqual(45);
-			expect(writes[2].at - writes[1].at).toBeGreaterThanOrEqual(195);
+			expect(writes.map(({ data }) => data)).toEqual(["review this", "\r"]);
+			expect(writes[1].at - writes[0].at).toBeGreaterThanOrEqual(195);
 		});
 
 		it("keeps a free shell on its ordinary text and Enter path", async () => {
@@ -254,7 +253,7 @@ describe("usePty", () => {
 
 			await pty.sendCommand("free-shell", "echo ready", null);
 
-			expect(writes).toEqual(["\x15echo ready", "\r"]);
+			expect(writes).toEqual(["echo ready", "\r"]);
 		});
 
 		it("delays Enter after a failed foreground probe without changing shell input bytes", async () => {
@@ -268,7 +267,7 @@ describe("usePty", () => {
 
 			await pty.sendCommand("uncertain-shell", "echo ready", null);
 
-			expect(writes.map(({ data }) => data)).toEqual(["\x15echo ready", "\r"]);
+			expect(writes.map(({ data }) => data)).toEqual(["echo ready", "\r"]);
 			expect(writes[1].at - writes[0].at).toBeGreaterThanOrEqual(195);
 		});
 
@@ -281,7 +280,7 @@ describe("usePty", () => {
 			await pty.sendCommand("sess-review", "review this prompt", "codex", false);
 
 			expect(mockInvoke).toHaveBeenCalledWith("get_session_shell_family", { sessionId: "sess-review" });
-			expect(mockInvoke).toHaveBeenCalledWith("write_pty", {
+			expect(mockInvoke).not.toHaveBeenCalledWith("write_pty", {
 				sessionId: "sess-review",
 				data: "\x15",
 			});

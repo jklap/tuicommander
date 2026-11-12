@@ -406,6 +406,9 @@ pub(crate) const SHELL_READINESS_TIMEOUT_MS: u64 = 5_000;
 /// caller must decide for itself what "gave up waiting" means in its own
 /// context — `handle_session_wait` reports `timed_out: true`, while
 /// `materialize` proceeds anyway rather than hanging forever.
+// No production caller since the gates moved to `wait_for_shell_prompt`; the primitive stays
+// because the gates' docs and tests are phrased in terms of it.
+#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) async fn wait_for_shell_idle(
     state: &Arc<AppState>,
     session_id: &str,
@@ -413,6 +416,104 @@ pub(crate) async fn wait_for_shell_idle(
 ) -> bool {
     wait_for_session_predicate(state, session_id, timeout_ms, |s| {
         session_wait_met(s, session_id, "idle")
+    })
+    .await
+}
+
+/// Bounds for the user-configurable marker wait
+/// (`AppConfig::shell_prompt_marker_timeout_ms`, default 15 s).
+///
+/// The default is longer than [`SHELL_READINESS_TIMEOUT_MS`] on purpose: the
+/// silence fallback that satisfies the plain idle gate fires after 500 ms
+/// without output, which a slow `.envrc` (direnv + `op inject`/keychain lookups,
+/// several seconds with a 1Password confirmation) easily produces before the
+/// first prompt exists. A caller of the strict gate must keep its own
+/// client-side timeout strictly above [`MAX_PROMPT_MARKER_TIMEOUT_MS`] (see
+/// `tuic-cli`'s `materialize_pane`).
+pub(crate) const MIN_PROMPT_MARKER_TIMEOUT_MS: u64 = 1_000;
+pub(crate) const MAX_PROMPT_MARKER_TIMEOUT_MS: u64 = 60_000;
+
+/// How a readiness gate must treat a freshly spawned `shell`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct PromptGate {
+    /// Also require an OSC 133 marker, not just `SHELL_IDLE`.
+    pub(crate) require_marker: bool,
+    pub(crate) timeout_ms: u64,
+}
+
+/// Pure decision behind every prompt gate. `configured_marker_ms` is the raw
+/// `shell_prompt_marker_timeout_ms` setting: `0` disables the marker
+/// requirement (plain idle gate bounded by `plain_timeout_ms`, the pre-2026-11-11
+/// behaviour, for users whose shell integration is broken); anything else is
+/// clamped to [`MIN_PROMPT_MARKER_TIMEOUT_MS`]..=[`MAX_PROMPT_MARKER_TIMEOUT_MS`].
+/// Shells that do not guarantee markers always get the plain gate.
+pub(crate) fn prompt_gate_for_shell(
+    shell: &str,
+    plain_timeout_ms: u64,
+    configured_marker_ms: u64,
+) -> PromptGate {
+    if !shell_emits_prompt_marker(shell) || configured_marker_ms == 0 {
+        return PromptGate {
+            require_marker: false,
+            timeout_ms: plain_timeout_ms,
+        };
+    }
+    PromptGate {
+        require_marker: true,
+        timeout_ms: configured_marker_ms
+            .clamp(MIN_PROMPT_MARKER_TIMEOUT_MS, MAX_PROMPT_MARKER_TIMEOUT_MS),
+    }
+}
+
+/// [`prompt_gate_for_shell`] with the live setting.
+pub(crate) fn configured_prompt_gate(shell: &str, plain_timeout_ms: u64) -> PromptGate {
+    prompt_gate_for_shell(
+        shell,
+        plain_timeout_ms,
+        crate::config::resolve_shell_prompt_marker_timeout_ms(),
+    )
+}
+
+/// Whether TUIC's injected shell integration is guaranteed to emit OSC 133
+/// prompt markers for `shell`. Only zsh qualifies: TUIC owns its `ZDOTDIR`
+/// bootstrap, so the markers are always present. bash/fish only get an env var
+/// pointing at a script the user must source themselves, so waiting for a
+/// marker there could stall for the whole bound with nothing coming.
+pub(crate) fn shell_emits_prompt_marker(shell: &str) -> bool {
+    let shell = shell.trim();
+    let exe = match shell.strip_prefix('"') {
+        Some(quoted) => quoted.split('"').next().unwrap_or(""),
+        None => shell.split_whitespace().next().unwrap_or(""),
+    };
+    exe.rsplit(['/', '\\']).next() == Some("zsh")
+}
+
+/// Block until `session_id`'s shell is at a real prompt: `SHELL_IDLE` and, when
+/// `require_marker` is set, at least one OSC 133 marker has been seen.
+///
+/// `SHELL_IDLE` alone is not proof of a prompt. A plain shell flips to idle
+/// after 500 ms without output, and a shell that is still running its startup
+/// (direnv evaluating a slow `.envrc` in precmd, before zle exists) is silent
+/// for exactly that long. Input written then lands in the tty's canonical-mode
+/// line buffer, which holds at most 1024 bytes: a longer line (the swarm launch
+/// command carries four copies of a sandbox proxy URL) is truncated, its
+/// newline dropped, and the pane is left with half a command at the prompt.
+/// The integration's marker is printed by the precmd chain, so seeing one means
+/// startup output has finished.
+///
+/// Fail-open like [`wait_for_shell_idle`]: `false` on timeout.
+pub(crate) async fn wait_for_shell_prompt(
+    state: &Arc<AppState>,
+    session_id: &str,
+    timeout_ms: u64,
+    require_marker: bool,
+) -> bool {
+    wait_for_session_predicate(state, session_id, timeout_ms, |s| {
+        session_wait_met(s, session_id, "idle")
+            && (!require_marker
+                || s.session_maps
+                    .has_osc133_integration
+                    .contains_key(session_id))
     })
     .await
 }
@@ -447,18 +548,48 @@ pub(crate) async fn gate_new_shell_session(
     timeout_ms: u64,
     origin: &str,
 ) -> bool {
+    gate_new_shell_session_with(
+        state,
+        session_id,
+        timeout_ms,
+        crate::config::resolve_shell_prompt_marker_timeout_ms(),
+        origin,
+    )
+    .await
+}
+
+/// [`gate_new_shell_session`] with the raw `shell_prompt_marker_timeout_ms`
+/// setting passed in, so tests need not touch `config.json`. A zsh session is
+/// held until it has also printed an OSC 133 marker (see
+/// [`wait_for_shell_prompt`]); `timeout_ms` is the bound for every other shell.
+pub(crate) async fn gate_new_shell_session_with(
+    state: &Arc<AppState>,
+    session_id: &str,
+    timeout_ms: u64,
+    configured_marker_ms: u64,
+    origin: &str,
+) -> bool {
     if !state.session_maps.sessions.contains_key(session_id)
         || !state.session_maps.shell_states.contains_key(session_id)
     {
         return false;
     }
-    if wait_for_shell_idle(state, session_id, timeout_ms).await {
+    // Clone out of the mutex before awaiting: never hold a session lock across a wait.
+    let shell = state
+        .session_maps
+        .sessions
+        .get(session_id)
+        .map(|entry| entry.lock().shell.clone())
+        .unwrap_or_default();
+    let gate = prompt_gate_for_shell(&shell, timeout_ms, configured_marker_ms);
+    if wait_for_shell_prompt(state, session_id, gate.timeout_ms, gate.require_marker).await {
         return true;
     }
     tracing::warn!(
         session_id,
         origin,
-        timeout_ms,
+        timeout_ms = gate.timeout_ms,
+        require_marker = gate.require_marker,
         "new shell session never reached a ready prompt within the readiness bound — \
          returning the session anyway (fail-open)"
     );
@@ -727,6 +858,7 @@ pub(crate) fn spawn_deferred_prompt_delivery_with(
             content: prompt.clone(),
             timestamp: now_ms,
             delivered_via_channel: false,
+            report: None,
         };
         let msg_id = msg.id.clone();
         let filed = {
@@ -1751,9 +1883,10 @@ fn handle_session_unpaged(
                 .and_then(|s| s.agent_type.clone());
 
             // Submitting text to a prefill-only agent is not a generic text+key
-            // pair. Codex/OpenCode require Ctrl-U framing, bracketed paste for
-            // multiline prompts, and a real scheduling gap before CR. Reuse the
-            // peer-injection recipe without changing Claude's working input path.
+            // pair. Codex/OpenCode need bracketed paste for multiline prompts and
+            // a real scheduling gap before CR (injected text is appended to the
+            // composer, never replaces it: no Ctrl-U). Reuse the peer-injection
+            // recipe without changing Claude's working input path.
             if !text.is_empty() && uses_agent_command_injection(agent_type.as_deref(), key_seq) {
                 if let Err(e) = crate::pty::write_agent_command_to_pty(state, session_id, text) {
                     return serde_json::json!({"error": e});
@@ -2100,7 +2233,14 @@ fn handle_session_unpaged(
             } else {
                 "close_requested"
             };
+            let was_live = state.session_maps.sessions.contains_key(session_id);
             crate::pty::close_pty_core_with_reason(state, session_id, false, reason);
+            // A process that already exited leaves its retained terminal buffer (and the
+            // tab showing it) behind, with no live session for the call above to announce:
+            // close it for the frontends too, or that tab stays open forever.
+            if !was_live && state.grid.vt_log_buffers.contains_key(session_id) {
+                crate::pty::emit_session_closed(state, session_id, "closed");
+            }
             // SIMP-1: drain HTML tabs registered by this session and emit close.
             emit_close_html_tabs(state.as_ref(), session_id);
             serde_json::json!({"ok": true})

@@ -501,9 +501,9 @@ pub(crate) fn get_shell_state(
 }
 
 /// Return the classified shell family for a PTY session.
-/// Lets the frontend pick the correct control sequences (e.g. Ctrl-U as
-/// line-kill for POSIX readline vs. literal-char on cmd.exe/PowerShell)
-/// without re-deriving the classification on every keystroke.
+/// Informational: no Ctrl-U is sent before injected text any more (dropped-items #16), so
+/// the classification no longer picks control sequences. It remains for callers that need
+/// to know whether a PTY runs a POSIX-readline shell or a native Windows shell.
 #[cfg(feature = "desktop")]
 #[tauri::command]
 pub(crate) fn get_session_shell_family(
@@ -588,16 +588,26 @@ pub(crate) fn resume_pty(
     state: State<'_, Arc<AppState>>,
     session_id: String,
 ) -> Result<(), String> {
+    resume_pty_core(&state, &session_id)
+}
+
+/// The body of `resume_pty`, callable without a Tauri `State` so it can be tested: clear the
+/// reader's flow-control pause and wake the session if auto-standby had parked it.
+pub(crate) fn resume_pty_core(state: &AppState, session_id: &str) -> Result<(), String> {
     let entry = state
         .session_maps
         .sessions
-        .get(&session_id)
+        .get(session_id)
         .ok_or_else(|| format!("Session not found: {session_id}"))?;
     entry.lock().paused.store(false, Ordering::Relaxed);
     drop(entry);
+    // Serialized with suspend like `session_wake::ensure_live`'s live-session path.
     #[cfg(unix)]
-    if let Err(e) = crate::session_wake::ensure_live(&state, &session_id) {
-        tracing::debug!(session_id = %session_id, error = %e, "Wake on resume (may not be in standby)");
+    {
+        let _guard = state.suspend_lock.lock();
+        if let Err(e) = wake_session(state, session_id) {
+            tracing::debug!(session_id = %session_id, error = %e, "Wake on resume (may not be in standby)");
+        }
     }
     tracing::debug!(session_id = %session_id, "PTY reader resumed (flow control)");
     Ok(())
@@ -1395,11 +1405,12 @@ pub(crate) async fn set_session_visible(
     // as `POST /sessions/{id}/visible`) only distinguishes remote viewers.
     // `wake: false` = keep-alive: refresh without SIGCONT-ing a parked session.
     let _ = viewer_id;
-    crate::background_mode::hidden::set_visible_waking(
+    apply_session_visibility(
         &state,
         &session_id,
         visible,
         true,
+        crate::background_mode::hidden::LEGACY_VIEWER_ID,
         wake.unwrap_or(true),
     );
     Ok(())

@@ -201,7 +201,7 @@ export function useCiHeal(): void {
 			// the framing + sanitization is the accepted residual-risk boundary.
 			// PTY injection rule: route through sendCommand so the prompt actually
 			// submits (Ink raw-mode agents ignore a trailing \n; only the split
-			// Ctrl-U/\r writes submit). A raw write_pty here silently failed to
+			// text/\r writes submit). A raw write_pty here silently failed to
 			// submit for Claude/Gemini.
 			const shellFamily = await getShellFamily(terminal.sessionId);
 			await sendCommand(
