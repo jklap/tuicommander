@@ -1522,7 +1522,7 @@ pub(crate) fn agent_submission_ack_kind(state: &AppState, session_id: &str) -> &
 /// the same failure while fixing opencode and could NOT be verified: none of those three
 /// binaries is installed on this machine, and an adapter written from documentation
 /// instead of a live capture is how grok first shipped green tests over a UI that stayed
-/// stuck BUSY. They are tracked in `to-test.md`; give each one an adapter only after
+/// stuck BUSY. Give each one an adapter only after
 /// capturing its real screens. **goose left this list on 2026-09-07** — it was installed,
 /// captured live at 1.49.0, and now has `detect_goose_screen_activity`.
 ///
@@ -1561,14 +1561,9 @@ pub(super) fn is_script_interpreter(name: &str) -> bool {
 /// Returns None if the lookup fails.
 #[cfg(target_os = "macos")]
 pub(crate) fn process_name_from_pid(pid: u32) -> Option<String> {
-    let mut buf = [0u8; libc::MAXPATHLEN as usize];
-    // SAFETY: proc_pidpath writes into the provided buffer up to buffersize bytes.
-    // The buffer is stack-allocated with known size. pid is a valid u32 cast to i32.
-    let ret = unsafe { libc::proc_pidpath(pid as i32, buf.as_mut_ptr().cast(), buf.len() as u32) };
-    if ret <= 0 {
-        return None;
-    }
-    let path = std::str::from_utf8(&buf[..ret as usize]).ok()?;
+    // `proc_pidpath`, shared with the process-tree snapshot.
+    let path = tuic_core::process_info::exe(pid)?;
+    let path = path.to_str()?;
     if let Some(agent_type) = classify_agent_name_or_path(path) {
         return Some(agent_type.to_string());
     }
@@ -1593,7 +1588,7 @@ pub(crate) fn process_name_from_pid(pid: u32) -> Option<String> {
     // Native Claude installs a numeric executable; comm alone cannot name it.
     // Keep comm/process-title discovery when readlink is denied or the path
     // describes an interpreter instead of the agent it is hosting.
-    if let Ok(path) = std::fs::read_link(format!("/proc/{pid}/exe"))
+    if let Some(path) = tuic_core::process_info::exe(pid)
         && let Some(agent) = classify_agent_name_or_path(&path.to_string_lossy())
     {
         return Some(agent.to_string());

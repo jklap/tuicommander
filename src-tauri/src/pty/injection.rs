@@ -1305,11 +1305,11 @@ fn write_submission_to_pty(
 /// multiline text merely PREFILLS codex/claude without submitting (verified
 /// live, story 091).
 ///
-/// The Ctrl-U that clears pending input is NOT part of it: it goes out
-/// `INJECT_ENTER_GAP` earlier, in its own read. Claude Code (verified live on
-/// v2.1.280) treats a long chunk as a paste, strips a Ctrl-U inside it as an
-/// invisible character and then refuses the Enter — a 584-char submission
-/// stayed unsent even with a 500ms Enter gap.
+/// No Ctrl-U is ever sent before it (user decision, dropped-items #16): the
+/// text is appended to whatever the input line already holds. (Main used to
+/// send a Ctrl-U `INJECT_ENTER_GAP` earlier in its own read, because Claude Code
+/// — verified live on v2.1.280 — strips a Ctrl-U bundled inside a long chunk as
+/// an invisible character and then refuses the Enter. Never bundle one.)
 pub(super) fn injection_payload(text: &str) -> String {
     if text.contains('\n') {
         bracketed_payload(text)
@@ -1376,14 +1376,14 @@ pub(crate) fn prefill_agent_input(
 /// with "Removed 1 invisible character"; 50ms submits).
 /// 50ms clears the child's read-scheduling latency for every verified agent.
 /// An agent TUICommander cannot identify, or has not verified, keeps a 200ms gap
-/// and the plain payload; Ctrl-U is a control key before those characters.
+/// and the plain payload.
 ///
 /// This comment used to claim the frontend `sendCommand.ts` recipe "gets this
 /// gap for free — its two `writeFn` calls are separate IPC round-trips". It does
 /// NOT: a Tauri IPC round-trip completes well inside the child's read latency,
 /// so both writes land in one `read()` and a clicked suggestion renders as a
-/// newline instead of submitting. `sendCommand.ts` waits 50ms after Ctrl-U
-/// and before non-Codex Enter. Keep both frontend
+/// newline instead of submitting. `sendCommand.ts` waits 50ms before the
+/// Enter. Keep both frontend
 /// timing rules in step — separate flushes never guaranteed separate reads.
 pub(super) const INJECT_ENTER_GAP: std::time::Duration = std::time::Duration::from_millis(50);
 const UNVERIFIED_ENTER_GAP: std::time::Duration = std::time::Duration::from_millis(200);
@@ -1397,7 +1397,9 @@ const DELAYED_AGENT_QUEUED_SUBMISSION_CONFIRMATION: std::time::Duration =
 /// confirms the turn started. One table for every injection path.
 ///
 /// Measured live 2026-10-02 in a PTY driven with the exact injection bytes
-/// (Ctrl-U, 50ms, payload, gap, CR). `ok` = the turn started on the first Enter.
+/// (then: Ctrl-U, 50ms, payload, gap, CR; Ctrl-U has since been dropped, and it
+/// typed nothing, so the payload/gap/CR results stand). `ok` = the turn started
+/// on the first Enter.
 ///
 /// | agent    | version | plain, short (<= 200 chars) | plain, 1000-2000 chars | bracketed paste |
 /// |----------|---------|-----------------------------|------------------------|-----------------|
@@ -1670,19 +1672,11 @@ fn write_command_with_origin(
         );
     }
     state.retire_turn_interrupt(session_id);
-    // Ctrl-U first, alone: see `injection_payload`. It types nothing, so a
-    // failure before the first text byte cannot make a retry type the command
-    // twice — hence it reports `NotStarted` and the text write counts from zero.
-    if let Err((_, error)) = write_all_with_progress(writer.as_mut(), b"\x15", 0) {
-        return (InjectionOutcome::NotStarted(error), 0);
-    }
-    if let Err(error) = writer.flush() {
-        return (
-            InjectionOutcome::NotStarted(format!("Flush failed: {error}")),
-            0,
-        );
-    }
-    std::thread::sleep(INJECT_ENTER_GAP);
+    // No leading Ctrl-U: injected text is APPENDED to whatever the composer or
+    // shell line already holds, never replaces it (user decision, dropped-items
+    // #16). Automated submits that must not merge into a half-typed line are
+    // refused up front by `agent_composer_rejection` ("partial_composer"), not
+    // cleared here.
     if let Err((written, error)) = write_all_with_progress(writer.as_mut(), payload.as_bytes(), 0) {
         return (
             if written == 0 {
@@ -2534,7 +2528,7 @@ pub(crate) enum ForcedPromptOutcome {
 /// (or was swallowed), `note_submitted_input` still recorded a submitted turn, so
 /// the session sits on that Protocol-rank busy latch until `PROTOCOL_STALE_TIMEOUT`
 /// and nothing retries — the documented 500+ s hang. This is the retry: one direct
-/// write, under the same writer lock and Ctrl-U boundary every forced write uses,
+/// write, under the same writer lock and Enter boundary every forced write uses,
 /// refused when typing could clobber the user's draft or answer an open dialog.
 pub(crate) fn force_type_deferred_prompt(
     state: &AppState,
@@ -3392,7 +3386,7 @@ fn append_and_flush(
 /// Two holds remain, and they are the reason this is not a raw write: a
 /// confident question (speech must never answer a permission dialog) and a
 /// draft in the composer. A held turn stays with the caller. The write itself
-/// is the framed path every injection uses (Ctrl-U, text, a separate Enter).
+/// is the framed path every injection uses (text, then a separate Enter).
 #[cfg(feature = "dictation")]
 pub(crate) fn write_voice_turn(
     state: &AppState,
@@ -3466,6 +3460,100 @@ pub(crate) fn clear_queued_commands(state: &AppState, session_id: &str) -> usize
             before
         })
         .unwrap_or(0)
+}
+
+/// A tty in canonical (line-edited) mode holds one pending line of at most
+/// `MAX_CANON` bytes (1024 on macOS; Linux's N_TTY allows more). Beyond that the
+/// kernel drops the extra bytes, rings the bell and discards the line's newline.
+/// 1000 leaves headroom for text already queued on the same line.
+pub(crate) const CANONICAL_LINE_GUARD_BYTES: usize = 1000;
+
+/// How long [`wait_for_line_editor_before_long_write`] holds a long line back
+/// before giving up and writing it anyway (fail-open: a foreground program that
+/// legitimately stays canonical, such as `cat`, must not wedge the caller).
+/// Must stay below every client's socket timeout for the write routes (see
+/// `tuic-cli`'s `IpcBackend::write`).
+pub(crate) const LINE_EDITOR_WAIT: std::time::Duration = std::time::Duration::from_secs(10);
+
+const LINE_EDITOR_POLL: std::time::Duration = std::time::Duration::from_millis(25);
+
+/// Longest run of bytes with no `\n`/`\r` across `parts`, treated as one
+/// continuous stream (a line can span two parts).
+pub(crate) fn longest_unbroken_line_bytes(parts: &[&str]) -> usize {
+    let (mut longest, mut current) = (0usize, 0usize);
+    for part in parts {
+        for byte in part.bytes() {
+            if byte == b'\n' || byte == b'\r' {
+                longest = longest.max(current);
+                current = 0;
+            } else {
+                current += 1;
+            }
+        }
+    }
+    longest.max(current)
+}
+
+/// Whether the PTY's line discipline is currently canonical: `Some(true)` means
+/// the foreground reader is not a line editor (a shell still starting up, a
+/// program using plain `read`), so a long line would be truncated. `None`
+/// when the platform or the session cannot say.
+#[cfg(unix)]
+// `tcflag_t` is `u64` on macOS (the widening is a no-op there, which clippy flags) but
+// `u32` on Linux, where it is required: keep one spelling that compiles warning-free on both.
+#[allow(clippy::useless_conversion)]
+pub(crate) fn pty_is_canonical(state: &AppState, session_id: &str) -> Option<bool> {
+    let termios = state
+        .session_maps
+        .sessions
+        .get(session_id)?
+        .lock()
+        .master
+        .get_termios()?;
+    Some(u64::from(termios.local_flags.bits()) & u64::from(libc::ICANON) != 0)
+}
+
+#[cfg(not(unix))]
+pub(crate) fn pty_is_canonical(_state: &AppState, _session_id: &str) -> Option<bool> {
+    None
+}
+
+/// Hold back a write that contains a line over [`CANONICAL_LINE_GUARD_BYTES`]
+/// until the PTY leaves canonical mode (zsh's zle, readline, any raw-mode
+/// reader), bounded by `max_wait` and fail-open. Returns `false` if it gave up.
+///
+/// Why this exists: input written while a shell is still in startup (direnv's
+/// precmd hook running a slow `.envrc`) sits in the tty's canonical buffer, and
+/// a line past `MAX_CANON` is truncated with its newline dropped — the swarm
+/// launch line (four sandbox proxy URLs) is exactly that long. Waiting costs
+/// nothing when the line editor is already up (one `tcgetattr`), and never
+/// touches short writes. Async and outside [`run_bounded_pty_input`]'s 2 s
+/// bound on purpose: the wait must not make the caller report an uncertain,
+/// do-not-resend delivery for a write that was merely deferred.
+pub(crate) async fn wait_for_line_editor_before_long_write(
+    state: &Arc<AppState>,
+    session_id: &str,
+    parts: &[&str],
+    max_wait: std::time::Duration,
+) -> bool {
+    if longest_unbroken_line_bytes(parts) < CANONICAL_LINE_GUARD_BYTES {
+        return true;
+    }
+    let deadline = std::time::Instant::now() + max_wait;
+    loop {
+        if pty_is_canonical(state, session_id) != Some(true) {
+            return true;
+        }
+        if std::time::Instant::now() >= deadline {
+            tracing::warn!(
+                session_id,
+                "long input line written while the PTY is still in canonical mode after {max_wait:?}; \
+                 the kernel may truncate it at MAX_CANON"
+            );
+            return false;
+        }
+        tokio::time::sleep(LINE_EDITOR_POLL).await;
+    }
 }
 
 /// Bound the caller's wait, not the kernel operation: a timed-out write may

@@ -203,6 +203,13 @@ pub(super) async fn write_to_session(
     Path(session_id): Path<String>,
     Json(body): Json<WriteRequest>,
 ) -> impl IntoResponse {
+    crate::pty::wait_for_line_editor_before_long_write(
+        &state,
+        &session_id,
+        &[body.data.as_str()],
+        crate::pty::LINE_EDITOR_WAIT,
+    )
+    .await;
     if let Err(e) =
         crate::pty::run_bounded_pty_input(move || write_pty_input(&state, &session_id, &body.data))
             .await
@@ -224,6 +231,16 @@ pub(super) async fn write_parts_to_session(
     Path(session_id): Path<String>,
     Json(body): Json<WritePartsRequest>,
 ) -> impl IntoResponse {
+    {
+        let parts: Vec<&str> = body.parts.iter().map(String::as_str).collect();
+        crate::pty::wait_for_line_editor_before_long_write(
+            &state,
+            &session_id,
+            &parts,
+            crate::pty::LINE_EDITOR_WAIT,
+        )
+        .await;
+    }
     if let Err(e) = crate::pty::run_bounded_pty_input(move || {
         let parts: Vec<&str> = body.parts.iter().map(String::as_str).collect();
         write_pty_input_parts(&state, &session_id, &parts)
@@ -959,6 +976,7 @@ impl Default for RequestedIdentity {
             alias: None,
             startup_command: None,
             agent_type: None,
+            restored: false,
             display_name: None,
             display_name_is_custom: false,
             extra_env: Vec::new(),
@@ -1580,9 +1598,7 @@ pub(super) async fn set_session_visible(
     // Remote visibility is per viewer (decision 8 port of B.8): one remote
     // client blurring a tab must not clear another remote client's claim.
     let viewer_id = body.viewer_id.filter(|v| !v.is_empty());
-    // `wake: false` (the frontend keep-alive) refreshes the claim without
-    // SIGCONT-ing a parked session; absent/`true` keeps the wake-on-focus.
-    crate::background_mode::hidden::set_visible_for_viewer_waking(
+    crate::pty::apply_session_visibility(
         &state,
         &session_id,
         body.visible,
@@ -3712,7 +3728,9 @@ mod tests {
             .store(crate::pty::SHELL_IDLE, Ordering::Release);
         crate::pty::flush_pending_injections_blocking(&state, sid);
         crate::pty::flush_pending_injections_blocking(&state, sid);
-        assert_eq!(*bytes.lock().unwrap(), b"next task\x15\x15next task\r");
+        // C33: the queued text is injected with no Ctrl-U of its own; only the
+        // owned-draft clear above (`enqueue_owned_draft`, #1717) sends one.
+        assert_eq!(*bytes.lock().unwrap(), b"next task\x15next task\r");
         assert!(crate::pty::list_queued_commands(&state, sid).is_empty());
     }
 
@@ -3814,7 +3832,7 @@ mod tests {
             }
         }
         assert!(crate::pty::list_queued_commands(&state, sid).is_empty());
-        assert_eq!(*bytes.lock().unwrap(), b"\x15BG DONE\r");
+        assert_eq!(*bytes.lock().unwrap(), b"BG DONE\r");
     }
 
     // Catches: HTTP drops typed origin and treats an old completion as explicit input,
@@ -7030,6 +7048,8 @@ mod tests {
             State(state.clone()),
             Json(CreateSessionWithWorktreeRequest {
                 config: CreateSessionRequest {
+                    restored: false,
+                    tuic_session: None,
                     rows: None,
                     cols: None,
                     shell: None,
@@ -7138,6 +7158,8 @@ mod tests {
             State(state),
             Json(CreateSessionWithWorktreeRequest {
                 config: CreateSessionRequest {
+                    restored: false,
+                    tuic_session: None,
                     rows: None,
                     cols: None,
                     shell: None,
@@ -7195,6 +7217,8 @@ mod tests {
         let response = create_session(
             State(state.clone()),
             Json(CreateSessionRequest {
+                restored: false,
+                tuic_session: None,
                 rows: None,
                 cols: None,
                 shell: None,
@@ -7239,6 +7263,8 @@ mod tests {
         let response = create_session(
             State(state.clone()),
             Json(CreateSessionRequest {
+                restored: false,
+                tuic_session: None,
                 rows: None,
                 cols: None,
                 shell: None,
@@ -7286,6 +7312,8 @@ mod tests {
             State(state.clone()),
             Json(CreateSessionWithWorktreeRequest {
                 config: CreateSessionRequest {
+                    restored: false,
+                    tuic_session: None,
                     rows: None,
                     cols: None,
                     shell: None,
@@ -7336,6 +7364,8 @@ mod tests {
             State(state.clone()),
             Json(CreateSessionWithWorktreeRequest {
                 config: CreateSessionRequest {
+                    restored: false,
+                    tuic_session: None,
                     rows: None,
                     cols: None,
                     shell: None,
@@ -7497,6 +7527,8 @@ mod tests {
 
     fn plain_create_request(shell: Option<String>) -> CreateSessionRequest {
         CreateSessionRequest {
+            restored: false,
+            tuic_session: None,
             rows: None,
             cols: None,
             shell,
@@ -7517,6 +7549,24 @@ mod tests {
             .map(|v| v.load(std::sync::atomic::Ordering::Relaxed))
     }
 
+    /// The gate held the response: the shell is idle, or the gate waited out
+    /// its whole fail-open bound (a loaded machine can keep a shell in startup
+    /// that long). Without the gate the route returns at once, shell not idle.
+    fn assert_gate_held(
+        state: &AppState,
+        session_id: &str,
+        elapsed: std::time::Duration,
+        what: &str,
+    ) {
+        let bound = std::time::Duration::from_millis(
+            super::super::mcp_transport::SHELL_READINESS_TIMEOUT_MS,
+        );
+        let shell = shell_state_of(state, session_id);
+        assert!(
+            shell == Some(crate::pty::SHELL_IDLE) || elapsed >= bound,
+            "{what} must hold its response until the shell is idle (shell {shell:?} after {elapsed:?})"
+        );
+    }
     /// `POST /sessions` must not return the id before the new shell reaches a
     /// prompt — the caller's very next write (e.g. `tuic new` + `send`) would
     /// otherwise race `.zshrc` startup. Without the gate the route returns the
@@ -7525,9 +7575,11 @@ mod tests {
     #[tokio::test]
     async fn http_create_session_returns_only_after_the_shell_reaches_idle() {
         let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let started = std::time::Instant::now();
         let response = create_session(State(state.clone()), Json(plain_create_request(None)))
             .await
             .into_response();
+        let elapsed = started.elapsed();
         let status = response.status();
         let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
             .await
@@ -7538,11 +7590,7 @@ mod tests {
             return;
         }
         let session_id = body["session_id"].as_str().expect("session_id").to_string();
-        assert_eq!(
-            shell_state_of(&state, &session_id),
-            Some(crate::pty::SHELL_IDLE),
-            "POST /sessions must hold its response until the shell is idle"
-        );
+        assert_gate_held(&state, &session_id, elapsed, "POST /sessions");
         close_session(State(state), axum::extract::Path(session_id)).await;
     }
 
@@ -7679,6 +7727,7 @@ mod tests {
     async fn http_create_session_with_worktree_returns_only_after_the_shell_reaches_idle() {
         let repo = crate::state::tests_support::create_temp_git_repo();
         let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let started = std::time::Instant::now();
         let response = create_session_with_worktree(
             State(state.clone()),
             Json(CreateSessionWithWorktreeRequest {
@@ -7689,6 +7738,7 @@ mod tests {
         )
         .await
         .into_response();
+        let elapsed = started.elapsed();
         let status = response.status();
         let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
             .await
@@ -7699,12 +7749,24 @@ mod tests {
             return;
         }
         let session_id = body["session_id"].as_str().expect("session_id").to_string();
-        assert_eq!(
-            shell_state_of(&state, &session_id),
-            Some(crate::pty::SHELL_IDLE),
-            "POST /sessions/worktree must hold its response until the shell is idle"
-        );
+        assert_gate_held(&state, &session_id, elapsed, "POST /sessions/worktree");
         close_session(State(state), axum::extract::Path(session_id)).await;
+    }
+
+    /// A terminal-store id sent where a PTY session id belongs is warned about and never recorded:
+    /// teardown only reaps the entries of ids that were real sessions.
+    #[tokio::test]
+    async fn set_session_visible_route_does_not_record_an_id_that_names_no_session() {
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let body: SessionVisibleRequest =
+            serde_json::from_value(serde_json::json!({"visible": true, "viewer_id": "v"})).unwrap();
+        let _ = set_session_visible(State(state.clone()), Path("term-6".to_string()), Json(body))
+            .await
+            .into_response();
+        assert!(
+            !state.session_maps.session_visibility.contains_key("term-6"),
+            "a terminal id sent as a session id must not be remembered for the process lifetime"
+        );
     }
 
     /// B2.3: the frontend's periodic keep-alive sends `wake: false` — it must

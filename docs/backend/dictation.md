@@ -431,7 +431,7 @@ turn never enters it and never reorders it. Parking speech there until idle
 measured a median delay of 103 s, max 594 s.
 
 The write is the framed path every injection uses (`run_claimed_injection`:
-Ctrl-U, the text, then a separate Enter), never raw text plus `\r`. An idle
+the text, then a separate Enter; no Ctrl-U), never raw text plus `\r`. An idle
 agent is claimed IDLE→BUSY like any injection, without the confirmed-idle
 requirement. A busy agent is claimed without touching its BUSY atom, and a
 write that does not start never reports the agent idle.
@@ -441,7 +441,7 @@ Two holds remain, and they are the reason this is not a raw write:
 | Hold (`pty::VoiceHold`) | Why |
 |---|---|
 | `Question` | a confident question or permission dialog owns the composer; speech must never answer it |
-| `Draft` | the user has text in the composer; the opening Ctrl-U would erase it |
+| `Draft` | the user has text in the composer; the spoken turn would be merged into (and submitted with) it |
 | `InFlight` | another write holds the composer, or an earlier one is uncertain |
 | `WriteNotStarted` | the PTY refused the first byte |
 
@@ -568,7 +568,7 @@ Stop disarms the conversation, stopping capture and dropping replies. Backend
 speech state updates the displayed playback state. Ending hands-free clears the
 metadata, handlers and explicit playback state; iOS decides when its card disappears.
 Real iPhone lock-screen rendering, action delivery and media volume still need
-the device check in `to-test.md`.
+a check on the device.
 
 **A link outlives its socket, and that is the whole design.** The socket handler
 owns the `Arc` it registered and drops it on close, but the conversation holds
@@ -1745,7 +1745,7 @@ cannot: a 100 ms burst the canceller cannot see, above the activity floor but
 below `min_speech_ms`. It must not hush the reply.
 
 **Neither is a substitute for a real microphone and a real speaker in a room.**
-That probe is in `to-test.md`.
+That probe has to be run by hand.
 
 ### The eight states the conversation has to survive (820-21a5)
 
