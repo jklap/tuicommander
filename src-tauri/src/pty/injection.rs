@@ -3063,6 +3063,9 @@ pub(crate) fn longest_unbroken_line_bytes(parts: &[&str]) -> usize {
 /// program using plain `read`), so a long line would be truncated. `None`
 /// when the platform or the session cannot say.
 #[cfg(unix)]
+// `tcflag_t` is `u64` on macOS (the widening is a no-op there, which clippy flags) but
+// `u32` on Linux, where it is required: keep one spelling that compiles warning-free on both.
+#[allow(clippy::useless_conversion)]
 pub(crate) fn pty_is_canonical(state: &AppState, session_id: &str) -> Option<bool> {
     let termios = state
         .session_maps

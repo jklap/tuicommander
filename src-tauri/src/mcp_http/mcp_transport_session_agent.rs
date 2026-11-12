@@ -396,6 +396,9 @@ pub(crate) const SHELL_READINESS_TIMEOUT_MS: u64 = 5_000;
 /// caller must decide for itself what "gave up waiting" means in its own
 /// context — `handle_session_wait` reports `timed_out: true`, while
 /// `materialize` proceeds anyway rather than hanging forever.
+// No production caller since the gates moved to `wait_for_shell_prompt`; the primitive stays
+// because the gates' docs and tests are phrased in terms of it.
+#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) async fn wait_for_shell_idle(
     state: &Arc<AppState>,
     session_id: &str,

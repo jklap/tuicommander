@@ -245,7 +245,8 @@ use super::mcp_transport_session_agent::uses_agent_command_injection;
 use super::mcp_transport_session_agent::wait_for_mcp_identity_bound;
 #[cfg(test)]
 use super::mcp_transport_session_agent::wait_for_pty_quiet;
-pub(crate) use super::mcp_transport_session_agent::wait_for_shell_idle;
+#[cfg(test)]
+use super::mcp_transport_session_agent::wait_for_shell_idle;
 #[cfg(test)]
 use super::mcp_transport_session_agent::{
     MAX_PROMPT_MARKER_TIMEOUT_MS, MIN_PROMPT_MARKER_TIMEOUT_MS, gate_new_shell_session_with,
