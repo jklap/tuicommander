@@ -146,6 +146,8 @@ async fn batch_poll_never_selects_projects_fields() {
 pub(crate) struct PollHttpFixture {
     pub(crate) state: std::sync::Arc<AppState>,
     pub(crate) requests: tokio::sync::mpsc::UnboundedReceiver<serde_json::Value>,
+    /// Every non-GraphQL request, as `(METHOD, path)`, in arrival order.
+    pub(crate) rest_requests: tokio::sync::mpsc::UnboundedReceiver<(String, String)>,
     handle: axum_server::Handle<std::net::SocketAddr>,
     server: tokio::task::JoinHandle<std::io::Result<()>>,
 }
@@ -191,16 +193,43 @@ impl PollHttpFixture {
     pub(crate) async fn with_response(
         response: impl Fn(&serde_json::Value) -> serde_json::Value + Send + Sync + 'static,
     ) -> Self {
+        Self::with_responses(response, |_method, _path| {
+            (404, serde_json::json!({"message": "Not Found"}))
+        })
+        .await
+    }
+
+    /// GraphQL answered by `response`; every other request (the REST API) by
+    /// `rest(method, path)` and recorded on `rest_requests`.
+    pub(crate) async fn with_responses(
+        response: impl Fn(&serde_json::Value) -> serde_json::Value + Send + Sync + 'static,
+        rest: impl Fn(&str, &str) -> (u16, serde_json::Value) + Send + Sync + 'static,
+    ) -> Self {
         let response = std::sync::Arc::new(response);
+        let rest = std::sync::Arc::new(rest);
         let (tx, requests) = tokio::sync::mpsc::unbounded_channel();
-        let router = axum::Router::new().route(
-            "/graphql",
-            axum::routing::post(move |axum::Json(request): axum::Json<serde_json::Value>| {
-                let response = response(&request);
-                tx.send(request).unwrap();
-                async move { axum::Json(response) }
-            }),
-        );
+        let (rest_tx, rest_requests) = tokio::sync::mpsc::unbounded_channel();
+        let router = axum::Router::new()
+            .route(
+                "/graphql",
+                axum::routing::post(move |axum::Json(request): axum::Json<serde_json::Value>| {
+                    let response = response(&request);
+                    tx.send(request).unwrap();
+                    async move { axum::Json(response) }
+                }),
+            )
+            .fallback(move |method: axum::http::Method, uri: axum::http::Uri| {
+                let (status, body) = rest(method.as_str(), uri.path());
+                rest_tx
+                    .send((method.as_str().to_string(), uri.path().to_string()))
+                    .unwrap();
+                async move {
+                    (
+                        axum::http::StatusCode::from_u16(status).unwrap(),
+                        axum::Json(body),
+                    )
+                }
+            });
         let cert = include_bytes!("fixtures/github_volume/cert.pem");
         let key = include_bytes!("fixtures/github_volume/key.pem");
         let tls = axum_server::tls_rustls::RustlsConfig::from_pem(cert.to_vec(), key.to_vec())
@@ -229,6 +258,7 @@ impl PollHttpFixture {
         Self {
             state: std::sync::Arc::new(state),
             requests,
+            rest_requests,
             handle,
             server,
         }

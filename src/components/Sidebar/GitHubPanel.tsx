@@ -66,7 +66,7 @@ export const GitHubPanel: Component<{
 	onClose: () => void;
 	onCheckout: (branchName: string) => void;
 	onCreateWorktree?: (branchName: string) => void;
-	onConflictAssist?: (prNumber: number) => void;
+	onConflictAssist?: (prNumber: number, baseRepo?: string) => void;
 	onPushBranch?: (worktreePath: string) => void;
 	onAutofix?: (issueNumber: number, prompt: string) => void;
 	onCleanupActive?: (active: boolean) => void;

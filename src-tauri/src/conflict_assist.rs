@@ -22,9 +22,13 @@ pub(crate) struct ConflictAssistResult {
     pub branch: String,
     /// The base branch it was rebased onto.
     pub base: String,
+    /// Remote the head branch was fetched from (the fork's, for a PR opened against an upstream).
+    pub head_remote: String,
+    /// Remote the base branch was fetched from and rebased onto.
+    pub base_remote: String,
     /// `"fetched_remote"`, `"existing_tracking"`, or `"local_fallback"`.
     pub base_source: String,
-    /// Present when the selected base could not be refreshed from origin.
+    /// Present when the selected base could not be refreshed from its remote.
     pub base_warning: Option<String>,
     pub conflicted_files: Vec<String>,
     /// Agent prompt to resolve the conflicts — empty unless `status == "conflicts"`.
@@ -92,14 +96,14 @@ impl BaseSource {
         }
     }
 
-    fn warning(self, base_ref: &str) -> Option<String> {
+    fn warning(self, remote: &str, base_ref: &str) -> Option<String> {
         match self {
             Self::FetchedRemote => None,
             Self::ExistingTracking => Some(format!(
-                "Could not refresh origin/{base_ref}; conflict result uses the existing remote-tracking ref."
+                "Could not refresh {remote}/{base_ref}; conflict result uses the existing remote-tracking ref."
             )),
             Self::LocalFallback => Some(format!(
-                "Could not refresh origin/{base_ref} and no remote-tracking ref exists; conflict result uses the local {base_ref} branch."
+                "Could not refresh {remote}/{base_ref} and no remote-tracking ref exists; conflict result uses the local {base_ref} branch."
             )),
         }
     }
@@ -132,14 +136,15 @@ fn ref_exists(repo: &Path, reference: &str) -> bool {
 /// a slow machine cannot quietly turn a fetch that worked into one that "failed".
 fn resolve_rebase_target(
     repo: &Path,
+    remote: &str,
     base_ref: &str,
     fetch_timeout: Duration,
 ) -> Result<ResolvedBase, String> {
-    let remote_ref = format!("refs/remotes/origin/{base_ref}");
+    let remote_ref = format!("refs/remotes/{remote}/{base_ref}");
     let refspec = format!("+refs/heads/{base_ref}:{remote_ref}");
     let fetch = crate::git_cli::git_cmd(repo)
         .timeout(fetch_timeout)
-        .args(["fetch", "--no-tags", "origin", &refspec])
+        .args(["fetch", "--no-tags", remote, &refspec])
         .run();
 
     if fetch.is_ok() && ref_exists(repo, &remote_ref) {
@@ -166,7 +171,7 @@ fn resolve_rebase_target(
         .map(|error| format!(": {error}"))
         .unwrap_or_default();
     Err(format!(
-        "Could not resolve PR base {base_ref} from origin, remote tracking, or a local branch{fetch_error}"
+        "Could not resolve PR base {base_ref} from {remote}, remote tracking, or a local branch{fetch_error}"
     ))
 }
 
@@ -202,70 +207,163 @@ fn rebase_and_collect_conflicts(
     (rebase_ok, conflicted, rebase_stderr)
 }
 
+/// Which git remotes a conflict-assist run reads from.
+///
+/// For a PR inside one repository both are the same remote. For a fork's PR opened against
+/// an upstream they differ: the head branch lives in the fork (usually `origin`) and the
+/// base branch in the upstream (`upstream`), so the head is fetched from one and rebased
+/// onto the other.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct RemotePlan {
+    head_remote: String,
+    base_remote: String,
+}
+
+/// Decide the remotes for a PR from the checkout's `(name, url)` remotes and the PR's refs.
+///
+/// A PR whose head repository is not a remote of this checkout (someone else's fork) is
+/// refused: there is nothing local to rebase and push back to.
+fn plan_remotes(
+    remotes: &[(String, String)],
+    host: &crate::github_account::GitHubHost,
+    base: (&str, &str),
+    refs: &crate::github::PrRefs,
+) -> Result<RemotePlan, String> {
+    let base_remote = crate::github::remote_name_in(remotes, host, base.0, base.1);
+    if !refs.head_from_fork {
+        // Same repository on both sides. An unparseable origin URL (an SSH host alias)
+        // still behaves as before: the repo was bound by hand, and origin is the remote.
+        let remote = base_remote.unwrap_or_else(|| "origin".to_string());
+        return Ok(RemotePlan {
+            head_remote: remote.clone(),
+            base_remote: remote,
+        });
+    }
+    let Some(base_remote) = base_remote else {
+        return Err(format!(
+            "Conflict assist needs a git remote for {}/{}, where this PR is merged, to rebase onto its base branch.",
+            base.0, base.1
+        ));
+    };
+    let head_remote = refs
+        .head_repo
+        .as_deref()
+        .and_then(|repo| repo.split_once('/'))
+        .and_then(|(owner, name)| crate::github::remote_name_in(remotes, host, owner, name));
+    match head_remote {
+        Some(head_remote) => Ok(RemotePlan {
+            head_remote,
+            base_remote,
+        }),
+        None => Err(format!(
+            "Conflict assist can't rebase this PR: its head branch lives in {}, which is not a git remote of this checkout.",
+            refs.head_repo
+                .as_deref()
+                .unwrap_or("a repository GitHub no longer has")
+        )),
+    }
+}
+
+/// Everything the blocking git side of a run produces.
+struct PreparedRebase {
+    worktree_path: String,
+    conflicted: Vec<String>,
+    rebase_ok: bool,
+    rebase_stderr: String,
+    base_source: BaseSource,
+}
+
+/// Fetch the head, create its worktree, rebase it onto the freshest base and collect the
+/// conflicts. All blocking git, kept apart from the GitHub lookups so it can be tested
+/// against real repositories.
+fn prepare_rebase(
+    repo_path: &str,
+    worktrees_dir: &Path,
+    plan: &RemotePlan,
+    head_ref: &str,
+    base_ref: &str,
+    pr_number: i64,
+    fetch_timeout: Duration,
+) -> Result<PreparedRebase, String> {
+    // Make the head branch available locally. Best-effort: it may already be present, or
+    // the remote may be unreachable for a local-only branch.
+    let _ = crate::git_cli::git_cmd(Path::new(repo_path))
+        .timeout(fetch_timeout)
+        .args(["fetch", &plan.head_remote, "--", head_ref])
+        .run_silent();
+
+    let config = crate::worktree::WorktreeConfig {
+        task_name: format!("conflict-pr-{pr_number}"),
+        base_repo: repo_path.to_string(),
+        branch: Some(head_ref.to_string()),
+        create_branch: false,
+    };
+    let wt = crate::worktree::create_worktree_with_stale_recovery(worktrees_dir, &config, None)?;
+    let wt_path = wt.path.clone();
+
+    // Rebase onto what the base remote has now, not a possibly-stale local branch.
+    let resolved_base = resolve_rebase_target(
+        Path::new(repo_path),
+        &plan.base_remote,
+        base_ref,
+        fetch_timeout,
+    )?;
+    let (rebase_ok, conflicted, rebase_stderr) =
+        rebase_and_collect_conflicts(&wt_path, &resolved_base.target);
+
+    Ok(PreparedRebase {
+        worktree_path: wt_path.to_string_lossy().to_string(),
+        conflicted,
+        rebase_ok,
+        rebase_stderr,
+        base_source: resolved_base.source,
+    })
+}
+
+/// `base_repo` is the `owner/name` the PR targets (`BranchPrStatus.base_repo`); it keeps a PR
+/// number shared by a fork and its upstream unambiguous.
 pub(crate) async fn start_conflict_assist_impl(
     repo_path: String,
     pr_number: i64,
+    base_repo: Option<&str>,
     state: &crate::AppState,
 ) -> Result<ConflictAssistResult, String> {
-    let refs = crate::github::get_pr_refs_impl(&repo_path, pr_number, state).await?;
-    if refs.head_from_fork {
-        return Err(
-            "Conflict assist doesn't support PRs from forks yet — the head branch isn't on origin."
-                .to_string(),
-        );
-    }
+    let refs = crate::github::get_pr_refs_targeted(&repo_path, pr_number, base_repo, state).await?;
+    let (account, _token, base_owner, base_name) =
+        crate::github::resolve_repo_for_pr(state, &repo_path, pr_number, base_repo).await?;
+    let remotes = crate::git::list_remotes(Path::new(&repo_path));
+    let plan = plan_remotes(&remotes, &account.host, (&base_owner, &base_name), &refs)?;
 
     let worktrees_dir =
         crate::worktree::resolve_worktree_dir_for_repo(Path::new(&repo_path), &state.worktrees_dir);
 
     let head_ref = refs.head_ref.clone();
     let base_ref = refs.base_ref.clone();
-    let base_ref_for_git = base_ref.clone();
     let repo_path_for_git = repo_path.clone();
+    let plan_for_git = plan.clone();
 
     // All blocking git work (fetch, worktree add, rebase, status) runs off the
     // async executor so a slow checkout/rebase doesn't stall other commands.
-    let (worktree_path, conflicted, rebase_ok, rebase_stderr, base_source) =
-        tokio::task::spawn_blocking(move || -> Result<_, String> {
-            // Make the head branch available locally. Best-effort: it may already
-            // be present, or origin may be unreachable for a local-only branch.
-            let _ = crate::git_cli::git_cmd(Path::new(&repo_path_for_git))
-                .timeout(crate::git_cli::FETCH_TIMEOUT)
-                .args(["fetch", "origin", "--", &head_ref])
-                .run_silent();
-
-            let config = crate::worktree::WorktreeConfig {
-                task_name: format!("conflict-pr-{pr_number}"),
-                base_repo: repo_path_for_git.clone(),
-                branch: Some(head_ref.clone()),
-                create_branch: false,
-            };
-            let wt = crate::worktree::create_worktree_with_stale_recovery(
-                &worktrees_dir,
-                &config,
-                None,
-            )?;
-            let wt_path = wt.path.clone();
-
-            // Rebase onto what origin has now, not a possibly-stale local branch.
-            let resolved_base = resolve_rebase_target(
-                Path::new(&repo_path_for_git),
-                &base_ref_for_git,
-                crate::git_cli::FETCH_TIMEOUT,
-            )?;
-            let (rebase_ok, conflicted, rebase_stderr) =
-                rebase_and_collect_conflicts(&wt_path, &resolved_base.target);
-
-            Ok((
-                wt_path.to_string_lossy().to_string(),
-                conflicted,
-                rebase_ok,
-                rebase_stderr,
-                resolved_base.source,
-            ))
-        })
-        .await
-        .map_err(|e| format!("conflict-assist task panic: {e}"))??;
+    let base_ref_for_git = base_ref.clone();
+    let PreparedRebase {
+        worktree_path,
+        conflicted,
+        rebase_ok,
+        rebase_stderr,
+        base_source,
+    } = tokio::task::spawn_blocking(move || {
+        prepare_rebase(
+            &repo_path_for_git,
+            &worktrees_dir,
+            &plan_for_git,
+            &head_ref,
+            &base_ref_for_git,
+            pr_number,
+            crate::git_cli::FETCH_TIMEOUT,
+        )
+    })
+    .await
+    .map_err(|e| format!("conflict-assist task panic: {e}"))??;
 
     // A non-zero rebase with no unmerged files isn't a conflict — it failed for
     // another reason (missing base ref, dirty tree, …). Surface it instead of
@@ -283,7 +381,7 @@ pub(crate) async fn start_conflict_assist_impl(
         ));
     }
 
-    let base_warning = base_source.warning(&base_ref);
+    let base_warning = base_source.warning(&plan.base_remote, &base_ref);
     let (status, prompt) = if conflicted.is_empty() {
         (
             if base_source == BaseSource::FetchedRemote {
@@ -308,6 +406,8 @@ pub(crate) async fn start_conflict_assist_impl(
         worktree_path,
         branch: refs.head_ref,
         base: refs.base_ref,
+        head_remote: plan.head_remote,
+        base_remote: plan.base_remote,
         base_source: base_source.as_str().to_string(),
         base_warning,
         conflicted_files: conflicted,
@@ -320,10 +420,11 @@ pub(crate) async fn start_conflict_assist_impl(
 pub(crate) async fn start_conflict_assist(
     repo_path: String,
     pr_number: i64,
+    base_repo: Option<String>,
     state: tauri::State<'_, std::sync::Arc<crate::AppState>>,
 ) -> Result<ConflictAssistResult, String> {
     let state = state.inner().clone();
-    start_conflict_assist_impl(repo_path, pr_number, &state).await
+    start_conflict_assist_impl(repo_path, pr_number, base_repo.as_deref(), &state).await
 }
 
 #[cfg(test)]
@@ -512,8 +613,8 @@ mod tests {
     #[test]
     fn rebase_target_falls_back_to_the_local_branch_without_a_remote() {
         let (_d, repo) = fixture();
-        let resolved =
-            resolve_rebase_target(&repo, "main", TEST_FETCH_TIMEOUT).expect("local fallback");
+        let resolved = resolve_rebase_target(&repo, "origin", "main", TEST_FETCH_TIMEOUT)
+            .expect("local fallback");
         assert_eq!(resolved.target, "main");
         assert_eq!(resolved.source, BaseSource::LocalFallback);
     }
@@ -536,8 +637,8 @@ mod tests {
         // origin moves ahead after the clone — the local refs/heads/main is now stale.
         commit_on(&origin, "main", "on_main.txt", "main\n", "main work");
 
-        let resolved =
-            resolve_rebase_target(&clone, "main", TEST_FETCH_TIMEOUT).expect("fetched remote");
+        let resolved = resolve_rebase_target(&clone, "origin", "main", TEST_FETCH_TIMEOUT)
+            .expect("fetched remote");
         assert_eq!(resolved.target, "refs/remotes/origin/main");
         assert_eq!(resolved.source, BaseSource::FetchedRemote);
         // And the fetch actually advanced it, so a rebase would see the new commit.
@@ -558,21 +659,293 @@ mod tests {
             &["update-ref", "refs/remotes/origin/main", "refs/heads/main"],
         );
 
-        let resolved = resolve_rebase_target(&repo, "main", TEST_FETCH_TIMEOUT)
+        let resolved = resolve_rebase_target(&repo, "origin", "main", TEST_FETCH_TIMEOUT)
             .expect("existing tracking ref");
         assert_eq!(resolved.target, "refs/remotes/origin/main");
         assert_eq!(resolved.source, BaseSource::ExistingTracking);
-        assert!(resolved.source.warning("main").is_some());
+        assert!(resolved.source.warning("origin", "main").is_some());
     }
 
     #[test]
     fn rebase_target_rejects_a_missing_remote_and_local_ref() {
         let (_d, repo) = fixture();
-        let error = resolve_rebase_target(&repo, "missing", TEST_FETCH_TIMEOUT)
+        let error = resolve_rebase_target(&repo, "origin", "missing", TEST_FETCH_TIMEOUT)
             .expect_err("missing base must fail");
         assert!(
             error.contains("Could not resolve PR base missing"),
             "{error}"
         );
+    }
+
+    // ---- remote planning --------------------------------------------------------------
+
+    fn refs(
+        head_from_fork: bool,
+        head_repo: Option<&str>,
+        base_repo: &str,
+    ) -> crate::github::PrRefs {
+        crate::github::PrRefs {
+            head_ref: "feature".into(),
+            base_ref: "main".into(),
+            head_sha: None,
+            base_sha: None,
+            head_from_fork,
+            head_repo: head_repo.map(str::to_string),
+            base_repo: Some(base_repo.into()),
+        }
+    }
+
+    fn remotes(list: &[(&str, &str)]) -> Vec<(String, String)> {
+        list.iter()
+            .map(|(n, u)| (n.to_string(), u.to_string()))
+            .collect()
+    }
+
+    fn host() -> crate::github_account::GitHubHost {
+        crate::github_account::parse_remote_url("git@github.com:o/r.git")
+            .expect("github.com remote")
+            .0
+    }
+
+    const FORK_URL: &str = "git@github.com:me/hello.git";
+    const UPSTREAM_URL: &str = "https://github.com/org/hello.git";
+
+    // Catches: a PR inside one repository changing behaviour (it must keep using one remote).
+    #[test]
+    fn a_pr_within_one_repository_uses_one_remote() {
+        let plan = plan_remotes(
+            &remotes(&[("origin", FORK_URL)]),
+            &host(),
+            ("me", "hello"),
+            &refs(false, Some("me/hello"), "me/hello"),
+        )
+        .unwrap();
+        assert_eq!(
+            plan,
+            RemotePlan {
+                head_remote: "origin".into(),
+                base_remote: "origin".into()
+            }
+        );
+    }
+
+    // Catches: a hand-bound repo whose origin URL is an SSH alias losing conflict assist.
+    #[test]
+    fn an_unparseable_origin_still_means_origin_for_a_same_repo_pr() {
+        let plan = plan_remotes(
+            &remotes(&[("origin", "git@personal:me/hello.git")]),
+            &host(),
+            ("me", "hello"),
+            &refs(false, None, "me/hello"),
+        )
+        .unwrap();
+        assert_eq!(
+            (plan.head_remote.as_str(), plan.base_remote.as_str()),
+            ("origin", "origin")
+        );
+    }
+
+    // Catches: the headline case — a fork PR against its upstream — being refused again.
+    #[test]
+    fn a_fork_pr_fetches_its_head_from_the_fork_and_its_base_from_the_upstream() {
+        let plan = plan_remotes(
+            &remotes(&[("origin", FORK_URL), ("upstream", UPSTREAM_URL)]),
+            &host(),
+            ("org", "hello"),
+            &refs(true, Some("me/hello"), "org/hello"),
+        )
+        .unwrap();
+        assert_eq!(
+            plan,
+            RemotePlan {
+                head_remote: "origin".into(),
+                base_remote: "upstream".into()
+            }
+        );
+        // Owner/name case is irrelevant, and the remote's name is not assumed.
+        let plan = plan_remotes(
+            &remotes(&[("mine", FORK_URL), ("canon", UPSTREAM_URL)]),
+            &host(),
+            ("ORG", "Hello"),
+            &refs(true, Some("Me/Hello"), "org/hello"),
+        )
+        .unwrap();
+        assert_eq!(
+            (plan.head_remote.as_str(), plan.base_remote.as_str()),
+            ("mine", "canon")
+        );
+    }
+
+    // Catches: rebasing someone else's fork branch we cannot push back to.
+    #[test]
+    fn a_head_in_a_repository_that_is_not_a_remote_is_refused_with_its_name() {
+        let err = plan_remotes(
+            &remotes(&[("origin", FORK_URL), ("upstream", UPSTREAM_URL)]),
+            &host(),
+            ("org", "hello"),
+            &refs(true, Some("stranger/hello"), "org/hello"),
+        )
+        .unwrap_err();
+        assert!(
+            err.contains("stranger/hello") && err.contains("not a git remote"),
+            "{err}"
+        );
+        let err = plan_remotes(
+            &remotes(&[("origin", FORK_URL), ("upstream", UPSTREAM_URL)]),
+            &host(),
+            ("org", "hello"),
+            &refs(true, None, "org/hello"),
+        )
+        .unwrap_err();
+        assert!(err.contains("no longer has"), "{err}");
+    }
+
+    // Catches: a fork PR with no remote for the repository it merges into rebasing onto nothing.
+    #[test]
+    fn a_fork_pr_without_a_remote_for_its_base_repository_is_refused() {
+        let err = plan_remotes(
+            &remotes(&[("origin", FORK_URL)]),
+            &host(),
+            ("org", "hello"),
+            &refs(true, Some("me/hello"), "org/hello"),
+        )
+        .unwrap_err();
+        assert!(
+            err.contains("org/hello") && err.contains("needs a git remote"),
+            "{err}"
+        );
+    }
+
+    // ---- the git flow, against real repositories ---------------------------------------
+
+    /// `origin` = the fork (feature edits shared.txt), `upstream` = the repo the PR targets
+    /// (its main later edits the same line). Returns the work checkout cloned from the fork.
+    fn fork_checkout() -> (tempfile::TempDir, PathBuf, tempfile::TempDir) {
+        let (_seed_dir, seed) = fixture();
+        commit_on(
+            &seed,
+            "feature",
+            "shared.txt",
+            "from feature\n",
+            "feature edit",
+        );
+        let origin_dir = tempfile::tempdir().expect("tempdir");
+        let upstream_dir = tempfile::tempdir().expect("tempdir");
+        for dir in [&origin_dir, &upstream_dir] {
+            git(dir.path(), &["init", "--bare", "--initial-branch=main"]);
+        }
+        // The fork has the base main plus the PR branch.
+        git(
+            &seed,
+            &[
+                "push",
+                origin_dir.path().to_str().unwrap(),
+                "main",
+                "feature",
+            ],
+        );
+        // The upstream's main moves on and touches the same line.
+        commit_on(
+            &seed,
+            "main",
+            "shared.txt",
+            "from upstream main\n",
+            "upstream edit",
+        );
+        git(
+            &seed,
+            &["push", upstream_dir.path().to_str().unwrap(), "main"],
+        );
+
+        let work_dir = tempfile::tempdir().expect("tempdir");
+        let work = work_dir.path().join("work");
+        let out = Command::new("git")
+            .args([
+                "clone",
+                origin_dir.path().to_str().unwrap(),
+                work.to_str().unwrap(),
+            ])
+            .output()
+            .expect("git clone");
+        assert!(out.status.success(), "clone failed");
+        git(&work, &["config", "user.email", "test@test.com"]);
+        git(&work, &["config", "user.name", "Test"]);
+        git(
+            &work,
+            &[
+                "remote",
+                "add",
+                "upstream",
+                upstream_dir.path().to_str().unwrap(),
+            ],
+        );
+        // Keep the bare repos alive for the test's duration.
+        std::mem::forget(origin_dir);
+        std::mem::forget(upstream_dir);
+        (work_dir, work, _seed_dir)
+    }
+
+    // Catches: a fork PR being rebased onto the fork's stale main and reported "clean" while it
+    // conflicts with the upstream it will actually merge into.
+    #[test]
+    fn a_fork_pr_is_rebased_onto_the_upstreams_base_not_the_forks() {
+        let (_work_dir, work, _seed) = fork_checkout();
+        let wt_dir = tempfile::tempdir().expect("tempdir");
+        let run = |base_remote: &str| {
+            prepare_rebase(
+                work.to_str().unwrap(),
+                wt_dir.path(),
+                &RemotePlan {
+                    head_remote: "origin".into(),
+                    base_remote: base_remote.into(),
+                },
+                "feature",
+                "main",
+                7,
+                TEST_FETCH_TIMEOUT,
+            )
+        };
+
+        // Against the fork's own main (stale: it has no upstream edit) the PR looks clean.
+        let wrong = run("origin").expect("rebase onto the fork's main");
+        assert!(
+            wrong.rebase_ok && wrong.conflicted.is_empty(),
+            "{wrong:?}",
+            wrong = wrong.rebase_stderr
+        );
+        assert_eq!(wrong.base_source, BaseSource::FetchedRemote);
+    }
+
+    #[test]
+    fn a_fork_pr_conflicting_with_the_upstream_base_reports_the_conflict() {
+        let (_work_dir, work, _seed) = fork_checkout();
+        let wt_dir = tempfile::tempdir().expect("tempdir");
+        let prepared = prepare_rebase(
+            work.to_str().unwrap(),
+            wt_dir.path(),
+            &RemotePlan {
+                head_remote: "origin".into(),
+                base_remote: "upstream".into(),
+            },
+            "feature",
+            "main",
+            7,
+            TEST_FETCH_TIMEOUT,
+        )
+        .expect("rebase onto the upstream's main");
+        assert!(!prepared.rebase_ok);
+        assert_eq!(prepared.conflicted, vec!["shared.txt"]);
+        assert_eq!(prepared.base_source, BaseSource::FetchedRemote);
+        // The base ref it rebased onto is the upstream's, fetched for this run.
+        let out = git(
+            &work,
+            &["rev-parse", "--verify", "refs/remotes/upstream/main"],
+        );
+        assert!(out.status.success(), "the upstream base was fetched");
+        // The worktree is left mid-rebase on the conflicted file, for the agent to resolve.
+        let status = git(Path::new(&prepared.worktree_path), &["status"]);
+        let status = String::from_utf8_lossy(&status.stdout);
+        assert!(status.contains("rebase in progress"), "{status}");
+        assert!(status.contains("shared.txt"), "{status}");
     }
 }

@@ -110,7 +110,7 @@ export interface PrDetailContentProps {
 	branch: string;
 	/** Shown only when the PR merge state is conflicting — rebases the PR head
 	 *  branch onto its base in a worktree and opens an agent to resolve conflicts. */
-	onConflictAssist?: (prNumber: number) => void;
+	onConflictAssist?: (prNumber: number, baseRepo?: string) => void;
 	/** Push the (rebased/resolved) conflict worktree branch to origin. Shown when a
 	 *  local worktree exists for this branch. Gated behind a confirm() by the caller. */
 	onPushBranch?: (worktreePath: string) => void;
@@ -166,7 +166,7 @@ export const PrDetailContent: Component<PrDetailContentProps> = (props) => {
 	// reopening shows its running/done/error state instead of resetting to "Run".
 	const reviewEntry = () => {
 		const pr = prData();
-		return pr ? prReviewStore.get(props.repoPath, pr.number) : undefined;
+		return pr ? prReviewStore.get(props.repoPath, pr.number, pr.base_repo) : undefined;
 	};
 	const review = () => reviewEntry()?.result ?? null;
 	const reviewLoading = () => reviewEntry()?.status === "running";
@@ -181,13 +181,13 @@ export const PrDetailContent: Component<PrDetailContentProps> = (props) => {
 	function runAiReview() {
 		const pr = prData();
 		if (!pr) return;
-		void prReviewStore.run(props.repoPath, pr.number);
+		void prReviewStore.run(props.repoPath, pr.number, pr.base_repo);
 	}
 
 	function toggleFinding(id: string) {
 		const pr = prData();
 		if (!pr) return;
-		prReviewStore.toggleFinding(props.repoPath, pr.number, id);
+		prReviewStore.toggleFinding(props.repoPath, pr.number, id, pr.base_repo);
 	}
 
 	function postSelectedFindings() {
@@ -441,7 +441,7 @@ export const PrDetailContent: Component<PrDetailContentProps> = (props) => {
 							<Show when={props.onConflictAssist}>
 								<Button
 									type="button"
-									onClick={() => props.onConflictAssist?.(pr().number)}
+									onClick={() => props.onConflictAssist?.(pr().number, pr().base_repo)}
 									title={t(
 										"prDetail.resolveConflictsHint",
 										"Rebase the PR branch and open an agent to resolve conflicts",

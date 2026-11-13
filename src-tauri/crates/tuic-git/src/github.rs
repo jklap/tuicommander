@@ -957,6 +957,13 @@ pub struct PrRefs {
     /// head branch isn't a plain `origin/<ref>`, so conflict-assist can't rebase
     /// it locally without extra remote setup.
     pub head_from_fork: bool,
+    /// `owner/name` the PR head lives in (`head.repo.full_name`); `None` when GitHub
+    /// no longer has it (a deleted fork).
+    #[serde(default)]
+    pub head_repo: Option<String>,
+    /// `owner/name` the PR targets (`base.repo.full_name`).
+    #[serde(default)]
+    pub base_repo: Option<String>,
 }
 
 /// Parse `head.ref` / `base.ref` (and fork detection) from a GitHub PR JSON.
@@ -980,6 +987,8 @@ pub fn parse_pr_refs(pr_json: &serde_json::Value) -> Option<PrRefs> {
         head_sha,
         base_sha,
         head_from_fork,
+        head_repo: head_repo.map(str::to_string),
+        base_repo: base_repo.map(str::to_string),
     })
 }
 
@@ -1154,6 +1163,30 @@ mod tests {
         node.as_object_mut().unwrap().remove("baseRepository");
         let pr = parse_pr_node(&node).unwrap();
         assert_eq!((pr.base_repo.as_str(), pr.head_repo.as_str()), ("", ""));
+    }
+
+    // Catches: conflict assist not being able to tell where a PR's head and base live.
+    #[test]
+    fn pr_refs_carry_the_head_and_base_repositories() {
+        let json = serde_json::json!({
+            "head": {"ref": "feat", "sha": "h", "repo": {"full_name": "me/hello"}},
+            "base": {"ref": "main", "sha": "b", "repo": {"full_name": "org/hello"}},
+        });
+        let refs = parse_pr_refs(&json).unwrap();
+        assert!(refs.head_from_fork);
+        assert_eq!(refs.head_repo.as_deref(), Some("me/hello"));
+        assert_eq!(refs.base_repo.as_deref(), Some("org/hello"));
+        // A deleted fork has no head repo: unknown, and not reported as a fork.
+        let mut gone = json.clone();
+        gone["head"]["repo"] = serde_json::Value::Null;
+        let refs = parse_pr_refs(&gone).unwrap();
+        assert_eq!((refs.head_repo, refs.head_from_fork), (None, false));
+        // Older serialized refs (no repo fields) still deserialize.
+        let old: PrRefs = serde_json::from_value(serde_json::json!({
+            "head_ref": "a", "base_ref": "b", "head_sha": null, "base_sha": null, "head_from_fork": false
+        }))
+        .unwrap();
+        assert_eq!((old.head_repo, old.base_repo), (None, None));
     }
 
     #[test]

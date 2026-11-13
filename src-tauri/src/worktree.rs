@@ -94,19 +94,61 @@ async fn query_merged_github_pr(
     branch: &str,
     tip: &str,
 ) -> Option<bool> {
-    let api = crate::github_pr_api::RepoApi::resolve(state, repo.to_str()?)
+    let path = repo.to_str()?;
+    let api = crate::github_pr_api::RepoApi::resolve(state, path)
         .await
         .ok()?;
-    let variables = serde_json::json!({"owner":api.owner, "name":api.repo, "branch":branch});
-    query_merged_github_pr_with(&api, variables, repo, branch, tip).await
+    // A fork's PR is merged in the upstream, not in the fork: ask every repository this
+    // checkout watches. Proving the tip needs the recorded head to contain it, which a
+    // different contributor's same-named branch cannot satisfy, so more repos can only add
+    // true proofs, never forge one.
+    let remotes = crate::git::list_remotes(repo);
+    let mut targets: Vec<(String, String, Option<String>)> = vec![(
+        api.owner.clone(),
+        api.repo.clone(),
+        crate::github::remote_name_in(&remotes, &api.account.host, &api.owner, &api.repo)
+            .or_else(|| Some("origin".to_string())),
+    )];
+    for (_, owner, name) in crate::github::watched_upstreams(
+        state,
+        &api.account,
+        &[(path.to_string(), api.owner.clone(), api.repo.clone())],
+    ) {
+        let remote = crate::github::remote_name_in(&remotes, &api.account.host, &owner, &name);
+        targets.push((owner, name, remote));
+    }
+    let mut answers = Vec::new();
+    for (owner, name, remote) in &targets {
+        let variables = serde_json::json!({"owner":owner, "name":name, "branch":branch});
+        let answer =
+            query_merged_github_pr_via(&api, variables, repo, branch, tip, remote.as_deref()).await;
+        if answer == Some(true) {
+            return Some(true);
+        }
+        answers.push(answer);
+    }
+    // Not proven anywhere: a definite "no" only if every repository answered.
+    answers.iter().all(Option::is_some).then_some(false)
 }
 
+#[cfg(test)]
 async fn query_merged_github_pr_with(
     api: &impl crate::github_pr_api::PrApi,
     variables: serde_json::Value,
     repo: &Path,
     branch: &str,
     tip: &str,
+) -> Option<bool> {
+    query_merged_github_pr_via(api, variables, repo, branch, tip, Some("origin")).await
+}
+
+async fn query_merged_github_pr_via(
+    api: &impl crate::github_pr_api::PrApi,
+    variables: serde_json::Value,
+    repo: &Path,
+    branch: &str,
+    tip: &str,
+    pull_remote: Option<&str>,
 ) -> Option<bool> {
     let query = r#"query($owner: String!, $name: String!, $branch: String!, $endCursor: String) {
       repository(owner: $owner, name: $name) {
@@ -127,8 +169,12 @@ async fn query_merged_github_pr_with(
     .await
     .ok()?;
     let pages = serde_json::Value::Array(pages);
-    Some(tuic_git::worktree::merged_pr_proof_from_pages(
-        repo, branch, tip, &pages,
+    Some(tuic_git::worktree::merged_pr_proof_from_pages_via(
+        repo,
+        branch,
+        tip,
+        &pages,
+        pull_remote,
     ))
 }
 

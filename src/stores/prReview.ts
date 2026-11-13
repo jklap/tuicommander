@@ -71,7 +71,10 @@ interface PrReviewStoreState {
  *  ego's rather than a human's. Must equal `review_bots::EGO_MARKER` in Rust. */
 export const EGO_MARKER = "<!-- tuic:ego-review -->";
 
-const reviewKey = (repoPath: string, prNumber: number): string => `${repoPath}#${prNumber}`;
+/** PR numbers are per repository, so a fork PR #5 and an upstream PR #5 in one checkout are
+ *  different reviews: the base repo, when the PR has one, is part of the key. */
+const reviewKey = (repoPath: string, prNumber: number, baseRepo?: string): string =>
+	baseRepo ? `${repoPath}#${baseRepo}#${prNumber}` : `${repoPath}#${prNumber}`;
 
 /**
  * Session-scoped store owning AI-review state per PR. The `run`/`post` actions
@@ -86,16 +89,16 @@ const reviewKey = (repoPath: string, prNumber: number): string => `${repoPath}#$
 function createPrReviewStore() {
 	const [state, setState] = createStore<PrReviewStoreState>({ entries: {} });
 
-	function get(repoPath: string, prNumber: number): ReviewEntry | undefined {
-		return state.entries[reviewKey(repoPath, prNumber)];
+	function get(repoPath: string, prNumber: number, baseRepo?: string): ReviewEntry | undefined {
+		return state.entries[reviewKey(repoPath, prNumber, baseRepo)];
 	}
 
-	async function run(repoPath: string, prNumber: number): Promise<void> {
-		const key = reviewKey(repoPath, prNumber);
+	async function run(repoPath: string, prNumber: number, baseRepo?: string): Promise<void> {
+		const key = reviewKey(repoPath, prNumber, baseRepo);
 		if (state.entries[key]?.status === "running") return;
 		setState("entries", key, { status: "running", result: null, error: null, selectedIds: [], posting: false });
 		try {
-			const result = await invoke<PrReviewResult>("run_pr_review", { repoPath, prNumber });
+			const result = await invoke<PrReviewResult>("run_pr_review", { repoPath, prNumber, baseRepo });
 			const selectedIds = flattenReviewFindings(result.files).map((finding) => finding.id);
 			setState("entries", key, { status: "done", result, error: null, selectedIds, posting: false });
 		} catch (e) {
@@ -107,8 +110,8 @@ function createPrReviewStore() {
 		}
 	}
 
-	function toggleFinding(repoPath: string, prNumber: number, id: string): void {
-		const key = reviewKey(repoPath, prNumber);
+	function toggleFinding(repoPath: string, prNumber: number, id: string, baseRepo?: string): void {
+		const key = reviewKey(repoPath, prNumber, baseRepo);
 		const entry = state.entries[key];
 		if (!entry) return;
 		const next = entry.selectedIds.includes(id)
@@ -124,7 +127,7 @@ function createPrReviewStore() {
 		findings: SelectableFinding[],
 		baseRepo?: string,
 	): Promise<void> {
-		const key = reviewKey(repoPath, prNumber);
+		const key = reviewKey(repoPath, prNumber, baseRepo);
 		if (findings.length === 0 || state.entries[key]?.posting) return;
 		setState("entries", key, "posting", true);
 		setState("entries", key, "error", null);

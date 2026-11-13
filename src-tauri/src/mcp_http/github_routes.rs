@@ -262,7 +262,13 @@ pub(super) async fn repo_pr_review(
         return e.into_response();
     }
     upstream_json_result(
-        crate::pr_review::run_pr_review_impl(body.repo_path, body.pr_number, &state).await,
+        crate::pr_review::run_pr_review_impl(
+            body.repo_path,
+            body.pr_number,
+            body.base_repo.as_deref(),
+            &state,
+        )
+        .await,
     )
 }
 
@@ -304,8 +310,13 @@ pub(super) async fn repo_conflict_assist(
         return e.into_response();
     }
     upstream_json_result(
-        crate::conflict_assist::start_conflict_assist_impl(body.repo_path, body.pr_number, &state)
-            .await,
+        crate::conflict_assist::start_conflict_assist_impl(
+            body.repo_path,
+            body.pr_number,
+            body.base_repo.as_deref(),
+            &state,
+        )
+        .await,
     )
 }
 
@@ -731,6 +742,30 @@ mod pr_action_route_tests {
             Query::<PrDiffQuery>::try_from_uri(&uri("/x?path=%2Fr&pr=7&base_repo=org%2Fhello"))
                 .unwrap();
         assert_eq!(diff.0.base_repo.as_deref(), Some("org/hello"));
+    }
+
+    // Catches: conflict assist / AI review losing which repository a shared PR number is in.
+    #[test]
+    fn conflict_assist_and_review_requests_accept_an_optional_base_repo() {
+        use crate::mcp_http::types::{ConflictAssistRequest, PrReviewRequest};
+        let hinted = serde_json::json!({"repoPath": "/r", "prNumber": 7, "baseRepo": "org/hello"});
+        let plain = serde_json::json!({"repoPath": "/r", "prNumber": 7});
+        let c: ConflictAssistRequest = serde_json::from_value(hinted.clone()).unwrap();
+        assert_eq!(c.base_repo.as_deref(), Some("org/hello"));
+        assert_eq!(
+            serde_json::from_value::<ConflictAssistRequest>(plain.clone())
+                .unwrap()
+                .base_repo,
+            None
+        );
+        let r: PrReviewRequest = serde_json::from_value(hinted).unwrap();
+        assert_eq!(r.base_repo.as_deref(), Some("org/hello"));
+        assert_eq!(
+            serde_json::from_value::<PrReviewRequest>(plain)
+                .unwrap()
+                .base_repo,
+            None
+        );
     }
 
     // Catches: the CI-log query dropping the repo whose workflow runs hold the logs.

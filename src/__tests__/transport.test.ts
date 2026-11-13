@@ -5222,6 +5222,18 @@ describe("PR commands forward baseRepo over HTTP exactly when set", () => {
 		).toBe(false);
 	});
 
+	it.each([
+		["start_conflict_assist", "/repo/conflict-assist"],
+		["run_pr_review", "/repo/pr-review"],
+	])("%s puts baseRepo in the POST body only when set", (cmd, path) => {
+		const set = mapCommandToHttp(cmd, { repoPath: "/r", prNumber: 7, baseRepo: "up/stream" })!;
+		expect(set.method).toBe("POST");
+		expect(set.path).toBe(path);
+		expect(set.body as Record<string, unknown>).toMatchObject({ repoPath: "/r", prNumber: 7, baseRepo: "up/stream" });
+		const unset = mapCommandToHttp(cmd, { repoPath: "/r", prNumber: 7 })!;
+		expect((unset.body as Record<string, unknown>).baseRepo).toBeUndefined();
+	});
+
 	it("merge_pr_via_github sends expectedHeadSha", () => {
 		const m = mapCommandToHttp("merge_pr_via_github", { ...base, mergeMethod: "squash", expectedHeadSha: "abc" })!;
 		expect((m.body as Record<string, unknown>).expectedHeadSha).toBe("abc");

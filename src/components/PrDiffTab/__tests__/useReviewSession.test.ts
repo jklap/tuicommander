@@ -153,4 +153,36 @@ describe("createReviewSession", () => {
 			after: null,
 		});
 	});
+
+	// Catches: a fork PR's threads read, and its review submitted, against the wrong repo.
+	it("names the PR's base repo on the thread read and the review submission", async () => {
+		mockInvoke.mockResolvedValueOnce(page());
+		const s = createRoot(() => createReviewSession("/repo", 340803, undefined, undefined, "org/hello"));
+		await s.refresh();
+		expect(mockInvoke).toHaveBeenCalledWith("get_pr_line_threads", {
+			repoPath: "/repo",
+			prNumber: 340803,
+			baseRepo: "org/hello",
+			after: null,
+		});
+		mockInvoke.mockResolvedValueOnce({ id: 1, url: "u", state: "COMMENTED" }).mockResolvedValueOnce(page());
+		await s.submit("", "COMMENT");
+		expect(mockInvoke).toHaveBeenCalledWith(
+			"submit_pr_draft_review",
+			expect.objectContaining({ repoPath: "/repo", prNumber: 340803, baseRepo: "org/hello" }),
+		);
+	});
+
+	it("sends no baseRepo when the PR has none", async () => {
+		mockInvoke.mockResolvedValueOnce(page());
+		const s = session();
+		await s.refresh();
+		mockInvoke.mockResolvedValueOnce({ id: 1, url: "u", state: "COMMENTED" }).mockResolvedValueOnce(page());
+		await s.submit("", "COMMENT");
+		for (const cmd of ["get_pr_line_threads", "submit_pr_draft_review"]) {
+			const call = mockInvoke.mock.calls.find(([c]) => c === cmd);
+			expect(call, `${cmd} was not invoked`).toBeDefined();
+			expect((call?.[1] as { baseRepo?: string } | undefined)?.baseRepo).toBeUndefined();
+		}
+	});
 });

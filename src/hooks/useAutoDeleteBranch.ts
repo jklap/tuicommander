@@ -26,7 +26,7 @@ export function useAutoDeleteBranch(deps: AutoDeleteDeps): void {
 	const processed = new Set<string>();
 
 	function handlePrTerminal(repoPath: string, branch: string, prNumber: number, type: "merged" | "closed"): void {
-		const key = `${repoPath}:${prNumber}`;
+		const key = `${repoPath}:${branch}:${prNumber}`;
 		if (processed.has(key)) return;
 		processed.add(key);
 

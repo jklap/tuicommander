@@ -200,3 +200,95 @@ describe("PrActionButtons against the real backend wire shape", () => {
 		expect(await screen.findByText("Remove from merge queue")).toBeTruthy();
 	});
 });
+
+describe("PrActionButtons — baseRepo forwarding", () => {
+	beforeEach(() => {
+		mockInvoke.mockReset();
+		vi.restoreAllMocks();
+	});
+
+	const baseRepoOf = (cmd: string): string | undefined => {
+		const call = mockInvoke.mock.calls.find(([c]) => c === cmd);
+		expect(call, `${cmd} was not invoked`).toBeDefined();
+		return (call?.[1] as { baseRepo?: string } | undefined)?.baseRepo;
+	};
+	const forked = (): BranchPrStatus => ({ ...pr(), base_repo: "org/hello" });
+
+	// Catches: reading a fork PR's action state from the wrong repo when PR numbers collide.
+	it("action-state read names the PR's base repo, and none when absent", async () => {
+		stubBackend({});
+		const first = render(() => <PrActionButtons repoPath="/r" pr={forked()} checks={[]} />);
+		await screen.findByRole("button", { name: "Request changes" });
+		await waitFor(() => expect(baseRepoOf("get_pr_action_state")).toBe("org/hello"));
+		first.unmount();
+		mockInvoke.mockClear();
+		stubBackend({});
+		render(() => <PrActionButtons repoPath="/r" pr={pr()} checks={[]} />);
+		await screen.findByRole("button", { name: "Request changes" });
+		await waitFor(() => expect(baseRepoOf("get_pr_action_state")).toBeUndefined());
+	});
+
+	// Catches: enabling auto-merge on the wrong repo's PR.
+	it.each([
+		["with", "org/hello"],
+		["without", undefined],
+	])("auto-merge toggle %s base_repo", async (_label, baseRepo) => {
+		stubBackend({ autoMergeRequest: null, mergeQueueEntry: null, queueRequired: false });
+		const p = baseRepo ? { ...pr(), base_repo: baseRepo } : pr();
+		render(() => <PrActionButtons repoPath="/r" pr={p} checks={[]} />);
+		const enable = await screen.findByRole("button", { name: "Enable auto-merge" });
+		await waitFor(() => expect(enable).not.toBeDisabled());
+		fireEvent.click(enable);
+		await screen.findByRole("status");
+		expect(baseRepoOf("set_pr_auto_merge")).toBe(baseRepo);
+	});
+
+	// Catches: enqueueing the wrong repo's PR.
+	it.each([
+		["with", "org/hello"],
+		["without", undefined],
+	])("add to merge queue %s base_repo", async (_label, baseRepo) => {
+		stubBackend({ queueRequired: true, mergeQueueEntry: null });
+		const p = baseRepo ? { ...pr(), base_repo: baseRepo } : pr();
+		render(() => <PrActionButtons repoPath="/r" pr={p} checks={[]} />);
+		fireEvent.click(await screen.findByRole("button", { name: "Add to merge queue" }));
+		await screen.findByRole("status");
+		expect(baseRepoOf("merge_or_enqueue_pr")).toBe(baseRepo);
+	});
+
+	// Catches: dequeueing the wrong repo's PR.
+	it.each([
+		["with", "org/hello"],
+		["without", undefined],
+	])("remove from merge queue %s base_repo", async (_label, baseRepo) => {
+		stubBackend({ queueRequired: true, mergeQueueEntry: { id: "q1" } });
+		const p = baseRepo ? { ...pr(), base_repo: baseRepo } : pr();
+		render(() => <PrActionButtons repoPath="/r" pr={p} checks={[]} />);
+		fireEvent.click(await screen.findByRole("button", { name: "Remove from merge queue" }));
+		await screen.findByRole("status");
+		expect(baseRepoOf("set_pr_merge_queue")).toBe(baseRepo);
+	});
+
+	// Catches: posting REQUEST_CHANGES on the wrong repo's PR.
+	it.each([
+		["with", "org/hello"],
+		["without", undefined],
+	])("request changes %s base_repo", async (_label, baseRepo) => {
+		stubBackend({});
+		const p = baseRepo ? { ...pr(), base_repo: baseRepo } : pr();
+		render(() => <PrActionButtons repoPath="/r" pr={p} checks={[]} />);
+		fireEvent.click(await screen.findByRole("button", { name: "Request changes" }));
+		fireEvent.input(screen.getByLabelText("Review summary"), { target: { value: "fix it" } });
+		fireEvent.click(screen.getByRole("button", { name: "Submit" }));
+		await screen.findByRole("status");
+		expect(baseRepoOf("post_pr_review")).toBe(baseRepo);
+	});
+
+	it("rerun sends no baseRepo when the PR has none", async () => {
+		stubBackend({});
+		render(() => <PrActionButtons repoPath="/r" pr={pr()} checks={[failed(5, 1)]} />);
+		fireEvent.click(await screen.findByRole("button", { name: "Re-run failed jobs" }));
+		await screen.findByRole("status");
+		expect(baseRepoOf("rerun_failed_pr_jobs")).toBeUndefined();
+	});
+});

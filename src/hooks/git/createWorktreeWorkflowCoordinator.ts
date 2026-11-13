@@ -128,7 +128,7 @@ export function createWorktreeWorkflowCoordinator(deps: WorktreeWorkflowCoordina
 	 *  default agent in it, seeded with the backend's ready-to-inject resolution
 	 *  prompt. The worktree already exists, so we call setupNewWorktree directly
 	 *  (it registers, adds a terminal, and applies the seed — it does NOT create). */
-	const handleConflictAssist = async (repoPath: string, prNumber: number) => {
+	const handleConflictAssist = async (repoPath: string, prNumber: number, baseRepo?: string) => {
 		if (creatingWorktreeRepos().has(repoPath)) return;
 		setCreatingWorktreeRepos((prev) => new Set([...prev, repoPath]));
 
@@ -142,7 +142,7 @@ export function createWorktreeWorkflowCoordinator(deps: WorktreeWorkflowCoordina
 				base_warning: string | null;
 				conflicted_files: string[];
 				prompt: string;
-			}>("start_conflict_assist", { repoPath, prNumber });
+			}>("start_conflict_assist", { repoPath, prNumber, baseRepo });
 
 			if (result.status === "clean" || result.status === "clean_unverified") {
 				deps.setStatusInfo(

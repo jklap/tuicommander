@@ -58,7 +58,7 @@ describe("prNotificationsStore", () => {
 				prNotificationsStore.add(makeNotification());
 				const active = prNotificationsStore.getActive();
 				expect(active).toHaveLength(1);
-				expect(active[0].id).toBe("/repo/path:42:ready");
+				expect(active[0].id).toBe("/repo/path:feature/test:42:ready");
 				expect(active[0].dismissed).toBe(false);
 				expect(active[0].focusedTimeMs).toBe(0);
 				expect(active[0].createdAt).toBeGreaterThan(0);
@@ -73,10 +73,24 @@ describe("prNotificationsStore", () => {
 			});
 		});
 
+		it("keeps same repo+number+type notifications for different branches (fork vs upstream PR)", () => {
+			testInScope(() => {
+				prNotificationsStore.add(makeNotification({ branch: "feature/fork" }));
+				prNotificationsStore.add(makeNotification({ branch: "feature/upstream" }));
+				prNotificationsStore.add(makeNotification({ branch: "feature/upstream" })); // exact repeat
+				const active = prNotificationsStore.getActive();
+				expect(active).toHaveLength(2);
+				expect(active.map((n) => n.id).sort()).toEqual([
+					"/repo/path:feature/fork:42:ready",
+					"/repo/path:feature/upstream:42:ready",
+				]);
+			});
+		});
+
 		it("replaces a dismissed notification with same id", () => {
 			testInScope(() => {
 				prNotificationsStore.add(makeNotification());
-				prNotificationsStore.dismiss("/repo/path:42:ready");
+				prNotificationsStore.dismiss("/repo/path:feature/test:42:ready");
 				expect(prNotificationsStore.getActive()).toHaveLength(0);
 
 				prNotificationsStore.add(makeNotification({ title: "Re-triggered" }));
@@ -122,10 +136,10 @@ describe("prNotificationsStore", () => {
 				prNotificationsStore.add(makeNotification({ prNumber: 1 }));
 				prNotificationsStore.add(makeNotification({ prNumber: 2 }));
 
-				prNotificationsStore.dismiss("/repo/path:1:ready");
+				prNotificationsStore.dismiss("/repo/path:feature/test:1:ready");
 				const active = prNotificationsStore.getActive();
 				expect(active).toHaveLength(1);
-				expect(active[0].id).toBe("/repo/path:2:ready");
+				expect(active[0].id).toBe("/repo/path:feature/test:2:ready");
 			});
 		});
 
@@ -135,10 +149,10 @@ describe("prNotificationsStore", () => {
 				prNotificationsStore.add(makeNotification({ prNumber: 2 }));
 				prNotificationsStore.add(makeNotification({ prNumber: 3 }));
 
-				prNotificationsStore.dismiss("/repo/path:2:ready");
+				prNotificationsStore.dismiss("/repo/path:feature/test:2:ready");
 				const active = prNotificationsStore.getActive();
 				expect(active).toHaveLength(2);
-				expect(active.map((n) => n.id)).not.toContain("/repo/path:2:ready");
+				expect(active.map((n) => n.id)).not.toContain("/repo/path:feature/test:2:ready");
 			});
 		});
 
@@ -173,7 +187,7 @@ describe("prNotificationsStore", () => {
 		it("does not remove already-dismissed notifications from internal list", () => {
 			testInScope(() => {
 				prNotificationsStore.add(makeNotification({ prNumber: 1 }));
-				prNotificationsStore.dismiss("/repo/path:1:ready");
+				prNotificationsStore.dismiss("/repo/path:feature/test:1:ready");
 				prNotificationsStore.add(makeNotification({ prNumber: 2 }));
 
 				prNotificationsStore.dismissAll();
@@ -189,11 +203,11 @@ describe("prNotificationsStore", () => {
 			testInScope(() => {
 				prNotificationsStore.add(makeNotification({ prNumber: 1 }));
 				prNotificationsStore.add(makeNotification({ prNumber: 2 }));
-				prNotificationsStore.dismiss("/repo/path:1:ready");
+				prNotificationsStore.dismiss("/repo/path:feature/test:1:ready");
 
 				const active = prNotificationsStore.getActive();
 				expect(active).toHaveLength(1);
-				expect(active[0].id).toBe("/repo/path:2:ready");
+				expect(active[0].id).toBe("/repo/path:feature/test:2:ready");
 			});
 		});
 
@@ -288,7 +302,7 @@ describe("prNotificationsStore", () => {
 				vi.advanceTimersByTime(60 * 1000);
 				const active = prNotificationsStore.getActive();
 				expect(active).toHaveLength(1);
-				expect(active[0].id).toBe("/repo/path:2:ready");
+				expect(active[0].id).toBe("/repo/path:feature/test:2:ready");
 			});
 		});
 	});
@@ -298,7 +312,7 @@ describe("prNotificationsStore", () => {
 			testInScope(() => {
 				prNotificationsStore.add(makeNotification({ prNumber: 1 }));
 				prNotificationsStore.add(makeNotification({ prNumber: 2 }));
-				prNotificationsStore.dismiss("/repo/path:1:ready");
+				prNotificationsStore.dismiss("/repo/path:feature/test:1:ready");
 
 				prNotificationsStore.clearAll();
 				expect(prNotificationsStore.state.notifications).toHaveLength(0);

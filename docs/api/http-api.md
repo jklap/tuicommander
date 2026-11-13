@@ -1689,11 +1689,15 @@ Returns `{"diff": "...", "headSha": "..."}`. `headSha` is the commit the diff wa
 
 ```
 GET  /repo/merged-prs?path=&sinceTag=                      -> MergedPr[]
-POST /repo/conflict-assist   { repoPath, prNumber }        -> ConflictAssistResult
+POST /repo/conflict-assist   { repoPath, prNumber, baseRepo? } -> ConflictAssistResult
 ```
 
 `/repo/conflict-assist` creates a worktree on the PR head and rebases it onto
-the base. `status` is `clean` only when the base was refreshed from origin,
+the base. For a fork's PR opened against an upstream (`baseRepo` names the upstream) the
+head branch is fetched from the remote that holds the fork and the base from the remote
+of the upstream; the result reports both as `head_remote` and `base_remote`. A PR whose
+head lives in a repository that is not a git remote of the checkout is refused.
+`status` is `clean` only when the base was refreshed from its remote,
 `clean_unverified` when a conflict-free result used an existing tracking ref or
 local fallback, and `conflicts` when manual resolution is needed. The response
 includes `base_source`, an optional `base_warning`, the conflicted-file list,
@@ -1702,7 +1706,7 @@ and an agent prompt; it never pushes or merges. None of it calls a model.
 ### Review, changelog and improvement scan (ego)
 
 ```
-POST /repo/pr-review                 { repoPath, prNumber }   -> PrReviewResult
+POST /repo/pr-review                 { repoPath, prNumber, baseRepo? } -> PrReviewResult
 GET  /repo/changelog?path=&sinceTag=                          -> ChangelogResult
 POST /repo/improvement-scan          { repoPath, focus }      -> ImprovementScanResult
 POST /repo/create-issue-from-proposal { repoPath, proposal }  -> CreatedIssue

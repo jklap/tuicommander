@@ -54,6 +54,34 @@ describe("prReviewStore", () => {
 		expect(entry?.selectedIds).toEqual(["src/a.ts:10:0", "src/a.ts:file:1"]);
 	});
 
+	// Catches: a fork PR #N and an upstream PR #N in one checkout sharing (and overwriting) one review.
+	// A number no other test in this file uses: the store is a module singleton.
+	it("keeps reviews of the same PR number in two base repositories apart", async () => {
+		const SHARED = 777;
+		invokeMock.mockResolvedValue(reviewResult());
+		await prReviewStore.run(REPO, SHARED, "me/hello");
+		expect(prReviewStore.get(REPO, SHARED, "me/hello")?.status).toBe("done");
+		expect(prReviewStore.get(REPO, SHARED, "org/hello")).toBeUndefined();
+		expect(prReviewStore.get(REPO, SHARED)).toBeUndefined();
+
+		await prReviewStore.run(REPO, SHARED, "org/hello");
+		const own = prReviewStore.get(REPO, SHARED, "me/hello");
+		const upstream = prReviewStore.get(REPO, SHARED, "org/hello");
+		expect(own?.status).toBe("done");
+		expect(upstream?.status).toBe("done");
+		// Selecting a finding in one review does not touch the other.
+		const id = upstream?.selectedIds[0] as string;
+		prReviewStore.toggleFinding(REPO, SHARED, id, "org/hello");
+		expect(prReviewStore.get(REPO, SHARED, "org/hello")?.selectedIds).not.toContain(id);
+		expect(prReviewStore.get(REPO, SHARED, "me/hello")?.selectedIds).toContain(id);
+	});
+
+	it("forwards the PR's base repo to the backend when given", async () => {
+		invokeMock.mockResolvedValueOnce(reviewResult());
+		await prReviewStore.run(REPO, 9, "up/stream");
+		expect(invokeMock).toHaveBeenCalledWith("run_pr_review", { repoPath: REPO, prNumber: 9, baseRepo: "up/stream" });
+	});
+
 	it("asks the backend for this repo and PR, and for nothing else", async () => {
 		invokeMock.mockResolvedValueOnce(reviewResult());
 		await prReviewStore.run(REPO, 8);

@@ -481,7 +481,7 @@ The frontend uses `get_repo_structure` (Phase 1) and `get_repo_diff_stats` (Phas
 |---------|-----------|-------------|
 | `rename_branch` | `(path, old_name, new_name) -> ()` | Rename a branch |
 | `update_from_base` | `(path, branch, strategy?) -> String` | Fetch base ref (if remote) and rebase or merge the branch onto it. On conflict, reports `(aborted)` only after `git rebase/merge --abort` succeeds; if abort fails, the error says the repo may still be conflicted and includes the manual abort command. |
-| `start_conflict_assist` | `(repo_path, pr_number) -> ConflictAssistResult` | Creates a PR-head worktree and rebases it. A conflict-free result is `clean` only after a successful origin refresh; stale tracking or local fallback results are `clean_unverified` with `base_source` and `base_warning`. |
+| `start_conflict_assist` | `(repo_path, pr_number, base_repo?) -> ConflictAssistResult` | Creates a PR-head worktree and rebases it. A conflict-free result is `clean` only after a successful refresh of the base remote; stale tracking or local fallback results are `clean_unverified` with `base_source` and `base_warning`. For a fork's PR opened against an upstream the head is fetched from the remote holding the fork and the base from the remote of the upstream (`head_remote`/`base_remote` in the result); a head repository that is not a remote of the checkout is refused. |
 | `get_branch_base` | `(path, branch) -> Option<String>` | Read stored base ref from `git config branch.<name>.tuicommander-base` |
 | `git_apply_reverse_patch` | `(path, patch) -> ()` | Apply a reverse patch for hunk/line-level restore |
 

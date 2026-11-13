@@ -984,6 +984,67 @@ mod tests {
         }
     }
 
+    fn cand(account: &str, remote: &str, owner: &str, repo: &str) -> BindCandidate {
+        BindCandidate {
+            account_id: account.to_string(),
+            host: parse_remote_url("git@github.com:o/r.git").unwrap().0,
+            owner: owner.to_string(),
+            repo: repo.to_string(),
+            remote_name: remote.to_string(),
+        }
+    }
+
+    // Catches: the fork shortcut swallowing genuinely ambiguous layouts.
+    #[test]
+    fn the_fork_shortcut_only_applies_to_one_repository_on_one_account() {
+        // No `upstream` remote: the shortcut never applies.
+        assert_eq!(
+            fork_candidate_without_upstream(&[
+                cand("a", "origin", "me", "x"),
+                cand("a", "mirror", "o", "x")
+            ]),
+            None
+        );
+        // origin + upstream, one account: the fork wins.
+        let fork = cand("a", "origin", "me", "x");
+        assert_eq!(
+            fork_candidate_without_upstream(&[fork.clone(), cand("a", "upstream", "o", "x")]),
+            Some(fork.clone())
+        );
+        // The same fork under two accounts is still a choice.
+        assert_eq!(
+            fork_candidate_without_upstream(&[
+                cand("a", "origin", "me", "x"),
+                cand("b", "origin", "me", "x"),
+                cand("a", "upstream", "o", "x"),
+            ]),
+            None
+        );
+        // Two different non-upstream repositories are still a choice.
+        assert_eq!(
+            fork_candidate_without_upstream(&[
+                cand("a", "origin", "me", "x"),
+                cand("a", "mirror", "other", "x"),
+                cand("a", "upstream", "o", "x"),
+            ]),
+            None
+        );
+        // Only an upstream remote (no fork): nothing to prefer.
+        assert_eq!(
+            fork_candidate_without_upstream(&[cand("a", "upstream", "o", "x")]),
+            None
+        );
+        // Owner/name case differences are the same repository.
+        assert!(
+            fork_candidate_without_upstream(&[
+                cand("a", "origin", "Me", "X"),
+                cand("a", "mirror", "me", "x"),
+                cand("a", "upstream", "o", "x"),
+            ])
+            .is_some()
+        );
+    }
+
     #[test]
     fn upstream_watch_target_is_the_upstream_remote_when_it_differs() {
         let dir = tempfile::tempdir().expect("tempdir");

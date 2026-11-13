@@ -259,6 +259,9 @@ pub(super) struct ConflictAssistRequest {
     pub repo_path: String,
     #[serde(rename = "prNumber")]
     pub pr_number: i64,
+    /// `owner/name` the PR targets (see `github::resolve_pr_target`).
+    #[serde(default, rename = "baseRepo")]
+    pub base_repo: Option<String>,
 }
 
 /// `POST /repo/pr-review` — the same pair as a conflict assist, kept separate
@@ -269,6 +272,9 @@ pub(super) struct PrReviewRequest {
     pub repo_path: String,
     #[serde(rename = "prNumber")]
     pub pr_number: i64,
+    /// `owner/name` the PR targets (see `github::resolve_pr_target`).
+    #[serde(default, rename = "baseRepo")]
+    pub base_repo: Option<String>,
 }
 
 /// `POST /repo/improvement-scan`.

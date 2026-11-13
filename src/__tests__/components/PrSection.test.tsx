@@ -223,3 +223,101 @@ describe("PrSection row actions", () => {
 		await vi.waitFor(() => expect(button(container, "Update branch")).toBeUndefined());
 	});
 });
+
+describe("PrSection row actions — baseRepo forwarding", () => {
+	beforeEach(() => {
+		vi.clearAllMocks();
+		mockInvoke.mockReset();
+		mockInvoke.mockResolvedValue(undefined);
+		window.confirm = vi.fn(() => true);
+	});
+	afterEach(() => vi.restoreAllMocks());
+
+	const baseRepoOf = (cmd: string): string | undefined => {
+		const call = mockInvoke.mock.calls.find(([c]) => c === cmd);
+		expect(call, `${cmd} was not invoked`).toBeDefined();
+		return (call?.[1] as { baseRepo?: string } | undefined)?.baseRepo;
+	};
+	const mergeable = (o: Partial<BranchPrStatus> = {}) =>
+		pr({
+			merge_state_status: "CLEAN",
+			review_decision: "APPROVED",
+			merge_commit_allowed: true,
+			squash_merge_allowed: true,
+			rebase_merge_allowed: true,
+			...o,
+		});
+
+	// Catches: updating the wrong repo's PR when a fork and its upstream share a PR number.
+	it("update branch names the PR's base repo", async () => {
+		const { container } = renderSection(pr({ base_repo: "org/hello" }));
+		fireEvent.click(button(container, "Update branch"));
+		expect(baseRepoOf("update_pr_branch")).toBe("org/hello");
+	});
+
+	it("update branch sends no baseRepo when the PR has none", async () => {
+		const { container } = renderSection(pr());
+		fireEvent.click(button(container, "Update branch"));
+		expect(baseRepoOf("update_pr_branch")).toBeUndefined();
+	});
+
+	// Catches: closing the wrong repo's PR.
+	it("close names the PR's base repo", () => {
+		const { container } = renderSection(pr({ base_repo: "org/hello" }));
+		fireEvent.click(button(container, "Close"));
+		expect(baseRepoOf("close_pr")).toBe("org/hello");
+	});
+
+	it("close sends no baseRepo when the PR has none", () => {
+		const { container } = renderSection(pr());
+		fireEvent.click(button(container, "Close"));
+		expect(baseRepoOf("close_pr")).toBeUndefined();
+	});
+
+	// Catches: approving the wrong repo's PR.
+	it("approve names the PR's base repo", async () => {
+		const { container } = renderSection(pr({ base_repo: "org/hello", author: "someone" }));
+		fireEvent.click(button(container, "Approve"));
+		expect(baseRepoOf("approve_pr")).toBe("org/hello");
+	});
+
+	it("approve sends no baseRepo when the PR has none", async () => {
+		const { container } = renderSection(pr({ author: "someone" }));
+		fireEvent.click(button(container, "Approve"));
+		expect(baseRepoOf("approve_pr")).toBeUndefined();
+	});
+
+	// Catches: merging the wrong repo's PR.
+	it("merge names the PR's base repo", async () => {
+		const { container } = renderSection(mergeable({ base_repo: "org/hello" }));
+		fireEvent.click(button(container, "Merge"));
+		await vi.waitFor(() => expect(mockInvoke.mock.calls.some(([c]) => c === "merge_pr_via_github")).toBe(true));
+		expect(baseRepoOf("merge_pr_via_github")).toBe("org/hello");
+	});
+
+	it("merge sends no baseRepo when the PR has none", async () => {
+		const { container } = renderSection(mergeable());
+		fireEvent.click(button(container, "Merge"));
+		await vi.waitFor(() => expect(mockInvoke.mock.calls.some(([c]) => c === "merge_pr_via_github")).toBe(true));
+		expect(baseRepoOf("merge_pr_via_github")).toBeUndefined();
+	});
+
+	// Catches: showing the diff of the wrong repo's PR, and pinning a diff tab that collides.
+	it("diff names the PR's base repo and keys the tab with it", async () => {
+		mockInvoke.mockResolvedValue({ diff: "d", headSha: "h" });
+		const { mdTabsStore } = await import("../../stores/mdTabs");
+		const { container } = renderSection(pr({ base_repo: "org/hello" }));
+		fireEvent.click(button(container, "Diff"));
+		await vi.waitFor(() => expect(mdTabsStore.addPrDiff).toHaveBeenCalled());
+		expect(baseRepoOf("get_pr_diff")).toBe("org/hello");
+		expect(mdTabsStore.addPrDiff).toHaveBeenCalledWith("/repo", 12, "Fix login", "d", "h", "org/hello");
+	});
+
+	it("diff sends no baseRepo when the PR has none", async () => {
+		mockInvoke.mockResolvedValue({ diff: "d", headSha: "h" });
+		const { container } = renderSection(pr());
+		fireEvent.click(button(container, "Diff"));
+		await vi.waitFor(() => expect(mockInvoke.mock.calls.some(([c]) => c === "get_pr_diff")).toBe(true));
+		expect(baseRepoOf("get_pr_diff")).toBeUndefined();
+	});
+});

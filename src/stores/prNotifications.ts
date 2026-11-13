@@ -89,7 +89,7 @@ function createPrNotificationsStore() {
 
 	/** Add a new notification (deduplicates by pr+type) */
 	function add(notification: Omit<PrNotification, "id" | "createdAt" | "focusedTimeMs" | "dismissed">): void {
-		const id = `${notification.connectionId ? `${notification.connectionId}:` : ""}${notification.repoPath}:${notification.prNumber}:${notification.type}`;
+		const id = `${notification.connectionId ? `${notification.connectionId}:` : ""}${notification.repoPath}:${notification.branch}:${notification.prNumber}:${notification.type}`;
 		// Don't duplicate — if same notification already active, skip
 		if (state.notifications.some((n) => n.id === id && !n.dismissed)) return;
 

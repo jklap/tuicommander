@@ -59,7 +59,7 @@ export interface SidebarProps {
 	onRefreshBranchStats?: () => Promise<void>;
 	onCheckoutRemoteBranch?: (repoPath: string, branchName: string) => void;
 	onAutofixIssue?: (repoPath: string, issueNumber: number, prompt: string) => void;
-	onConflictAssist?: (repoPath: string, prNumber: number) => void;
+	onConflictAssist?: (repoPath: string, prNumber: number, baseRepo?: string) => void;
 	onSwitchBranch?: (repoPath: string, branchName: string) => void;
 	switchBranchLists?: Record<string, string[]>;
 	currentBranches?: Record<string, string>;
@@ -362,7 +362,9 @@ export const Sidebar: Component<SidebarProps> = (props) => {
 						: undefined
 				}
 				onConflictAssist={
-					props.onConflictAssist ? (prNumber) => props.onConflictAssist!(repo.path, prNumber) : undefined
+					props.onConflictAssist
+						? (prNumber, baseRepo) => props.onConflictAssist!(repo.path, prNumber, baseRepo)
+						: undefined
 				}
 				onPushBranch={
 					props.onBackgroundGit ? (worktreePath) => props.onBackgroundGit!(worktreePath, "push", ["push"]) : undefined

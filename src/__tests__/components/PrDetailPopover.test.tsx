@@ -1117,4 +1117,75 @@ describe("PrDetailPopover", () => {
 			expect(btn?.textContent).toBe("Rebase & Merge");
 		});
 	});
+
+	describe("baseRepo forwarding", () => {
+		const openPr = {
+			branch: "feature/x",
+			number: 42,
+			title: "Feature",
+			state: "OPEN",
+			url: "https://github.com/org/repo/pull/42",
+			additions: 10,
+			deletions: 5,
+			author: "alice",
+			commits: 1,
+			checks: { passed: 2, failed: 0, pending: 0, total: 2 },
+			check_details: [],
+			labels: [],
+			is_draft: false,
+			base_ref_name: "main",
+			head_ref_oid: "abc",
+			created_at: "",
+			updated_at: "",
+			merge_state_label: null,
+			review_state_label: null,
+			review_decision: "APPROVED",
+			mergeable: "MERGEABLE",
+			merge_state_status: "CLEAN",
+			merge_commit_allowed: true,
+			squash_merge_allowed: true,
+			rebase_merge_allowed: true,
+		};
+		const baseRepoOf = (cmd: string): string | undefined => {
+			const call = mockInvoke.mock.calls.find((c: unknown[]) => c[0] === cmd);
+			expect(call, `${cmd} was not invoked`).toBeDefined();
+			return ((call as unknown[])[1] as { baseRepo?: string }).baseRepo;
+		};
+
+		beforeEach(() => {
+			repoSettingsStore.getOrCreate("/repo", "Repo");
+			repoSettingsStore.update("/repo", { prMergeStrategy: "merge" });
+			mockInvoke.mockImplementation(async (cmd: string) => {
+				if (cmd === "get_pr_diff") return { diff: "", headSha: "abc" };
+				if (cmd === "merge_pr_via_github") return "sha123";
+				return {};
+			});
+		});
+
+		// Catches: merging the wrong repo's PR when a fork and its upstream share a number.
+		it.each([
+			["with", "org/hello"],
+			["without", undefined],
+		])("merge %s base_repo", async (_label, baseRepo) => {
+			mockGetBranchPrData.mockReturnValue({ ...openPr, base_repo: baseRepo });
+			const { container } = render(() => <PrDetailPopover {...defaultProps} />);
+			fireEvent.click(container.querySelector(".mergeBtn") as HTMLButtonElement);
+			await waitFor(() =>
+				expect(mockInvoke.mock.calls.some((c: unknown[]) => c[0] === "merge_pr_via_github")).toBe(true),
+			);
+			expect(baseRepoOf("merge_pr_via_github")).toBe(baseRepo);
+		});
+
+		// Catches: showing (and pinning a review to) the wrong repo's diff.
+		it.each([
+			["with", "org/hello"],
+			["without", undefined],
+		])("view diff %s base_repo", async (_label, baseRepo) => {
+			mockGetBranchPrData.mockReturnValue({ ...openPr, base_repo: baseRepo });
+			const { getByText } = render(() => <PrDetailPopover {...defaultProps} />);
+			fireEvent.click(getByText("View Diff"));
+			await waitFor(() => expect(mockInvoke.mock.calls.some((c: unknown[]) => c[0] === "get_pr_diff")).toBe(true));
+			expect(baseRepoOf("get_pr_diff")).toBe(baseRepo);
+		});
+	});
 });

@@ -1967,7 +1967,7 @@ export const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 		map: (args) => ({
 			method: "POST",
 			path: "/repo/pr-review",
-			body: { repoPath: args.repoPath, prNumber: args.prNumber },
+			body: { repoPath: args.repoPath, prNumber: args.prNumber, baseRepo: args.baseRepo },
 		}),
 	},
 	run_improvement_scan: {
@@ -1988,7 +1988,7 @@ export const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 		map: (args) => ({
 			method: "POST",
 			path: "/repo/conflict-assist",
-			body: { repoPath: args.repoPath, prNumber: args.prNumber },
+			body: { repoPath: args.repoPath, prNumber: args.prNumber, baseRepo: args.baseRepo },
 		}),
 	},
 	approve_pr: {

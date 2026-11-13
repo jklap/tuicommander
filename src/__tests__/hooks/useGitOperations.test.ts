@@ -1794,6 +1794,30 @@ describe("useGitOperations", () => {
 			expect(repositoriesStore.get("/repo")?.workspaces["feature"]).toBeUndefined();
 		});
 
+		it("forwards the PR base repo to start_conflict_assist", async () => {
+			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
+			mockConflictAssist({
+				status: "clean",
+				worktree_path: "/repo/.worktrees/feature",
+				branch: "feature",
+				base: "main",
+				base_source: "fetched_remote",
+				base_warning: null,
+				conflicted_files: [],
+				prompt: "",
+			});
+
+			await gitOps.handleConflictAssist("/repo", 42, "up/stream");
+
+			expect(mockInvoke).toHaveBeenCalledWith("start_conflict_assist", {
+				repoPath: "/repo",
+				prNumber: 42,
+				baseRepo: "up/stream",
+			});
+			expect(mockSetStatusInfo).toHaveBeenCalledWith("PR #42 rebased cleanly onto main");
+			expect(repositoriesStore.get("/repo")?.workspaces["feature"]).toBeUndefined();
+		});
+
 		it("warns when a conflict-free rebase used a base that could not be refreshed", async () => {
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
 			mockConflictAssist({

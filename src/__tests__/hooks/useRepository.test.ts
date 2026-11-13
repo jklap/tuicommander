@@ -127,6 +127,28 @@ describe("useRepository", () => {
 		});
 	});
 
+	describe("mergePrViaGithub()", () => {
+		// Catches: merging the wrong repo's PR when a fork and its upstream share a PR number.
+		it("names the PR's base repo when one is given", async () => {
+			mockInvoke.mockResolvedValueOnce("sha");
+			await repo.mergePrViaGithub("/repos/my-repo", 7, "squash", "abc", "org/hello");
+			expect(mockInvoke).toHaveBeenCalledWith("merge_pr_via_github", {
+				repoPath: "/repos/my-repo",
+				prNumber: 7,
+				mergeMethod: "squash",
+				expectedHeadSha: "abc",
+				baseRepo: "org/hello",
+			});
+		});
+
+		it("sends no baseRepo when none is given", async () => {
+			mockInvoke.mockResolvedValueOnce("sha");
+			await repo.mergePrViaGithub("/repos/my-repo", 7, "squash", "abc");
+			const args = mockInvoke.mock.calls[0][1] as { baseRepo?: string };
+			expect(args.baseRepo).toBeUndefined();
+		});
+	});
+
 	describe("getWorktreePaths()", () => {
 		// Keyed by workspace id with the branch as a field, so two workspaces on one
 		// branch stay distinct instead of collapsing (#726-5ac7).

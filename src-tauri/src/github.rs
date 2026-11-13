@@ -1610,7 +1610,7 @@ fn parent_cache_key(
 /// each checkout's `upstream` remote plus the parent GitHub reported for its repository
 /// on an earlier poll (cached, never re-asked). Duplicates (the usual case: the remote
 /// names the parent) are dropped, as is anything equal to the checkout's own repository.
-fn watched_upstreams(
+pub(crate) fn watched_upstreams(
     state: &AppState,
     account: &crate::github_account::GitHubAccount,
     repos: &[(String, String, String)],
@@ -3598,14 +3598,6 @@ pub(crate) struct PrDiff {
 
 /// Fetch the unified diff for a PR via GitHub REST API.
 /// Uses Accept: application/vnd.github.diff to get raw diff text.
-pub(crate) async fn get_pr_diff_impl(
-    repo_path: &str,
-    pr_number: i64,
-    state: &AppState,
-) -> Result<String, String> {
-    get_pr_diff_targeted(repo_path, pr_number, None, state).await
-}
-
 pub(crate) async fn get_pr_diff_targeted(
     repo_path: &str,
     pr_number: i64,
@@ -3730,23 +3722,33 @@ async fn get_pr_diff_from_local_clone(
 
 /// The name of the remote whose URL is `owner/repo` on `host` (`origin` first, else the
 /// first match), if any.
-fn remote_name_for_repo(
+pub(crate) fn remote_name_for_repo(
     repo_path: &Path,
     host: &crate::github_account::GitHubHost,
     owner: &str,
     repo: &str,
 ) -> Option<String> {
-    let mut matches: Vec<String> = crate::git::list_remotes(repo_path)
-        .into_iter()
+    remote_name_in(&crate::git::list_remotes(repo_path), host, owner, repo)
+}
+
+/// [`remote_name_for_repo`] over an already-read `(name, url)` list.
+pub(crate) fn remote_name_in(
+    remotes: &[(String, String)],
+    host: &crate::github_account::GitHubHost,
+    owner: &str,
+    repo: &str,
+) -> Option<String> {
+    let mut matches: Vec<&str> = remotes
+        .iter()
         .filter(|(_, url)| {
             crate::github_account::parse_remote_url(url).is_some_and(|(h, o, r)| {
                 &h == host && o.eq_ignore_ascii_case(owner) && r.eq_ignore_ascii_case(repo)
             })
         })
-        .map(|(name, _)| name)
+        .map(|(name, _)| name.as_str())
         .collect();
-    matches.sort_by_key(|name| name != "origin");
-    matches.into_iter().next()
+    matches.sort_by_key(|name| *name != "origin");
+    matches.first().map(|name| name.to_string())
 }
 
 fn local_pr_diff_from(
@@ -3814,14 +3816,6 @@ fn local_pr_diff_from(
 }
 
 /// Fetch a PR's head/base branch refs via the GitHub REST API (JSON).
-pub(crate) async fn get_pr_refs_impl(
-    repo_path: &str,
-    pr_number: i64,
-    state: &AppState,
-) -> Result<PrRefs, String> {
-    get_pr_refs_targeted(repo_path, pr_number, None, state).await
-}
-
 pub(crate) async fn get_pr_refs_targeted(
     repo_path: &str,
     pr_number: i64,

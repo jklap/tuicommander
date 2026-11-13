@@ -1646,7 +1646,7 @@ export const RepoSection: Component<{
 	onToggleCollapsed: () => void;
 	onCheckoutRemoteBranch?: (branchName: string) => void;
 	onAutofixIssue?: (issueNumber: number, prompt: string) => void;
-	onConflictAssist?: (prNumber: number) => void;
+	onConflictAssist?: (prNumber: number, baseRepo?: string) => void;
 	onPushBranch?: (worktreePath: string) => void;
 	onSwitchBranch: (branchName: string) => void;
 	switchBranchList: () => string[];

@@ -401,9 +401,28 @@ repo for every polled checkout:
   upstream. The hint must be the bound repo, the checkout's `upstream` remote, its cached
   parent, or a repo a polled PR targets; anything else is refused, and an unknown watch set
   is learned by one re-poll. Omitted, they act on the bound repo.
+- **Conflict assist works for a fork's PR against its upstream** (`conflict_assist.rs`,
+  `plan_remotes`): `PrRefs` now carries `head_repo`/`base_repo`; the head branch is fetched from
+  the remote whose URL is the head repository (usually `origin`, the fork) and the worktree
+  is rebased onto `refs/remotes/<base remote>/<base>` fetched from the remote of the
+  upstream, so "clean" means clean against what the upstream has now (the fork's own `main`
+  is typically stale). A head repository that is not a remote of the checkout (someone
+  else's fork), or a fork PR with no remote for its base repository, is refused with a
+  message naming the repository. The push stays a separate human-gated step to `origin`.
+  `start_conflict_assist` and `run_pr_review` take `base_repo` like the other PR commands.
+- **Merged-PR proof for cleanup** (`worktree.rs` `query_merged_github_pr`): whether a merged
+  PR proves a local branch tip is integrated also asks every watched upstream, since a
+  fork's PR is merged there. The recorded head must still contain the tip (another
+  contributor's same-named branch cannot satisfy that), `refs/pull/N/head` is fetched only
+  from the remote that points at the repo the PR number belongs to, and an unanswered repo
+  makes the result unknown rather than a cached "no".
+- **Frontend keys include the branch / base repo:** auto-delete on PR close and PR
+  notifications dedupe per `repo:branch:number`, PR diff tabs and AI reviews are keyed by
+  base repo, so a number shared by two repos never merges their state.
 - **Not covered by `base_repo`:** thread-id commands (`get_pr_thread_comments`,
-  `set_pr_thread_resolved`, `reply_pr_thread`: GraphQL node ids are repo-independent) and
-  `start_conflict_assist` (refuses `head_from_fork` PRs, which every fork→upstream PR is).
+  `set_pr_thread_resolved`, `reply_pr_thread`: GraphQL node ids are repo-independent).
+  Creating a PR (`create_pr`) and the automations' draft-PR publishing still target the bound
+  repository.
   The "diff too large" local fallback fetches `refs/pull/N/head` from the remote whose URL
   is the PR's repo (`remote_name_for_repo`), never blindly from `origin`.
 - `get_repo_pr_statuses` (single-repo, fork only) keeps the previously found upstream PRs

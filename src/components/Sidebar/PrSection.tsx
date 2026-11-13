@@ -46,7 +46,7 @@ export interface PrSectionProps {
 	onShowDismissed: () => void;
 	onCheckout: (branchName: string) => void;
 	onCreateWorktree?: (branchName: string) => void;
-	onConflictAssist?: (prNumber: number) => void;
+	onConflictAssist?: (prNumber: number, baseRepo?: string) => void;
 	onPushBranch?: (worktreePath: string) => void;
 	onMerged: (branchName: string, baseBranch: string, hasDirtyFiles: boolean) => void;
 }

@@ -915,6 +915,22 @@ pub fn merged_pr_proof_from_pages(
     tip: &str,
     pages: &serde_json::Value,
 ) -> bool {
+    merged_pr_proof_from_pages_via(repo, branch, tip, pages, Some("origin"))
+}
+
+/// [`merged_pr_proof_from_pages`] for pages read from a repository other than `origin`'s
+/// (the upstream a fork's PR was merged into). `pull_remote` is the remote whose
+/// `refs/pull/<n>/head` holds the recorded head when it is not already local; `None` means
+/// no remote points at that repository, so the head cannot be fetched and only a head
+/// already present locally can prove anything. Fetching a PR number from the wrong
+/// repository is never attempted: numbers are per repository.
+pub fn merged_pr_proof_from_pages_via(
+    repo: &Path,
+    branch: &str,
+    tip: &str,
+    pages: &serde_json::Value,
+    pull_remote: Option<&str>,
+) -> bool {
     let Some(pages) = pages.as_array() else {
         return false;
     };
@@ -951,10 +967,13 @@ pub fn merged_pr_proof_from_pages(
                 .run_silent()
                 .is_none()
             {
+                let Some(remote) = pull_remote else {
+                    continue;
+                };
                 let refspec = format!("refs/pull/{number}/head");
                 if git_cmd(repo)
                     .timeout(Duration::from_secs(30))
-                    .args(["fetch", "--no-tags", "origin", &refspec])
+                    .args(["fetch", "--no-tags", remote, &refspec])
                     .run_silent()
                     .is_none()
                     || git_cmd(repo)
@@ -16582,6 +16601,104 @@ branch refs/heads/feat
             "headRefName": branch,
             "headRefOid": head
         }]}}}}])
+    }
+
+    // Catches: proving a squash-merged fork PR against `origin` (the fork) when its recorded
+    // head lives only in the upstream's `refs/pull/<n>/head` — and fetching a PR number from
+    // the wrong repository.
+    #[test]
+    fn a_pr_head_missing_locally_is_fetched_only_from_the_named_remote() {
+        let git = |dir: &Path, args: &[&str]| {
+            let out = std::process::Command::new("git")
+                .args(args)
+                .current_dir(dir)
+                .output()
+                .unwrap();
+            assert!(
+                out.status.success(),
+                "{args:?}: {}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+            String::from_utf8_lossy(&out.stdout).trim().to_string()
+        };
+        let (_temp, seed, _workspaces) = workspace_fixture();
+        let scratch = tempfile::tempdir_in(tuic_test_support::test_temp_root()).unwrap();
+        let upstream = scratch.path().join("upstream.git");
+        git(
+            scratch.path(),
+            &[
+                "clone",
+                "--bare",
+                "--quiet",
+                &seed.to_string_lossy(),
+                &upstream.to_string_lossy(),
+            ],
+        );
+        let tip = rev_at(&seed, "HEAD").unwrap();
+        // The PR head (a child of the tip) exists only in the upstream, under refs/pull/9/head.
+        let other = scratch.path().join("other");
+        git(
+            scratch.path(),
+            &[
+                "clone",
+                "--quiet",
+                &seed.to_string_lossy(),
+                &other.to_string_lossy(),
+            ],
+        );
+        git(&other, &["config", "user.email", "t@t"]);
+        git(&other, &["config", "user.name", "T"]);
+        std::fs::write(other.join("pr.txt"), "pr\n").unwrap();
+        git(&other, &["add", "."]);
+        git(&other, &["commit", "--quiet", "-m", "pr head"]);
+        let head = git(&other, &["rev-parse", "HEAD"]);
+        git(
+            &other,
+            &[
+                "push",
+                "--quiet",
+                &upstream.to_string_lossy(),
+                "HEAD:refs/pull/9/head",
+            ],
+        );
+
+        let work = scratch.path().join("work");
+        git(
+            scratch.path(),
+            &[
+                "clone",
+                "--quiet",
+                &seed.to_string_lossy(),
+                &work.to_string_lossy(),
+            ],
+        );
+        git(
+            &work,
+            &["remote", "add", "upstream", &upstream.to_string_lossy()],
+        );
+        let pages = pr_pages(9, "feature", &head);
+
+        assert!(
+            !merged_pr_proof_from_pages(&work, "feature", &tip, &pages),
+            "origin (the fork) has no refs/pull/9/head"
+        );
+        assert!(!merged_pr_proof_from_pages_via(
+            &work, "feature", &tip, &pages, None
+        ));
+        assert!(!merged_pr_proof_from_pages_via(
+            &work,
+            "feature",
+            &tip,
+            &pages,
+            Some("origin")
+        ));
+        assert!(merged_pr_proof_from_pages_via(
+            &work,
+            "feature",
+            &tip,
+            &pages,
+            Some("upstream")
+        ));
     }
 
     #[test]

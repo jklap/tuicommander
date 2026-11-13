@@ -96,9 +96,10 @@ fn emit_review_progress(state: &crate::AppState, repo_path: &str, payload: serde
 pub(crate) async fn run_pr_review_impl(
     repo_path: String,
     pr_number: i64,
+    base_repo: Option<&str>,
     state: &std::sync::Arc<crate::AppState>,
 ) -> Result<PrReviewResult, String> {
-    let diff = crate::github::get_pr_diff_impl(&repo_path, pr_number, state).await?;
+    let diff = crate::github::get_pr_diff_targeted(&repo_path, pr_number, base_repo, state).await?;
     let head_sha = format!("{:016x}", hash_diff(&diff));
     let files = split_unified_diff(&diff);
 
@@ -167,10 +168,11 @@ pub(crate) async fn run_pr_review_impl(
 pub(crate) async fn run_pr_review(
     repo_path: String,
     pr_number: i64,
+    base_repo: Option<String>,
     state: tauri::State<'_, std::sync::Arc<crate::AppState>>,
 ) -> Result<PrReviewResult, String> {
     let state = state.inner().clone();
-    run_pr_review_impl(repo_path, pr_number, &state).await
+    run_pr_review_impl(repo_path, pr_number, base_repo.as_deref(), &state).await
 }
 
 #[cfg(test)]

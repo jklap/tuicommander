@@ -550,6 +550,8 @@ fn local_diff_fetches_from_the_named_remote_not_origin() {
         head_sha: None,
         base_sha: None,
         head_from_fork: true,
+        head_repo: Some("me/hello".into()),
+        base_repo: Some("org/hello".into()),
     };
     let path = work.path().to_string_lossy().into_owned();
     let diff = local_pr_diff_from(&path, 7, &refs, "upstream").unwrap();
@@ -1086,4 +1088,283 @@ async fn a_repo_a_polled_pr_targets_is_watched() {
         .await
         .unwrap();
     assert_eq!(got, ("org".to_string(), "hello".to_string()));
+}
+
+// ---------------------------------------------------------------------------
+// The GitHub API calls themselves: which repository each action really hits
+// ---------------------------------------------------------------------------
+
+struct Rest {
+    fixture: crate::github::partial_tests::PollHttpFixture,
+    _repo: tempfile::TempDir,
+    path: String,
+    _scratch: tempfile::TempDir,
+    _config: Box<dyn std::any::Any>,
+}
+
+/// A fork checkout (origin only) whose snapshot holds PR 42 (upstream), PR 5 in BOTH repos,
+/// and PR 1 (the fork). The loopback API answers every REST call with a plausible success.
+async fn rest_harness() -> Rest {
+    let scratch = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+    let config = crate::config::set_config_dir_override(scratch.path().join("config"));
+    std::fs::create_dir_all(scratch.path().join("config")).unwrap();
+    let repo = repo_with_remotes(&[("origin", FORK)]);
+    let path = repo.path().to_string_lossy().into_owned();
+    let fixture = crate::github::partial_tests::PollHttpFixture::with_responses(
+        |_request| {
+            serde_json::json!({"data": {"repository": {"pullRequest": {"id": "PR_1"}}},
+                "rateLimit": {"cost": 1, "remaining": 4000, "resetAt": "2030-01-01T00:00:00Z"}})
+        },
+        |method, path| {
+            if path.ends_with("/merge") {
+                (200, serde_json::json!({"sha": "mergesha", "merged": true}))
+            } else if path.ends_with("/update-branch") {
+                (
+                    202,
+                    serde_json::json!({"message": "Updating pull request branch."}),
+                )
+            } else if method == "GET" && path.contains("/pulls/") {
+                (
+                    200,
+                    serde_json::json!({
+                        "head": {"ref": "feature", "sha": "abc", "repo": {"full_name": "me/hello"}},
+                        "base": {"ref": "main", "sha": "def", "repo": {"full_name": "org/hello"}}
+                    }),
+                )
+            } else if path.ends_with("/reviews") {
+                (
+                    200,
+                    serde_json::json!({"id": 1, "state": "COMMENTED", "html_url": "https://x/r/1"}),
+                )
+            } else {
+                (200, serde_json::json!({}))
+            }
+        },
+    )
+    .await;
+    fixture.state.git_cache.github_status.insert(
+        path.clone(),
+        Arc::new(vec![
+            parse_pr_node(&pr_node(1, "own", "me/hello", "me/hello")).unwrap(),
+            parse_pr_node(&pr_node(5, "five-fork", "me/hello", "me/hello")).unwrap(),
+            parse_pr_node(&pr_node(5, "five-up", "org/hello", "me/hello")).unwrap(),
+            parse_pr_node(&pr_node(42, "feature", "org/hello", "me/hello")).unwrap(),
+        ]),
+    );
+    Rest {
+        fixture,
+        _repo: repo,
+        path,
+        _scratch: scratch,
+        _config: Box::new(config),
+    }
+}
+
+fn rest_seen(h: &mut Rest) -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    while let Ok(r) = h.fixture.rest_requests.try_recv() {
+        out.push(r);
+    }
+    out
+}
+
+fn seen(method: &str, path: &str) -> (String, String) {
+    (method.to_string(), path.to_string())
+}
+
+// Catches: any PR action silently keeping the fork as its target after the plumbing was added.
+#[tokio::test]
+async fn every_pr_rest_action_hits_the_repository_the_pr_lives_in() {
+    let mut h = rest_harness().await;
+    let (state, path) = (h.fixture.state.clone(), h.path.clone());
+
+    approve_pr_targeted(&path, 42, None, &state).await.unwrap();
+    close_pr_targeted(&path, 42, None, &state).await.unwrap();
+    update_pr_branch_targeted(&path, 42, None, "abc", &state)
+        .await
+        .unwrap();
+    let sha = merge_pr_github_targeted(&path, 42, None, "squash", "abc", &state)
+        .await
+        .unwrap();
+    assert_eq!(sha, "mergesha");
+    let refs = get_pr_refs_targeted(&path, 42, None, &state).await.unwrap();
+    assert_eq!(refs.base_repo.as_deref(), Some("org/hello"));
+    assert_eq!(refs.head_repo.as_deref(), Some("me/hello"));
+    assert!(refs.head_from_fork);
+    get_pr_diff_targeted(&path, 42, None, &state).await.unwrap();
+    let _ =
+        post_pr_review_targeted(&path, 42, None, "looks good", Some("COMMENT"), &[], &state).await;
+
+    assert_eq!(
+        rest_seen(&mut h),
+        [
+            seen("POST", "/repos/org/hello/pulls/42/reviews"),
+            seen("PATCH", "/repos/org/hello/pulls/42"),
+            seen("PUT", "/repos/org/hello/pulls/42/update-branch"),
+            seen("PUT", "/repos/org/hello/pulls/42/merge"),
+            // refs, then the diff
+            seen("GET", "/repos/org/hello/pulls/42"),
+            seen("GET", "/repos/org/hello/pulls/42"),
+            seen("POST", "/repos/org/hello/pulls/42/reviews"),
+        ]
+    );
+    h.fixture.close().await;
+}
+
+// Catches: the fork's own PRs being retargeted at the upstream by the new lookup.
+#[tokio::test]
+async fn a_pr_of_the_fork_itself_still_hits_the_fork() {
+    let mut h = rest_harness().await;
+    let (state, path) = (h.fixture.state.clone(), h.path.clone());
+    approve_pr_targeted(&path, 1, None, &state).await.unwrap();
+    // Not in the snapshot at all: the bound repository, as before this feature.
+    close_pr_targeted(&path, 77, None, &state).await.unwrap();
+    assert_eq!(
+        rest_seen(&mut h),
+        [
+            seen("POST", "/repos/me/hello/pulls/1/reviews"),
+            seen("PATCH", "/repos/me/hello/pulls/77"),
+        ]
+    );
+    h.fixture.close().await;
+}
+
+// Catches: the collision (PR 5 in both repos) acting on the wrong PR.
+#[tokio::test]
+async fn a_number_shared_by_both_repos_acts_only_where_the_caller_says() {
+    let mut h = rest_harness().await;
+    let (state, path) = (h.fixture.state.clone(), h.path.clone());
+
+    // No hint: refused before any request leaves.
+    let err = close_pr_targeted(&path, 5, None, &state).await.unwrap_err();
+    assert!(err.contains("more than one watched repository"), "{err}");
+    assert!(rest_seen(&mut h).is_empty(), "nothing was sent to GitHub");
+
+    close_pr_targeted(&path, 5, Some("org/hello"), &state)
+        .await
+        .unwrap();
+    close_pr_targeted(&path, 5, Some("me/hello"), &state)
+        .await
+        .unwrap();
+    assert_eq!(
+        rest_seen(&mut h),
+        [
+            seen("PATCH", "/repos/org/hello/pulls/5"),
+            seen("PATCH", "/repos/me/hello/pulls/5"),
+        ]
+    );
+    // A repo the checkout does not watch is refused with no request.
+    let err = close_pr_targeted(&path, 5, Some("evil/hello"), &state)
+        .await
+        .unwrap_err();
+    assert!(err.contains("not one of this checkout's watched"), "{err}");
+    assert!(rest_seen(&mut h).is_empty());
+    h.fixture.close().await;
+}
+
+// Catches: workflow reruns going to the fork, and an unwatched repo being rerun.
+#[tokio::test]
+async fn reruns_and_pr_graphql_target_the_named_repository() {
+    let mut h = rest_harness().await;
+    let (state, path) = (h.fixture.state.clone(), h.path.clone());
+    // The snapshot names org/hello, so it is a watched repository for this checkout.
+    let api = crate::github_pr_api::RepoApi::resolve_for_watched(&state, &path, Some("org/hello"))
+        .await
+        .unwrap();
+    crate::github_pr_actions::rerun_failed_jobs(&api, 9001)
+        .await
+        .unwrap();
+    let own = crate::github_pr_api::RepoApi::resolve_for_watched(&state, &path, None)
+        .await
+        .unwrap();
+    crate::github_pr_actions::rerun_failed_jobs(&own, 9002)
+        .await
+        .unwrap();
+    assert_eq!(
+        rest_seen(&mut h),
+        [
+            seen(
+                "POST",
+                "/repos/org/hello/actions/runs/9001/rerun-failed-jobs"
+            ),
+            seen(
+                "POST",
+                "/repos/me/hello/actions/runs/9002/rerun-failed-jobs"
+            ),
+        ]
+    );
+    assert!(
+        crate::github_pr_api::RepoApi::resolve_for_watched(&state, &path, Some("evil/hello"))
+            .await
+            .is_err()
+    );
+
+    // GraphQL-backed PR calls carry the target repo in their variables.
+    let pr_api = crate::github_pr_api::RepoApi::resolve_for_pr(&state, &path, 42, None)
+        .await
+        .unwrap();
+    assert_eq!(
+        (pr_api.owner.as_str(), pr_api.repo.as_str()),
+        ("org", "hello")
+    );
+    assert_eq!(pr_api.variables(42)["owner"], "org");
+    assert_eq!(pr_api.variables(42)["repo"], "hello");
+    let _ = crate::github_pr_actions::action_state(&pr_api, pr_api.variables(42)).await;
+    let _ = get_ci_checks_targeted(&path, 42, None, &state).await;
+    let _ = get_pr_review_threads_targeted(&path, 42, None, &state).await;
+    let mut graphql_owners = Vec::new();
+    while let Ok(request) = h.fixture.requests.try_recv() {
+        graphql_owners.push(request["variables"]["owner"].as_str().map(str::to_string));
+    }
+    assert!(
+        graphql_owners.iter().flatten().all(|o| o == "org") && graphql_owners.len() >= 3,
+        "{graphql_owners:?}"
+    );
+    h.fixture.close().await;
+}
+
+// Catches: AI review and conflict assist reading the fork's (nonexistent) copy of an upstream PR.
+#[tokio::test]
+async fn ai_review_and_conflict_assist_read_the_upstream_pr() {
+    let mut h = rest_harness().await;
+    let (state, path) = (h.fixture.state.clone(), h.path.clone());
+
+    // The review fetches the PR's diff from the upstream (an empty diff is answered locally).
+    let review = crate::pr_review::run_pr_review_impl(path.clone(), 42, None, &state).await;
+    assert!(review.is_ok(), "{review:?}");
+    assert_eq!(
+        rest_seen(&mut h),
+        [seen("GET", "/repos/org/hello/pulls/42")]
+    );
+
+    // Conflict assist reads the refs from the upstream, then needs a remote for it: this
+    // checkout only has `origin`, so it is refused by name instead of rebasing onto the fork.
+    let err = crate::conflict_assist::start_conflict_assist_impl(path.clone(), 42, None, &state)
+        .await
+        .unwrap_err();
+    assert!(
+        err.contains("org/hello") && err.contains("needs a git remote"),
+        "{err}"
+    );
+    assert_eq!(
+        rest_seen(&mut h),
+        [seen("GET", "/repos/org/hello/pulls/42")]
+    );
+
+    // A shared number needs the hint, and the hint reaches both.
+    assert!(
+        crate::conflict_assist::start_conflict_assist_impl(path.clone(), 5, None, &state)
+            .await
+            .unwrap_err()
+            .contains("more than one watched repository")
+    );
+    let err =
+        crate::conflict_assist::start_conflict_assist_impl(path, 5, Some("org/hello"), &state)
+            .await
+            .unwrap_err();
+    assert!(
+        err.contains("org/hello") && err.contains("needs a git remote"),
+        "{err}"
+    );
+    h.fixture.close().await;
 }
