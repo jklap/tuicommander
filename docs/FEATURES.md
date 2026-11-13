@@ -1514,7 +1514,7 @@ GitHub integration is **account-centric**: TUICommander can manage N accounts an
 
 **Repository bindings** (Settings → Git & GitHub → *Repository Bindings*)
 - Each workspace repo resolves to one of: **Bound** (shows the account + *Unbind*), **NeedsBind** (a candidate chooser — no silent `origin` pick when multiple GitHub remotes/accounts match), **NeedsAccount** (a github.com repo with no account yet → points to setup), or **Unmonitored**.
-- A single account/remote candidate resolves automatically without persisting a binding; the default-only setup hides Repository Bindings. Multiple candidates always ask, including fork/upstream repositories on one account. Worktrees of a repo share the main checkout's binding.
+- A single account/remote candidate resolves automatically without persisting a binding; the default-only setup hides Repository Bindings. Multiple candidates ask — except a fork layout (`origin` = fork plus an `upstream` remote), which resolves to the fork and also **watches the upstream automatically**: PRs opened from the fork against the upstream appear in the sidebar (only PRs whose head branch is in your fork), and PR actions (merge, approve, close, diff, CI, re-run, AI review, conflict assist) target the upstream repo where the PR lives; conflict assist fetches the fork's head from the fork's remote and rebases onto the upstream's base. Worktrees of a repo share the main checkout's binding.
 
 **Per-account isolation** (hybrid model)
 - github.com keeps the global breaker/viewer/rate/cooldown state byte-for-byte; each GHE account gets its own `ghe_state` (circuit breaker, viewer login, rate budget).
