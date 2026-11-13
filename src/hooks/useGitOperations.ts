@@ -132,6 +132,7 @@ export interface GitOperationsDeps {
 			prNumber: number,
 			mergeMethod: string,
 			expectedHeadSha: string,
+			baseRepo?: string,
 		) => Promise<string>;
 		getWorkspaceLifecycle: (
 			repoPath: string,

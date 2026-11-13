@@ -95,3 +95,28 @@ describe("PR review head pin (critic)", () => {
 		await waitFor(() => expect(gh.submitted).toEqual(["B"]));
 	});
 });
+
+describe("PR diff tab baseRepo (MdTabContent)", () => {
+	// Catches: MdTabContent dropping the tab's baseRepo, so a fork PR's review goes to the wrong repo.
+	it("passes the tab's baseRepo to the thread read and the review submission", async () => {
+		const gh = github("A");
+		const id = mdTabsStore.addPrDiff("/repo", 31, "t", diffAt("x"), "A", "org/hello");
+		const view = renderTab(id);
+		await submitSummary(view);
+		await waitFor(() => expect(gh.submitted).toEqual(["A"]));
+		for (const cmd of ["get_pr_line_threads", "submit_pr_draft_review"]) {
+			const call = mockInvoke.mock.calls.find(([c]) => c === cmd);
+			expect((call?.[1] as { baseRepo?: string } | undefined)?.baseRepo, cmd).toBe("org/hello");
+		}
+	});
+
+	it("sends no baseRepo when the tab has none", async () => {
+		github("A");
+		const id = mdTabsStore.addPrDiff("/repo", 32, "t", diffAt("x"), "A");
+		const view = renderTab(id);
+		await view.findByLabelText("Review summary");
+		const call = mockInvoke.mock.calls.find(([c]) => c === "get_pr_line_threads");
+		expect(call).toBeDefined();
+		expect((call?.[1] as { baseRepo?: string } | undefined)?.baseRepo).toBeUndefined();
+	});
+});

@@ -96,6 +96,13 @@ describe("githubStore", () => {
 		expect(notifications.state.notifications).toHaveLength(1);
 		expect(notifications.state.notifications[0]).toMatchObject({ connectionId: "mint", title: "[Mint] Remote PR" });
 		expect(terminal).not.toHaveBeenCalled();
+		// Another branch's notice for the same PR number/type is not a duplicate of the first.
+		emitEvent("github-transition", { ...transition, branch: "feature/y" });
+		await Promise.resolve();
+		await Promise.resolve();
+		await Promise.resolve();
+		expect(remoteRpc).toHaveBeenCalledTimes(2);
+		expect(notifications.state.notifications).toHaveLength(2);
 		emitEvent("github-pr-update", { repo_path: "/repo1", statuses: [] });
 		expect(store.getPrStatus("/repo1", "feature/x")?.number).toBe(42);
 		store.stopPolling();
@@ -378,6 +385,25 @@ describe("githubStore", () => {
 				expect(details).toHaveLength(2);
 				expect(details[0]).toEqual({ context: "build", state: "success", html_url: "https://ci.example/build/1" });
 				expect(details[1].html_url).toBe("");
+			});
+		});
+
+		it("passes baseRepo to get_ci_checks only when given", async () => {
+			await testInScopeAsync(async () => {
+				store.updateRepoData("/repo1", [makePrStatus()]);
+				mockInvoke.mockResolvedValue([]);
+
+				await store.loadCheckDetails("/repo1", "feature/x", 42, "upstream/repo");
+				expect(mockInvoke).toHaveBeenCalledWith("get_ci_checks", {
+					path: "/repo1",
+					prNumber: 42,
+					baseRepo: "upstream/repo",
+				});
+
+				mockInvoke.mockClear();
+				await store.loadCheckDetails("/repo1", "feature/x", 42);
+				const call = mockInvoke.mock.calls.find((c) => c[0] === "get_ci_checks");
+				expect((call![1] as { baseRepo?: string }).baseRepo).toBeUndefined();
 			});
 		});
 	});

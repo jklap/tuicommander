@@ -12,6 +12,7 @@ import { appLogger } from "../stores/appLogger";
 import { pluginStore } from "../stores/pluginStore";
 import { terminalsStore } from "../stores/terminals";
 import { isTauri } from "../transport";
+import { randomId } from "../utils/randomId";
 import { compareAppVersion } from "../utils/semver";
 import { updateAppConfig } from "../utils/updateAppConfig";
 import { importPluginModule } from "./pluginModuleImport";
@@ -253,7 +254,7 @@ async function loadPluginCycle(manifest: PluginManifest, cycle: symbol): Promise
 	// supplies. A per-plugin token was considered and rejected: same-realm JS can
 	// read, proxy or monkey-patch it, so it would be a boundary in name only.
 	//
-	const loadCycleId = crypto.randomUUID();
+	const loadCycleId = randomId("");
 	const isCurrent = () => activeLoads.get(manifest.id) === cycle && !disabledPluginIds.has(manifest.id);
 	let mod: unknown;
 	// Three attempts total, with four seconds of scheduled delay. Only import

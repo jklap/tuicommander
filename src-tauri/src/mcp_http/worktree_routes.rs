@@ -213,6 +213,7 @@ pub(super) enum SetupChainMode {
 /// [`create_worktree_shared`] plus the Setup Script failure, which is only
 /// ever `Some` in [`SetupChainMode::Wait`] (in `Background` the chain is still
 /// running when this returns).
+#[allow(clippy::too_many_arguments)] // One creation path's independent inputs; a struct would just rename them.
 pub(super) async fn create_worktree_shared_with_setup(
     state: &Arc<AppState>,
     base_repo: String,
@@ -676,9 +677,10 @@ pub(super) async fn merge_pr_via_github_http(
     if let Err(e) = validate_repo_path(&body.repo_path) {
         return e.into_response();
     }
-    match crate::github::merge_pr_github_impl(
+    match crate::github::merge_pr_github_targeted(
         &body.repo_path,
         body.pr_number,
+        body.base_repo.as_deref(),
         &body.merge_method,
         &body.expected_head_sha,
         &state,
@@ -937,6 +939,7 @@ mod warm_tests {
             false,
             false,
             None,
+            false,
         )
         .unwrap();
         let (restored, _) = crate::worktree::allocate_workspace_with_creator(
@@ -1769,6 +1772,7 @@ mod survivor_tests {
                 override_lock: None,
                 expected_fingerprint: None,
                 confirm_missing_checkout: None,
+                permanent_delete: None,
                 override_busy,
             })
         };
@@ -1802,6 +1806,7 @@ mod survivor_tests {
             override_lock: None,
             expected_fingerprint: None,
             confirm_missing_checkout: None,
+            permanent_delete: None,
             override_busy: None,
         })
     }
@@ -2051,6 +2056,7 @@ mod survivor_tests {
             None,
             None,
             false,
+            None,
         )
         .await
         .expect("worktree should be created");
@@ -2110,6 +2116,7 @@ mod survivor_tests {
             None,
             None,
             false,
+            None,
         )
         .await
         .expect("worktree should be created");
@@ -2165,6 +2172,7 @@ mod survivor_tests {
             None,
             None,
             false,
+            None,
         )
         .await
         .expect("worktree should be created");

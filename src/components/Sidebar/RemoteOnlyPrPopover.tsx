@@ -15,6 +15,7 @@ import { cx } from "../../utils";
 import { onClickKeyDown } from "../../utils/a11y";
 import { closeBranchTerminalPtys } from "../../utils/closeBranchTerminals";
 import { canApprovePr, effectiveMergeMethod, mergeWithFallback } from "../../utils/prMerge";
+import { prKey } from "../../utils/prRow";
 import {
 	type CleanupStep,
 	PostMergeCleanupDialog,
@@ -40,12 +41,12 @@ export const RemoteOnlyPrPopover: Component<{
 	onCleanupActive?: (active: boolean) => void;
 }> = (props) => {
 	const [expandedBranch, setExpandedBranch] = createSignal<string | null>(null);
-	const [mergingPr, setMergingPr] = createSignal<number | null>(null);
+	const [mergingPr, setMergingPr] = createSignal<string | null>(null);
 	const [mergeError, setMergeError] = createSignal<string | null>(null);
-	const [diffLoadingPr, setDiffLoadingPr] = createSignal<number | null>(null);
-	const [approvingPr, setApprovingPr] = createSignal<number | null>(null);
+	const [diffLoadingPr, setDiffLoadingPr] = createSignal<string | null>(null);
+	const [approvingPr, setApprovingPr] = createSignal<string | null>(null);
 	const [approveError, setApproveError] = createSignal<string | null>(null);
-	const [dismissedPrs, setDismissedPrs] = createSignal<Set<number>>(new Set());
+	const [dismissedPrs, setDismissedPrs] = createSignal<Set<string>>(new Set());
 
 	// Post-merge cleanup state
 	const [cleanupCtx, setCleanupCtx] = createSignal<{
@@ -113,20 +114,20 @@ export const RemoteOnlyPrPopover: Component<{
 	let popoverRef: HTMLDivElement | undefined;
 	useOutsideDismiss({ inside: () => [popoverRef], onClose: props.onClose, enabled: () => !cleanupCtx() });
 
-	const visiblePrs = createMemo(() => props.prs.filter((pr) => !dismissedPrs().has(pr.number)));
+	const visiblePrs = createMemo(() => props.prs.filter((pr) => !dismissedPrs().has(prKey(pr))));
 
 	const dismissedCount = createMemo(() => dismissedPrs().size);
 
-	const handleDismiss = (prNumber: number) => {
+	const handleDismiss = (pr: BranchPrStatus) => {
 		setDismissedPrs((prev) => {
 			const next = new Set(prev);
-			next.add(prNumber);
+			next.add(prKey(pr));
 			return next;
 		});
 	};
 
 	const handleShowDismissed = () => {
-		setDismissedPrs(new Set<number>());
+		setDismissedPrs(new Set<string>());
 	};
 
 	const handleRowClick = (branch: string) => {
@@ -144,13 +145,13 @@ export const RemoteOnlyPrPopover: Component<{
 	};
 
 	const handleMerge = async (pr: BranchPrStatus) => {
-		setMergingPr(pr.number);
+		setMergingPr(prKey(pr));
 		setMergeError(null);
 		try {
 			const preferred =
 				repoSettingsStore.getEffective(props.repoPath)?.prMergeStrategy ?? repoDefaultsStore.state.prMergeStrategy;
 			const startMethod = effectiveMergeMethod(pr, preferred);
-			const usedMethod = await mergeWithFallback(props.repoPath, pr.number, startMethod, pr.head_ref_oid);
+			const usedMethod = await mergeWithFallback(props.repoPath, pr.number, startMethod, pr.head_ref_oid, pr.base_repo);
 			// Persist the working method so future merges use it directly
 			if (usedMethod !== preferred) {
 				const repo = repositoriesStore.get(props.repoPath);
@@ -192,12 +193,13 @@ export const RemoteOnlyPrPopover: Component<{
 	};
 
 	const handleApprove = async (pr: BranchPrStatus) => {
-		setApprovingPr(pr.number);
+		setApprovingPr(prKey(pr));
 		setApproveError(null);
 		try {
 			await invoke("approve_pr", {
 				repoPath: props.repoPath,
 				prNumber: pr.number,
+				baseRepo: pr.base_repo,
 			});
 			appLogger.info("github", `Approved PR #${pr.number}`);
 			githubStore.pollRepo(props.repoPath);
@@ -211,13 +213,14 @@ export const RemoteOnlyPrPopover: Component<{
 	};
 
 	const handleViewDiff = async (pr: BranchPrStatus) => {
-		setDiffLoadingPr(pr.number);
+		setDiffLoadingPr(prKey(pr));
 		try {
 			const { diff, headSha } = await invoke<{ diff: string; headSha: string }>("get_pr_diff", {
 				repoPath: props.repoPath,
 				prNumber: pr.number,
+				baseRepo: pr.base_repo,
 			});
-			mdTabsStore.addPrDiff(props.repoPath, pr.number, pr.title, diff, headSha);
+			mdTabsStore.addPrDiff(props.repoPath, pr.number, pr.title, diff, headSha, pr.base_repo);
 		} catch (e) {
 			const msg = String(e);
 			appLogger.error("github", `Failed to load PR #${pr.number} diff`, { error: msg });
@@ -227,7 +230,7 @@ export const RemoteOnlyPrPopover: Component<{
 				"error",
 			);
 		} finally {
-			setDiffLoadingPr((current) => (current === pr.number ? null : current));
+			setDiffLoadingPr((current) => (current === prKey(pr) ? null : current));
 		}
 	};
 
@@ -297,7 +300,7 @@ export const RemoteOnlyPrPopover: Component<{
 												size="compact"
 												variant="ghost"
 												class={s.remoteOnlyDetailDismiss}
-												onClick={() => handleDismiss(pr.number)}
+												onClick={() => handleDismiss(pr)}
 												aria-label={t("sidebar.dismissPr", "Hide this PR from view")}
 												data-tooltip={t("sidebar.dismissPr", "Hide this PR from view")}
 												data-tooltip-pos="bottom"
@@ -337,12 +340,12 @@ export const RemoteOnlyPrPopover: Component<{
 															variant="primary"
 															class={s.remoteOnlyApprove}
 															onClick={() => handleApprove(pr)}
-															disabled={approvingPr() === pr.number}
+															disabled={approvingPr() === prKey(pr)}
 															data-tooltip={t("sidebar.approvePr", "Approve this pull request")}
 															data-tooltip-pos="bottom"
 															data-tooltip-align="right"
 														>
-															{approvingPr() === pr.number
+															{approvingPr() === prKey(pr)
 																? t("sidebar.approving", "Approving...")
 																: t("sidebar.approve", "Approve")}
 														</Button>
@@ -353,12 +356,12 @@ export const RemoteOnlyPrPopover: Component<{
 															variant="ghost"
 															class={s.remoteOnlyMerge}
 															onClick={() => handleMerge(pr)}
-															disabled={mergingPr() === pr.number}
+															disabled={mergingPr() === prKey(pr)}
 															data-tooltip={t("sidebar.mergePr", "Merge this pull request")}
 															data-tooltip-pos="bottom"
 															data-tooltip-align="right"
 														>
-															{mergingPr() === pr.number ? t("sidebar.merging", "Merging...") : mergeLabel(pr)}
+															{mergingPr() === prKey(pr) ? t("sidebar.merging", "Merging...") : mergeLabel(pr)}
 														</Button>
 													</Show>
 													<Button
@@ -366,12 +369,12 @@ export const RemoteOnlyPrPopover: Component<{
 														variant="ghost"
 														class={s.remoteOnlyViewDiff}
 														onClick={() => handleViewDiff(pr)}
-														disabled={diffLoadingPr() === pr.number}
+														disabled={diffLoadingPr() === prKey(pr)}
 														data-tooltip={t("sidebar.viewDiff", "View PR diff")}
 														data-tooltip-pos="bottom"
 														data-tooltip-align="right"
 													>
-														{diffLoadingPr() === pr.number
+														{diffLoadingPr() === prKey(pr)
 															? t("sidebar.loadingDiff", "Loading...")
 															: t("sidebar.diff", "Diff")}
 													</Button>

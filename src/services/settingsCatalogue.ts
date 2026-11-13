@@ -1,28 +1,10 @@
 import catalogueExclusions from "../components/SettingsPanel/settingsCatalogueExclusions.json";
-import { settingsCatalogue } from "../generated/settingsCatalogue";
 import { t } from "../i18n";
+import { type SettingId, settingDescriptor } from "./settingsCatalogueCore";
 
-export type SettingId = keyof typeof settingsCatalogue.fields;
-export interface SettingDescriptor {
-	id: string;
-	labelKey: string;
-	helpKey: string;
-	label: string;
-	schema: {
-		[key: string]: unknown;
-		description?: string;
-		minimum?: number;
-		maximum?: number;
-		enum?: readonly unknown[];
-	};
-	effect: string;
-	default?: unknown;
-}
+export type { SettingDescriptor, SettingId } from "./settingsCatalogueCore";
+export { settingDescriptor, settingNumberDefault } from "./settingsCatalogueCore";
 
-/** Rust owns the identity and semantics; pages retain their established presentation. */
-export function settingDescriptor(id: SettingId): SettingDescriptor {
-	return settingsCatalogue.fields[id];
-}
 export function settingLabel(id: SettingId | undefined, fallback: string): string {
 	return id ? t(settingDescriptor(id).labelKey, fallback) : fallback;
 }
@@ -45,12 +27,6 @@ export function settingOptions(
 		const encoded = value === null ? "" : String(value);
 		return { value: encoded, label: labels[encoded] ?? (value === null ? "Default" : String(value)) };
 	});
-}
-
-export function settingNumberDefault(id: SettingId): number {
-	const value = settingDescriptor(id).default;
-	if (typeof value !== "number") throw new Error(`Setting ${id} has no numeric default`);
-	return value;
 }
 
 interface CatalogueEditorField {

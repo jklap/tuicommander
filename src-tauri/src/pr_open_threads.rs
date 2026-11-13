@@ -29,12 +29,13 @@ pub(crate) async fn open_threads_prompt(
     Ok(tuic_git::review_bots::render_open_threads(&threads))
 }
 
-pub(crate) async fn get_pr_open_threads_impl(
+pub(crate) async fn get_pr_open_threads_targeted(
     path: &str,
     number: i64,
+    base_repo: Option<&str>,
     state: &AppState,
 ) -> Result<String, String> {
-    let api = RepoApi::resolve(state, path).await?;
+    let api = RepoApi::resolve_for_pr(state, path, number, base_repo).await?;
     open_threads_prompt(&api, api.variables(number)).await
 }
 
@@ -43,9 +44,10 @@ pub(crate) async fn get_pr_open_threads_impl(
 pub(crate) async fn get_pr_open_threads(
     repo_path: String,
     pr_number: i64,
+    base_repo: Option<String>,
     state: tauri::State<'_, std::sync::Arc<AppState>>,
 ) -> Result<String, String> {
-    get_pr_open_threads_impl(&repo_path, pr_number, &state).await
+    get_pr_open_threads_targeted(&repo_path, pr_number, base_repo.as_deref(), &state).await
 }
 
 #[cfg(test)]

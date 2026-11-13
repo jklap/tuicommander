@@ -1,4 +1,4 @@
-use super::get_pr_line_threads_impl;
+use super::get_pr_line_threads_targeted;
 use serde_json::{Value, json};
 
 // Catches: live GraphQL bot authors lose bot=true, or outdated coordinates disappear.
@@ -40,7 +40,7 @@ async fn live_copilot_is_bot_and_outdated_thread_keeps_original_line() {
                 .unwrap();
             assert!(output.status.success(), "local repository setup failed");
         }
-        let page = get_pr_line_threads_impl(path.to_str().unwrap(), number, None, &state)
+        let page = get_pr_line_threads_targeted(path.to_str().unwrap(), number, None, None, &state)
             .await
             .expect("read-only live review threads request failed");
         assert!(!page.has_next_page, "live oracle requires a complete page");
@@ -97,9 +97,10 @@ async fn live_copilot_is_bot_and_outdated_thread_keeps_original_line() {
                 "originalLine":t["originalLine"], "isOutdated":t["isOutdated"], "authors":authors})
             })
             .collect();
-        let prompt = crate::pr_open_threads::get_pr_open_threads_impl(
+        let prompt = crate::pr_open_threads::get_pr_open_threads_targeted(
             path.to_str().unwrap(),
             number,
+            None,
             &state,
         )
         .await
@@ -151,13 +152,14 @@ async fn live_open_prompt_has_an_eligible_finding() {
     let mut evidence = Vec::new();
     let mut eligible = false;
     for number in numbers {
-        let page = get_pr_line_threads_impl(path.to_str().unwrap(), number, None, &state)
+        let page = get_pr_line_threads_targeted(path.to_str().unwrap(), number, None, None, &state)
             .await
             .expect("read-only live review threads request failed");
         assert!(!page.has_next_page, "live oracle requires a complete page");
-        let prompt = crate::pr_open_threads::get_pr_open_threads_impl(
+        let prompt = crate::pr_open_threads::get_pr_open_threads_targeted(
             path.to_str().unwrap(),
             number,
+            None,
             &state,
         )
         .await

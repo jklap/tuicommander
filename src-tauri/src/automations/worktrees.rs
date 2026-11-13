@@ -56,6 +56,7 @@ pub(crate) fn execute(
         None,
         false,
         false,
+        false,
     )?;
     state.notify_worktree_removed(crate::state::WorktreeRemovedPayload {
         repo_path: run.definition.repository,

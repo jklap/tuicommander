@@ -26,6 +26,8 @@ export interface FileContextInput {
 export function prContextVariables(pr: BranchPrStatus): Record<string, string> {
 	const vars: Record<string, string> = {
 		pr_number: String(pr.number),
+		// Reserved routing key (not a prompt variable): numbers are per repository.
+		pr_base_repo: pr.base_repo ?? "",
 		pr_title: pr.title,
 		pr_url: pr.url,
 		pr_state: pr.state,

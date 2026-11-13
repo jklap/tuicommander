@@ -214,3 +214,100 @@ describe("RemoteOnlyPrPopover — outside dismissal", () => {
 		expect(defaultProps.onClose).not.toHaveBeenCalled();
 	});
 });
+
+describe("RemoteOnlyPrPopover — baseRepo forwarding", () => {
+	beforeEach(() => {
+		vi.clearAllMocks();
+		repoSettingsStore.getOrCreate("/repo", "Repo");
+		repoSettingsStore.update("/repo", { prMergeStrategy: null });
+	});
+
+	const openRow = (container: HTMLElement) => fireEvent.click(container.querySelector(".remoteOnlyRow")!);
+	const clickByTooltip = (container: HTMLElement, tooltip: string) =>
+		fireEvent.click(container.querySelector(`button[data-tooltip="${tooltip}"]`)!);
+
+	it("sends the PR's base_repo with the diff request", async () => {
+		mockInvoke.mockResolvedValue({ diff: "", headSha: "abc" });
+		const pr = { ...mergeablePr, base_repo: "upstream/repo" };
+		const { container } = render(() => <RemoteOnlyPrPopover {...defaultProps} prs={[pr]} />);
+		openRow(container);
+		clickByTooltip(container, "View PR diff");
+		await waitFor(() =>
+			expect(mockInvoke).toHaveBeenCalledWith("get_pr_diff", {
+				repoPath: "/repo",
+				prNumber: 42,
+				baseRepo: "upstream/repo",
+			}),
+		);
+	});
+
+	it("sends no baseRepo with the diff request when the PR has none", async () => {
+		mockInvoke.mockResolvedValue({ diff: "", headSha: "abc" });
+		const { container } = render(() => <RemoteOnlyPrPopover {...defaultProps} />);
+		openRow(container);
+		clickByTooltip(container, "View PR diff");
+		await waitFor(() => expect(mockInvoke).toHaveBeenCalledWith("get_pr_diff", expect.anything()));
+		const call = mockInvoke.mock.calls.find((c) => c[0] === "get_pr_diff");
+		expect((call![1] as { baseRepo?: string }).baseRepo).toBeUndefined();
+	});
+
+	it("sends the PR's base_repo when merging", async () => {
+		mockInvoke.mockResolvedValue("sha");
+		const pr = { ...mergeablePr, base_repo: "upstream/repo" };
+		const { container } = render(() => <RemoteOnlyPrPopover {...defaultProps} prs={[pr]} />);
+		openRow(container);
+		const mergeBtn = Array.from(container.querySelectorAll("button")).find((b) =>
+			["Merge", "Squash & Merge", "Rebase & Merge"].includes(b.textContent ?? ""),
+		) as HTMLButtonElement;
+		fireEvent.click(mergeBtn);
+		await waitFor(() =>
+			expect(mockInvoke).toHaveBeenCalledWith(
+				"merge_pr_via_github",
+				expect.objectContaining({ baseRepo: "upstream/repo", expectedHeadSha: "abc" }),
+			),
+		);
+	});
+});
+
+describe("RemoteOnlyPrPopover — PRs sharing a number across repositories", () => {
+	beforeEach(() => {
+		vi.clearAllMocks();
+		repoSettingsStore.getOrCreate("/repo", "Repo");
+		repoSettingsStore.update("/repo", { prMergeStrategy: null });
+	});
+
+	const forkPr = { ...mergeablePr, title: "Fork PR", branch: "feature/fork", base_repo: "fork/repo" };
+	const upstreamPr = { ...mergeablePr, title: "Upstream PR", branch: "feature/up", base_repo: "upstream/repo" };
+
+	// Catches: dismissing fork #42 also hiding upstream #42.
+	it("dismissing one PR does not hide the other with the same number", () => {
+		mockInvoke.mockResolvedValue({});
+		const { container } = render(() => <RemoteOnlyPrPopover {...defaultProps} prs={[forkPr, upstreamPr]} />);
+		fireEvent.click(container.querySelectorAll(".remoteOnlyRow")[0]);
+		fireEvent.click(container.querySelector('button[data-tooltip="Hide this PR from view"]')!);
+		const rows = container.querySelectorAll(".remoteOnlyRow");
+		expect(rows).toHaveLength(1);
+		expect(rows[0].textContent).toContain("Upstream PR");
+	});
+
+	// Catches: one PR's in-flight diff load disabling the other PR's Diff button.
+	it("a diff load in flight on one PR leaves the same-numbered PR's button enabled", async () => {
+		let finishDiff: (v: unknown) => void = () => {};
+		mockInvoke.mockImplementation((cmd: string) =>
+			cmd === "get_pr_diff"
+				? new Promise((resolve) => {
+						finishDiff = resolve;
+					})
+				: Promise.resolve({}),
+		);
+		const { container } = render(() => <RemoteOnlyPrPopover {...defaultProps} prs={[forkPr, upstreamPr]} />);
+		const diffButton = () => container.querySelector('button[data-tooltip="View PR diff"]') as HTMLButtonElement;
+		fireEvent.click(container.querySelectorAll(".remoteOnlyRow")[0]);
+		fireEvent.click(diffButton());
+		await waitFor(() => expect(diffButton().disabled).toBe(true));
+		fireEvent.click(container.querySelectorAll(".remoteOnlyRow")[1]);
+		await waitFor(() => expect(container.textContent).toContain("Upstream PR"));
+		expect(diffButton().disabled).toBe(false);
+		finishDiff({ diff: "", headSha: "abc" });
+	});
+});

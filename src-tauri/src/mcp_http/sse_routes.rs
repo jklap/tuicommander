@@ -10,7 +10,6 @@ use serde::Deserialize;
 
 use crate::AppState;
 use crate::event_wire::{event_payload, event_type_name};
-#[cfg(test)]
 use crate::state::AppEvent;
 
 struct SseClientGuard(Arc<AppState>);

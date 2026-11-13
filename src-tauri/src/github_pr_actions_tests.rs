@@ -126,9 +126,10 @@ async fn rerun_targets_failed_jobs_only() {
 #[tokio::test]
 async fn request_changes_requires_body() {
     let state = crate::state::tests_support::make_test_app_state();
-    let error = crate::github::post_pr_review_impl(
+    let error = crate::github::post_pr_review_targeted(
         "/not-a-repo",
         7,
+        None,
         "  ",
         Some("REQUEST_CHANGES"),
         &[],

@@ -98,7 +98,7 @@ describe("useRepository", () => {
 
 		it("sends overrideBusy only when the user confirmed the live sessions", async () => {
 			mockInvoke.mockResolvedValueOnce(undefined);
-			await repo.removeWorktree("/repos/my-repo", "busy", true, false, false, undefined, undefined, true);
+			await repo.removeWorktree("/repos/my-repo", "busy", true, false, false, undefined, undefined, undefined, true);
 			expect(mockInvoke).toHaveBeenCalledWith("remove_worktree", {
 				repoPath: "/repos/my-repo",
 				workspaceId: "busy",
@@ -124,6 +124,28 @@ describe("useRepository", () => {
 				baseRepo: "/repos/my-repo",
 				branchName: "feature-y",
 			});
+		});
+	});
+
+	describe("mergePrViaGithub()", () => {
+		// Catches: merging the wrong repo's PR when a fork and its upstream share a PR number.
+		it("names the PR's base repo when one is given", async () => {
+			mockInvoke.mockResolvedValueOnce("sha");
+			await repo.mergePrViaGithub("/repos/my-repo", 7, "squash", "abc", "org/hello");
+			expect(mockInvoke).toHaveBeenCalledWith("merge_pr_via_github", {
+				repoPath: "/repos/my-repo",
+				prNumber: 7,
+				mergeMethod: "squash",
+				expectedHeadSha: "abc",
+				baseRepo: "org/hello",
+			});
+		});
+
+		it("sends no baseRepo when none is given", async () => {
+			mockInvoke.mockResolvedValueOnce("sha");
+			await repo.mergePrViaGithub("/repos/my-repo", 7, "squash", "abc");
+			const args = mockInvoke.mock.calls[0][1] as { baseRepo?: string };
+			expect(args.baseRepo).toBeUndefined();
 		});
 	});
 

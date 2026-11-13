@@ -26,8 +26,8 @@ describe("prNotificationsStore review_started", () => {
 			type: "review_started",
 			dismissed: false,
 		});
-		// Keyed by repo:pr:type so re-fires for the same PR review dedupe.
-		expect(entry?.id).toBe("/repo:42:review_started");
+		// Keyed by repo:branch:pr:type so re-fires for the same PR review dedupe.
+		expect(entry?.id).toBe("/repo:feat/x:42:review_started");
 	});
 
 	it("deduplicates repeated review_started fires for the same PR", () => {
@@ -40,7 +40,7 @@ describe("prNotificationsStore review_started", () => {
 		};
 		prNotificationsStore.add(n);
 		prNotificationsStore.add(n);
-		const matches = prNotificationsStore.state.notifications.filter((x) => x.id === "/repo:7:review_started");
+		const matches = prNotificationsStore.state.notifications.filter((x) => x.id === "/repo:feat/x:7:review_started");
 		expect(matches).toHaveLength(1);
 	});
 });

@@ -49,16 +49,8 @@ const ALLOWED = new Map([
 		"the ONE production exec: logged fallback for the native snapshot when it fails or a sudo subtree's argv is unreadable (user decisions Q1/Q5; remove once the native path has soaked)",
 	],
 	[
-		"src-tauri/src/default_app.rs::default_app_open_reaps_launcher_child",
-		"main-only Linux test (predates this guard) reading its own children's state with ps --ppid; DEFERRED (2026-10-29): port to tuic_core::process_info after the replay",
-	],
-	[
 		"src-tauri/src/agent_hook.rs::tty_resolve",
 		"headless hook shell text run by the AGENT: its live parent tty wins over an inherited $TUIC_PTY_TTY, which is the fallback when this ps cannot run (sandbox) or the parent is detached; TUIC itself execs nothing",
-	],
-	[
-		"src-tauri/src/agent_hook_launch.rs::codex_script",
-		"Codex notify script run by the AGENT, same live-tty-then-$TUIC_PTY_TTY order as tty_resolve",
 	],
 	[
 		"src-tauri/src/remote_deploy/mod.rs::verified_kill",

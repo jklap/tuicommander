@@ -18,6 +18,8 @@ const h = vi.hoisted(() => {
 		}),
 		handlers: { onCiFailed: null as ((r: string, b: string, n: number) => void) | null },
 		terminals: new Map<string, unknown>(),
+		// The PR the github store reports for the failing branch.
+		branchPr: null as { base_repo?: string } | null,
 		toastAdd: vi.fn(),
 		invoke: vi.fn().mockResolvedValue("raw ci log"),
 		sendCommand: vi.fn().mockResolvedValue(undefined),
@@ -53,6 +55,7 @@ vi.mock("../../stores/github", () => ({
 		},
 		setOnCiRecovered: () => {},
 		setOnConflict: () => {},
+		getBranchPrData: () => h.branchPr,
 	},
 }));
 vi.mock("../../stores/terminals", () => ({
@@ -88,6 +91,7 @@ describe("useCiHeal budget + re-entry guard", () => {
 
 	beforeEach(() => {
 		h.handlers.onCiFailed = null;
+		h.branchPr = null;
 		h.setCiAutoHeal.mockClear();
 		h.toastAdd.mockClear();
 		h.invoke.mockClear();
@@ -149,6 +153,20 @@ describe("useCiHeal budget + re-entry guard", () => {
 		);
 		expect(h.invoke).toHaveBeenCalledWith("fetch_ci_failure_logs", { repoPath: "/repo", branch: "main" });
 		expect(h.sendCommand).toHaveBeenCalledTimes(1);
+	});
+
+	// Catches: auto-heal reading the fork's (empty) Actions history for a PR whose workflows
+	// run in the upstream repo.
+	it("names the PR's base repo when fetching the CI logs of a fork PR opened against an upstream", async () => {
+		h.branchPr = { base_repo: "org/hello" };
+		seed({ enabled: true, attempts: 0, healing: false });
+		fireCiFailed();
+		await flush();
+		expect(h.invoke).toHaveBeenCalledWith("fetch_ci_failure_logs", {
+			repoPath: "/repo",
+			branch: "main",
+			baseRepo: "org/hello",
+		});
 	});
 
 	it("does not consume an attempt when CI logs cannot be fetched", async () => {

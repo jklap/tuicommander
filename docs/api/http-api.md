@@ -1625,7 +1625,7 @@ router only (the headless `tuic-remote` daemon exposes monitoring, not account/a
 
 ```
 GET  /github/viewer-login                       -> string (login)
-GET  /repo/ci-failure-logs?repoPath=&branch=&checkUrl=&headSha= -> string (logs; checkUrl and headSha optional)
+GET  /repo/ci-failure-logs?repoPath=&branch=&checkUrl=&headSha=&baseRepo= -> string (logs; checkUrl, headSha and baseRepo optional; baseRepo is the watched repo whose workflow runs hold the logs, e.g. the upstream of a fork)
 GET  /circleci/token                          -> CircleCiTokenStatus (no token value)
 POST /circleci/token       { token }           -> null (store read-only token)
 DELETE /circleci/token                         -> null
@@ -1708,8 +1708,10 @@ Content-Type: application/json
 POST /repo/merge-pr
 Content-Type: application/json
 
-{ "repoPath": "/path/to/repo", "prNumber": 42, "mergeMethod": "squash", "expectedHeadSha": "<head sha the caller reviewed>" }
+{ "repoPath": "/path/to/repo", "prNumber": 42, "baseRepo": "owner/name", "mergeMethod": "squash", "expectedHeadSha": "<head sha the caller reviewed>" }
 ```
+
+`baseRepo` (optional on this and every PR-number route below) is the `owner/name` of the repository the PR targets (`BranchPrStatus.base_repo`). It matters for a fork checkout whose PRs are opened against its upstream: PR numbers are per repository, so the same number can exist in both. A `baseRepo` that is not a watched repository holding that PR number is refused; with it omitted, an ambiguous number is refused too. Query-string routes take `baseRepo=` (camelCase routes) or `base_repo=` (`/repo/ci`, `/repo/pr-review-threads`, `/repo/pr-diff`).
 
 Merges a PR via the GitHub API. `mergeMethod` must be `"merge"`, `"squash"`, or `"rebase"`. `expectedHeadSha` is required and is sent to GitHub as `sha`: if the PR head moved since the caller saw it, GitHub answers 409 and the route returns an error starting with `PR head changed`; the caller must refresh and review, never retry with the new head. Returns `{"sha": "..."}` on success.
 
@@ -1719,7 +1721,7 @@ Merges a PR via the GitHub API. `mergeMethod` must be `"merge"`, `"squash"`, or 
 POST /repo/approve-pr
 Content-Type: application/json
 
-{ "repoPath": "/path/to/repo", "prNumber": 42 }
+{ "repoPath": "/path/to/repo", "prNumber": 42, "baseRepo": "owner/name" }
 ```
 
 Submits an approving review on a PR via the GitHub API.
@@ -1730,7 +1732,7 @@ Submits an approving review on a PR via the GitHub API.
 POST /repo/update-pr-branch
 Content-Type: application/json
 
-{ "repoPath": "/path/to/repo", "prNumber": 42, "expectedHeadSha": "<head sha the caller saw>" }
+{ "repoPath": "/path/to/repo", "prNumber": 42, "baseRepo": "owner/name", "expectedHeadSha": "<head sha the caller saw>" }
 ```
 
 Merges the base branch into the PR branch (GitHub update-branch, 202 accepted; the merge commit lands asynchronously). `expectedHeadSha` is required: if the PR head moved, the route returns an error starting with `PR head changed`. Returns `{"ok": true}`.
@@ -1741,7 +1743,7 @@ Merges the base branch into the PR branch (GitHub update-branch, 202 accepted; t
 POST /repo/close-pr
 Content-Type: application/json
 
-{ "repoPath": "/path/to/repo", "prNumber": 42 }
+{ "repoPath": "/path/to/repo", "prNumber": 42, "baseRepo": "owner/name" }
 ```
 
 Closes the PR without merging. Returns `{"ok": true}`.
@@ -1749,7 +1751,7 @@ Closes the PR without merging. Returns `{"ok": true}`.
 ### CI Checks
 
 ```
-GET /repo/ci?path=/path/to/repo
+GET /repo/ci?path=/path/to/repo&pr_number=42&base_repo=owner/name
 ```
 
 Returns detailed CI check list.
@@ -1757,7 +1759,7 @@ Returns detailed CI check list.
 ### Unresolved Review Threads
 
 ```
-GET /repo/pr-review-threads?path=/path/to/repo&pr_number=42
+GET /repo/pr-review-threads?path=/path/to/repo&pr_number=42&base_repo=owner/name
 ```
 
 Returns `{"bot": N, "human": M, "ego": E}`: unresolved review threads of one PR, split by the first comment. A first comment that holds `<!-- tuic:ego-review -->` (appended to every finding posted from the PR review) counts as ego, not human. One GraphQL point per page of 100 threads.
@@ -1765,7 +1767,7 @@ Returns `{"bot": N, "human": M, "ego": E}`: unresolved review threads of one PR,
 ### PR Diff
 
 ```
-GET /repo/pr-diff?path=/path/to/repo&pr=42
+GET /repo/pr-diff?path=/path/to/repo&pr=42&base_repo=owner/name
 ```
 
 Returns `{"diff": "...", "headSha": "..."}`. `headSha` is the commit the diff was read at; the call fails with 502 if the PR head moves while the diff loads.
@@ -1774,11 +1776,15 @@ Returns `{"diff": "...", "headSha": "..."}`. `headSha` is the commit the diff wa
 
 ```
 GET  /repo/merged-prs?path=&sinceTag=                      -> MergedPr[]
-POST /repo/conflict-assist   { repoPath, prNumber }        -> ConflictAssistResult
+POST /repo/conflict-assist   { repoPath, prNumber, baseRepo? } -> ConflictAssistResult
 ```
 
 `/repo/conflict-assist` creates a worktree on the PR head and rebases it onto
-the base. `status` is `clean` only when the base was refreshed from origin,
+the base. For a fork's PR opened against an upstream (`baseRepo` names the upstream) the
+head branch is fetched from the remote that holds the fork and the base from the remote
+of the upstream; the result reports both as `head_remote` and `base_remote`. A PR whose
+head lives in a repository that is not a git remote of the checkout is refused.
+`status` is `clean` only when the base was refreshed from its remote,
 `clean_unverified` when a conflict-free result used an existing tracking ref or
 local fallback, and `conflicts` when manual resolution is needed. The response
 includes `base_source`, an optional `base_warning`, the conflicted-file list,
@@ -1787,7 +1793,7 @@ and an agent prompt; it never pushes or merges. None of it calls a model.
 ### Review, changelog and improvement scan (ego)
 
 ```
-POST /repo/pr-review                 { repoPath, prNumber }   -> PrReviewResult
+POST /repo/pr-review                 { repoPath, prNumber, baseRepo? } -> PrReviewResult
 GET  /repo/changelog?path=&sinceTag=                          -> ChangelogResult
 POST /repo/improvement-scan          { repoPath, focus }      -> ImprovementScanResult
 POST /repo/create-issue-from-proposal { repoPath, proposal }  -> CreatedIssue
@@ -2490,7 +2496,7 @@ end-exclusive UTF-16 code-unit offsets within `line_text`. They can be passed
 directly to JavaScript `String.slice`, including when text before the match
 contains multibyte characters or non-BMP emoji.
 
-Sandboxed filesystem operations for the file manager panel. `/fs/read-external` (and `/fs/read-editor-external`) reads an absolute path gated to registered repository roots **plus** the user-configurable `additional_readable_dirs` list (`AppConfig`, default `["~/.claude/plans"]`) — not sandboxed to a single repo, but not arbitrary either. See `docs/backend/config.md` for the setting and `docs/backend/mcp-http.md`'s Security Model section for the gate's mechanics.
+Sandboxed filesystem operations for the file manager panel. `/fs/read-external` (and `/fs/read-editor-external`) reads an absolute path. For **network (non-loopback) clients** it is gated to registered repository roots **plus** the user-configurable `additional_readable_dirs` list (`AppConfig`, default `["~/.claude/plans"]`) — not sandboxed to a single repo, but not arbitrary either; a loopback caller (the desktop user's own browser) is not gated. See `docs/backend/config.md` for the setting and `docs/backend/mcp-http.md`'s Security Model section for the gate's mechanics.
 
 Markdown review coordinates use the text before the first unsent local save, not Git history. `baseline` may be null; the range response is null when it is absent, no lines differ, or disk no longer equals `expected`. Deletion-only hunks name a surviving adjacent line (line 1 for an empty file). IPC and HTTP share the blocking-pool implementation; read/diff errors let the UI retain the whole-file prompt. Coordinates describe the captured saved document at send time; subsequent edits can move them while an agent request waits in the idle queue.
 
@@ -4104,12 +4110,12 @@ Desktop command arguments and HTTP bodies use the same camelCase fields.
 
 | Method | Route | Arguments |
 |---|---|---|
-| GET | `/repo/pr-line-threads` | `repoPath`, `prNumber`, optional `after` |
-| GET | `/repo/pr-open-threads` | `repoPath`, `prNumber` — returns the `get_pr_open_threads` string |
+| GET | `/repo/pr-line-threads` | `repoPath`, `prNumber`, optional `baseRepo`, optional `after` |
+| GET | `/repo/pr-open-threads` | `repoPath`, `prNumber`, optional `baseRepo` — returns the `get_pr_open_threads` string |
 | GET | `/repo/pr-thread-comments` | `repoPath`, `threadId`, optional `after` |
 | POST | `/repo/pr-thread-resolved` | `{repoPath, threadId, resolved}` |
 | POST | `/repo/pr-thread-reply` | `{repoPath, threadId, body}` |
-| POST | `/repo/pr-draft-review` | `{repoPath, prNumber, draft:{headSha, body, event, comments}}` |
+| POST | `/repo/pr-draft-review` | `{repoPath, prNumber, baseRepo?, draft:{headSha, body, event, comments}}` |
 
 Draft submission rejects a moved reviewed head and pins REST `commit_id`. Thread and comment connections expose pagination; outdated threads retain null current lines. Thread shapes match `get_pr_line_threads`: comment authors carry `bot`, and each thread carries a nullable parsed `finding` (untrusted bot text).
 
@@ -4117,11 +4123,11 @@ Draft submission rejects a moved reviewed head and pins REST `commit_id`. Thread
 
 | Method | Route | Arguments |
 |---|---|---|
-| GET | `/repo/pr-action-state` | `repoPath`, `prNumber` |
-| POST | `/repo/pr-auto-merge` | `{repoPath, prNumber, enabled, mergeMethod?, expectedHeadSha?}` |
-| POST | `/repo/pr-merge-queue` | `{repoPath, prNumber, enqueued, expectedHeadSha?}` |
-| POST | `/repo/pr-merge-or-enqueue` | `{repoPath, prNumber, mergeMethod, expectedHeadSha}` |
-| POST | `/repo/pr-rerun-failed` | `{repoPath, runId}` |
+| GET | `/repo/pr-action-state` | `repoPath`, `prNumber`, optional `baseRepo` |
+| POST | `/repo/pr-auto-merge` | `{repoPath, prNumber, baseRepo?, enabled, mergeMethod?, expectedHeadSha?}` |
+| POST | `/repo/pr-merge-queue` | `{repoPath, prNumber, baseRepo?, enqueued, expectedHeadSha?}` |
+| POST | `/repo/pr-merge-or-enqueue` | `{repoPath, prNumber, baseRepo?, mergeMethod, expectedHeadSha}` |
+| POST | `/repo/pr-rerun-failed` | `{repoPath, runId, baseRepo?}` |
 
 The routes share desktop command results. Enabling auto-merge and queue entry require the reviewed head. Merge policy read failures stop writes. The legacy `/repo/post-pr-review` and pinned `/repo/pr-draft-review` reject empty REQUEST_CHANGES bodies.
 

@@ -50,7 +50,7 @@ export function useAutoDeleteBranch(deps: AutoDeleteDeps): AutoDeleteControls {
 	const repo = useRepository();
 
 	function handlePrTerminal(repoPath: string, branch: string, prNumber: number, type: "merged" | "closed"): void {
-		const key = `${repoPath}:${prNumber}`;
+		const key = `${repoPath}:${branch}:${prNumber}`;
 		if (entries.has(key)) return;
 		// Off must not consume the transition, so check before recording anything.
 		if ((repoSettingsStore.getEffective(repoPath)?.autoDeleteOnPrClose ?? "off") === "off") return;
@@ -175,11 +175,14 @@ export function useAutoDeleteBranch(deps: AutoDeleteDeps): AutoDeleteControls {
 	}
 
 	function resetKeep(repoPath: string, prNumber: number): void {
-		const key = `${repoPath}:${prNumber}`;
-		const entry = entries.get(key);
-		if (entry?.phase !== "keep") return;
-		entries.delete(key);
-		keptCheckoutsStore.remove(repoPath, entry.branch);
+		// Entries are keyed by repo+branch+PR (a fork PR and an upstream PR can share a
+		// number), but the caller only knows the repo and the PR number: clear every Keep
+		// recorded for that pair.
+		for (const [key, entry] of entries) {
+			if (entry.phase !== "keep" || key !== `${repoPath}:${entry.branch}:${prNumber}`) continue;
+			entries.delete(key);
+			keptCheckoutsStore.remove(repoPath, entry.branch);
+		}
 	}
 
 	githubStore.setOnPrTerminal(handlePrTerminal);

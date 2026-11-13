@@ -54,8 +54,7 @@ fn advertised_native_schemas_have_no_root_combinators() {
         let exact = handle_get_tool_schema_for_session(
             &state,
             &serde_json::json!({"tool_name":name}),
-            caller,
-        );
+            caller, None);
         assert_eq!(exact["name"], name);
         check("get_tool_schema", &exact);
         let search = handle_search_tools_for_session(
@@ -63,8 +62,7 @@ fn advertised_native_schemas_have_no_root_combinators() {
             &serde_json::json!({
                 "query":name, "schema_byte_budget":65536
             }),
-            caller,
-        );
+            caller, None);
         assert!(search["count"].as_u64().unwrap() > 0, "{name}");
         // A missing top_schema means the ranked tool exceeds the maximum budget: the
         // check above would then pass without inspecting the search surface (#2743-9a94).
@@ -684,7 +682,7 @@ fn agent_tool_definition_omits_spawn_recommendation_when_spawning_not_preferred(
     let agent = agent_tool_definition(false, true);
     let desc = agent["description"].as_str().unwrap();
     assert!(
-        !desc.contains("Spawn a named peer: spawn name=worker"),
+        !desc.contains("Spawn: spawn name=worker"),
         "must not steer toward spawn when spawning is not preferred"
     );
     assert!(
@@ -693,14 +691,14 @@ fn agent_tool_definition_omits_spawn_recommendation_when_spawning_not_preferred(
     );
     // Messaging guidance is untouched by the spawning flag alone.
     assert!(desc.contains("Managed PTYs auto-bind"));
-    assert!(desc.contains("Talk to it: send to=<peer>"));
+    assert!(desc.contains("Send: send to=<peer>"));
     // The action itself remains callable — "prefer" is not "disable".
     let action_enum = agent["inputSchema"]["properties"]["action"]["description"]
         .as_str()
         .unwrap();
     assert!(action_enum.contains("spawn"));
     assert!(
-        desc.contains("- spawn: Launch agent in new PTY"),
+        desc.contains("- spawn: Launch in new PTY"),
         "the spawn action bullet itself must stay documented"
     );
 }
@@ -714,7 +712,7 @@ fn agent_tool_definition_omits_messaging_recommendation_when_messaging_not_prefe
         "must not steer toward register when messaging is not preferred"
     );
     assert!(
-        !desc.contains("Talk to it: send to=<peer>"),
+        !desc.contains("Send: send to=<peer>"),
         "must not steer toward send when messaging is not preferred"
     );
     assert!(
@@ -726,7 +724,7 @@ fn agent_tool_definition_omits_messaging_recommendation_when_messaging_not_prefe
         "must explicitly redirect to the host's own native messaging"
     );
     // Spawning guidance is untouched by the messaging flag alone.
-    assert!(desc.contains("Spawn a named peer: spawn name=worker"));
+    assert!(desc.contains("Spawn: spawn name=worker"));
     // The messaging actions remain callable.
     for action in &["register", "list_peers", "send", "inbox"] {
         assert!(
@@ -876,11 +874,11 @@ fn merged_tool_definitions_agent_description_reflects_the_calling_sessions_prefe
         .unwrap();
     let desc = agent["description"].as_str().unwrap();
     assert!(
-        !desc.contains("Spawn a named peer: spawn name=worker"),
+        !desc.contains("Spawn: spawn name=worker"),
         "tools/list must not recommend spawn for a connection with prefer_tuic_spawning=false"
     );
     assert!(
-        !desc.contains("Talk to it: send to=<peer>"),
+        !desc.contains("Send: send to=<peer>"),
         "tools/list must not recommend messaging for a connection with prefer_tuic_messaging=false"
     );
     // tools/list carries main's compact description; the preference is applied
@@ -1075,7 +1073,7 @@ async fn agent_help_renders_with_the_callers_prefer_flags_directly_and_via_call_
         async move {
             crate::mcp_http::mcp_transport::handle_mcp_tool_call_for_client(
                 &state,
-                loopback_addr(),
+                loopback_addr().into(),
                 "agent",
                 &help,
                 Some(sid),
@@ -1090,7 +1088,7 @@ async fn agent_help_renders_with_the_callers_prefer_flags_directly_and_via_call_
 
     let via_meta = handle_call_tool_for_client(
         &state,
-        loopback_addr(),
+        loopback_addr().into(),
         &serde_json::json!({ "tool_name": "agent", "arguments": { "action": "help" } }),
         None,
         None,
@@ -1141,7 +1139,7 @@ fn compact_agent_description_redirects_launch_and_drops_send_duty_per_flag_combi
         );
         // Every action stays documented: prefer is never disable.
         assert!(desc.contains("\nlaunch:"), "{combo}");
-        assert!(desc.starts_with("Managed peers and mail. There is no separate swarm action."));
+        assert!(desc.starts_with("Managed peers and mail. send to=orchestrator message=<text> reaches your registered coordinator; no list_peers needed."));
     }
 }
 
@@ -1160,7 +1158,7 @@ fn merged_tool_definitions_without_session_context_stays_fully_permissive() {
     let desc = agent["description"].as_str().unwrap();
     // Main's compact listing text, untouched by any preference redirect.
     assert!(!desc.contains("This host has its own native"), "{desc}");
-    assert!(desc.starts_with("Managed peers and mail. There is no separate swarm action."));
+    assert!(desc.starts_with("Managed peers and mail. send to=orchestrator message=<text> reaches your registered coordinator; no list_peers needed."));
 }
 
 #[test]
@@ -1766,7 +1764,7 @@ fn instructions_prevent_invisible_native_subagents_for_every_client() {
     ] {
         for collapsed in [false, true] {
             let out = build_mcp_instructions_for_mode(&state, client, collapsed);
-            let rule = "- Delegate or parallelize via TUIC `agent action=spawn`/`launch`, not client-native subagents; peers stay visible, mailable and managed.";
+            let rule = "- **Multi-agent teams:** every teammate is created with `agent action=spawn`. Do not use your own built-in agent-spawning tool for this.";
             let expected_count = usize::from(fallback);
             if out.lines().filter(|line| *line == rule).count() != expected_count {
                 failures.push(format!("{client:?}, collapsed={collapsed}: expected {expected_count} MCP delegation rules"));
@@ -1976,20 +1974,21 @@ fn instructions_workflow_header_omitted_when_session_agent_repo_all_disabled() {
 }
 
 #[test]
-fn instructions_peer_count_included_when_peers_registered() {
+fn instructions_carry_no_peer_inventory_when_peers_registered() {
     let state = test_state();
     register_peer(&state, TEST_UUID_A, "worker-1", "mcp-1");
     let out = build_mcp_instructions(&state, None);
 
+    // Main keeps peer inventory out of the cached prefix: the tools serve current peers.
     assert!(
-        out.contains("**1** peer agent(s) connected"),
-        "expected peer count sentence, got: {out}"
+        !out.contains("peer agent(s) connected"),
+        "instructions must not carry a peer inventory, got: {out}"
     );
 }
 
 #[test]
 #[serial_test::serial]
-fn instructions_single_isolated_task_bullet_only_for_claude_code_client() {
+fn instructions_never_carry_the_single_isolated_task_bullet() {
     let state = test_state();
 
     let generic = build_mcp_instructions(&state, Some("some-other-agent"));
@@ -1998,10 +1997,11 @@ fn instructions_single_isolated_task_bullet_only_for_claude_code_client() {
         "CC-only bullet must not appear for non-Claude-Code clients"
     );
 
+    // Main moved the delegation hint into the launch-channel playbook, so no client gets it here.
     let claude = build_mcp_instructions(&state, Some("claude-code"));
     assert!(
-        claude.contains("Single isolated task (CC only)"),
-        "CC-only bullet must appear for Claude Code clients"
+        !claude.contains("Single isolated task (CC only)"),
+        "CC-only bullet lives in the launch playbook now"
     );
 }
 
@@ -2056,16 +2056,16 @@ fn instructions_messaging_disabled_keeps_spawn_but_omits_messaging_guidance() {
     let state = test_state();
     let out = build_mcp_instructions(&state, Some("claude-code"));
 
-    // Spawn guidance stays.
-    assert!(out.contains("- **Prefer TUICommander for peers/teams:**"));
-    assert!(out.contains("- **Same repo:** TUIC `agent action=spawn` peers to work in this repo."));
+    // Spawn guidance stays (Claude Code receives the delegation rule through its launch
+    // channel, so the isolated-branches line is the one every client sees).
     assert!(out.contains("- **Isolated branches:**"));
 
     // Messaging guidance is gone.
     assert!(!out.contains("agent action=register"));
+    assert!(!out.contains("agent action=list_peers"));
     assert!(!out.contains("`agent action=inbox`"));
-    assert!(!out.contains("`agent action=send`"));
-    assert!(!out.contains("- **Identity:**"));
+    assert!(!out.contains("- **Mail:**"));
+    assert!(!out.contains("`agent send"));
 }
 
 // ---- build_mcp_instructions prefer_tuic_spawning gating (independent of
@@ -2124,21 +2124,13 @@ fn instructions_spawning_disabled_keeps_messaging_but_omits_spawn_guidance() {
     let out = build_mcp_instructions(&state, Some("claude-code"));
 
     // Messaging guidance stays.
-    assert!(out.contains("wait with `agent action=wait`, then read `agent action=inbox`"));
-    assert!(out.contains("`agent action=inbox`"));
-    assert!(out.contains(
-        "- **Same repo:** wait with `agent action=wait`, then read `agent action=inbox`. Lifecycle notifications carry state only; workers must report results with `agent action=send`.\n"
-    ));
+    assert!(out.contains("`agent action=list_peers`"));
+    assert!(out.contains("- **Mail:**"));
 
     // Spawn guidance is gone.
-    assert!(!out.contains("`agent action=spawn` (AI)"));
+    assert!(!out.contains("every teammate is created with `agent action=spawn`"));
     assert!(!out.contains("- **Isolated branches:**"));
-    assert!(!out.contains("Prefer TUICommander for peers/teams"));
     assert!(!out.contains("Single isolated task (CC only)"));
-    // The anomaly-fallback clause is spawn-specific ("a child failed to
-    // send its result" presumes TUIC did the spawning) — must not leak
-    // into the messaging-only Same-repo bullet.
-    assert!(!out.contains("anomaly fallback"));
 }
 
 /// Regression coverage for the 2026-09-04 wording change (see
@@ -2164,16 +2156,15 @@ fn instructions_spawning_disabled_keeps_messaging_but_omits_spawn_guidance() {
 #[serial_test::serial]
 fn instructions_prefer_tuicommander_bullet_uses_the_unhedged_directive() {
     let state = test_state();
-    let out = build_mcp_instructions(&state, Some("claude-code"));
+    // A client without a launch channel gets the rule here; Claude Code gets it from its playbook.
+    let out = build_mcp_instructions(&state, Some("some-other-agent"));
 
     assert!(
         out.contains(
-            "every agent-teams teammate is created with TUIC's `agent action=spawn` MCP tool — do not use your own built-in agent-spawning tool for this"
+            "Multi-agent teams:** every teammate is created with `agent action=spawn`"
         ),
         "expected the unhedged directive wording, got: {out}"
     );
-    // The label must survive unchanged — other tests grep for it.
-    assert!(out.contains("- **Prefer TUICommander for peers/teams:**"));
     // The old hedged phrasing must not reappear.
     assert!(!out.contains("whenever spawning an AI peer that should be observable"));
 }
@@ -2525,8 +2516,7 @@ fn mcp_instruction_surface_bytes_stay_within_budget() {
         serde_json::to_string(
             &crate::mcp_http::mcp_transport_catalogue::filtered_native_tools_for_role(
                 &state,
-                crate::mcp_http::caller_role::CallerRole::ManagedChild,
-            )
+                crate::mcp_http::caller_role::CallerRole::ManagedChild, true, true)
             .into_iter()
             .find(|tool| tool["name"] == "agent")
             .expect("agent listed for a managed child"),
@@ -2613,7 +2603,11 @@ fn mcp_instruction_surface_bytes_stay_within_budget() {
     // eight progress actions in the same change. Raising a budget for prose
     // that carries no obligation is not the same trade.
     // #2441-bbcf adds one cross-client delegation duty (137 bytes), not a catalogue.
-    // Reserve only the next 64-byte boundary; other instruction sections stay unchanged.
+    // wip keeps its richer marker/protocol prose on top of main's compact instructions, so the
+    // caps are 2,496 / 2,560: measured at the 5-byte release version (classic empty 2,420 B,
+    // collapsed empty 2,483 B) plus ~2%, rounded up to the next 64 bytes. Main's own caps are
+    // 1,728 / 1,792. The 2026-10-08 USER DECISION ("Increase the budget and keep wip's prose")
+    // still governs: trim prose to lower them, do not raise them again.
     //
     // Both empty-state budgets moved again on 2026-10-08 (classic 1600 ->
     // 3264, collapsed 1664 -> 3328), deliberately, by the user's decision to
@@ -2641,11 +2635,11 @@ fn mcp_instruction_surface_bytes_stay_within_budget() {
     const BASELINE_VER_LEN: usize = 5; // e.g. "1.8.0"
     let ver_overhead = ver.len().saturating_sub(BASELINE_VER_LEN) * 2;
     assert!(
-        instructions_classic_empty <= 1728 + ver_overhead,
+        instructions_classic_empty <= 2496 + ver_overhead,
         "classic instructions grew past their budget — {measured}"
     );
     assert!(
-        instructions_collapsed_empty <= 1792 + ver_overhead,
+        instructions_collapsed_empty <= 2560 + ver_overhead,
         "collapsed instructions grew past their budget — {measured}"
     );
     assert!(
@@ -4114,8 +4108,7 @@ async fn native_help_preserves_every_displaced_rule_2069() {
         let definition = handle_get_tool_schema_for_session(
             &state,
             &serde_json::json!({"tool_name":name}),
-            caller,
-        );
+            caller, None);
         let compact = definition["description"].as_str().unwrap();
         if compact.len() >= original.as_str().unwrap().len() {
             failures.push(format!("{name}: description was not shortened"));
@@ -4266,7 +4259,7 @@ fn managed_child_progress_instructions_route_to_parent_for_every_client() {
 /// Catches: the always-loaded progress description overriding child-specific instructions.
 #[test]
 fn managed_child_progress_tool_description_excludes_children_from_user_duty() {
-    let tools = native_tool_definitions();
+    let tools = native_tool_definitions(true, true);
     let tool = tools
         .as_array()
         .unwrap()
@@ -4282,7 +4275,7 @@ fn managed_child_progress_tool_description_excludes_children_from_user_duty() {
 // while a session caller's tab belongs to that session's project.
 #[test]
 fn ui_tool_description_states_which_project_a_tab_opens_in() {
-    let definitions = native_tool_definitions();
+    let definitions = native_tool_definitions(true, true);
     let ui = definitions
         .as_array()
         .unwrap()
@@ -4370,8 +4363,7 @@ fn workflow_schema_keeps_a_margin_under_the_search_budget() {
     let exact = handle_get_tool_schema_for_session(
         &state,
         &serde_json::json!({"tool_name":"workflow"}),
-        caller,
-    );
+        caller, None);
     let size = serde_json::to_string(&exact["inputSchema"]).unwrap().len();
     assert!(
         size + MARGIN <= BUDGET,
@@ -4385,7 +4377,7 @@ fn workflow_compact_advertisement_and_story_search_2849() {
     let state = test_state();
     let caller = every_tool_caller(&state);
     rebuild_tool_search_index(&state);
-    let tools = native_tool_definitions();
+    let tools = native_tool_definitions(true, true);
     for name in ["workflow", "story"] {
         let tool = tools
             .as_array()
@@ -4403,8 +4395,7 @@ fn workflow_compact_advertisement_and_story_search_2849() {
         let result = handle_search_tools_for_session(
             &state,
             &serde_json::json!({"query":query,"limit":1}),
-            caller,
-        );
+            caller, None);
         assert_eq!(result["results"][0]["name"], "story", "{query}: {result}");
     }
     let workflow = tools

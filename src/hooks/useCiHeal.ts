@@ -151,7 +151,14 @@ export function useCiHeal(): void {
 		const body =
 			kind === "conflict"
 				? "This PR is blocked by merge conflicts with its base branch.\n\nPlease resolve the merge conflicts: integrate the latest base branch, resolve each conflicting file preserving the intent from both sides, then commit and push."
-				: buildCiFixPrompt(await invoke<string>("fetch_ci_failure_logs", { repoPath, branch }));
+				: buildCiFixPrompt(
+						await invoke<string>("fetch_ci_failure_logs", {
+							repoPath,
+							branch,
+							// A fork's PR runs its workflows in the upstream repo: read the logs there.
+							baseRepo: githubStore.getBranchPrData(repoPath, branch)?.base_repo,
+						}),
+					);
 		return `\n\n${body}\n\n`;
 	}
 
