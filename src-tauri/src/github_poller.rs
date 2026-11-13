@@ -278,6 +278,7 @@ async fn poll_loop(
                     Some(PollerCmd::SetPrHideDrafts(hide)) => {
                         if hide != pr_hide_drafts {
                             pr_hide_drafts = hide;
+                            state.github.pr_hide_drafts.store(hide, std::sync::atomic::Ordering::Relaxed);
                             pending_poll_at = Some(tokio::time::Instant::now());
                         }
                     }

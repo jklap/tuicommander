@@ -317,6 +317,7 @@ function createGitHubStore() {
 					!n.dismissed &&
 					n.connectionId === origin.connection &&
 					n.repoPath === t.repo_path &&
+					n.branch === t.branch &&
 					n.prNumber === t.pr_number &&
 					n.type === t.type,
 			);
@@ -336,6 +337,7 @@ function createGitHubStore() {
 						!n.dismissed &&
 						n.connectionId === origin.connection &&
 						n.repoPath === t.repo_path &&
+						n.branch === t.branch &&
 						n.prNumber === t.pr_number &&
 						n.type === t.type,
 				)

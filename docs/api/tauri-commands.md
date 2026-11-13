@@ -1015,7 +1015,7 @@ the prepared launch prompt, counting escaped stdout bytes before framing/marker.
 - `merge_or_enqueue_pr(repoPath, prNumber, baseRepo?, mergeMethod, expectedHeadSha)`: `{action:"enqueued", mergeQueueEntry}` or `{action:"merged", sha}`. Queue-required branches enqueue.
 - `rerun_failed_pr_jobs(repoPath, runId, baseRepo?)`: `{accepted:true, runId}` after GitHub accepts the failed-job rerun, not a claim the new run finished.
 
-Every PR-number command above (and `post_pr_review`) takes an optional `baseRepo` (`owner/name`): the repository the PR targets. It matters for a fork checkout whose PRs are opened against the upstream, where the same number can exist in both repos. Send `BranchPrStatus.base_repo`; see [GitHub backend](../backend/github.md#fork-checkouts-pull-requests-opened-against-the-upstream). Omitted, the backend resolves from its last poll and refuses an ambiguous number.
+Every PR-number command above (and `post_pr_review`), except the thread-id commands (`get_pr_thread_comments`, `set_pr_thread_resolved`, `reply_pr_thread`: GraphQL node ids are repo independent), takes an optional `baseRepo` (`owner/name`): the repository the PR targets. It matters for a fork checkout whose PRs are opened against the upstream, where the same number can exist in both repos. Send `BranchPrStatus.base_repo`; see [GitHub backend](../backend/github.md#fork-checkouts-pull-requests-opened-against-the-upstream). Omitted, the backend resolves from its last poll and refuses an ambiguous number.
 
 `post_pr_review` and `submit_pr_draft_review` require a nonempty body for REQUEST_CHANGES and reject unsupported event values.
 

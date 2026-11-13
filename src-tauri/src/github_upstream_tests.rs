@@ -212,14 +212,26 @@ fn target(owner: &str, repo: &str) -> Option<(String, String)> {
 fn a_pr_that_lives_upstream_targets_its_base_repository() {
     let prs = snapshot(&[(1, "me/hello"), (42, "org/hello")]);
     assert_eq!(
-        pick_pr_target(&prs, 42, None, "me/hello"),
+        pick_pr_target(&prs, 42, Some("org/hello"), "me/hello"),
         Ok(target("org", "hello"))
     );
-    // A PR of the checkout's own repository resolves to itself.
-    assert_eq!(
-        pick_pr_target(&prs, 1, None, "me/hello"),
-        Ok(target("me", "hello"))
+    // A PR of the checkout's own repository is "the bound repository" (no override).
+    assert_eq!(pick_pr_target(&prs, 1, None, "me/hello"), Ok(None));
+}
+
+// Catches: a hint-less approve/close/review landing on the upstream's PR #N because that is
+// the only one in the (newest-PRs-only) snapshot, when the fork's own older PR #N was meant.
+#[test]
+fn a_hint_less_caller_is_not_sent_to_the_only_repository_that_happens_to_be_in_the_snapshot() {
+    let prs = snapshot(&[(1, "me/hello"), (42, "org/hello")]);
+    let err = pick_pr_target(&prs, 42, None, "me/hello").unwrap_err();
+    assert!(
+        err.contains("org/hello") && err.contains("baseRepo"),
+        "{err}"
     );
+    // The checkout's own PR needs no hint, and neither does a number nobody has.
+    assert_eq!(pick_pr_target(&prs, 1, None, "me/hello"), Ok(None));
+    assert_eq!(pick_pr_target(&prs, 9, None, "me/hello"), Ok(None));
 }
 
 #[test]
@@ -843,18 +855,40 @@ async fn an_expired_snapshot_is_repolled_before_choosing_a_pr_target() {
     let account = github_com_account(&fixture.state);
     assert!(fixture.state.git_cache.github_status.get(&path).is_none());
 
-    let resolved = resolve_pr_target(&fixture.state, &account, &path, 42, None, "me", "hello")
-        .await
-        .unwrap();
+    let resolved = resolve_pr_target(
+        &fixture.state,
+        &account,
+        &path,
+        42,
+        Some("org/hello"),
+        "me",
+        "hello",
+    )
+    .await
+    .unwrap();
     assert_eq!(resolved, ("org".to_string(), "hello".to_string()));
     assert_eq!(queries(&mut fixture).len(), 1, "exactly one re-poll");
 
     // Warm cache: no further request.
-    let again = resolve_pr_target(&fixture.state, &account, &path, 42, None, "me", "hello")
-        .await
-        .unwrap();
+    let again = resolve_pr_target(
+        &fixture.state,
+        &account,
+        &path,
+        42,
+        Some("org/hello"),
+        "me",
+        "hello",
+    )
+    .await
+    .unwrap();
     assert_eq!(again, resolved);
     assert!(queries(&mut fixture).is_empty());
+    // Without a hint the same lookup is refused: the number was only found upstream.
+    assert!(
+        resolve_pr_target(&fixture.state, &account, &path, 42, None, "me", "hello")
+            .await
+            .is_err()
+    );
     fixture.close().await;
 }
 
@@ -1178,22 +1212,38 @@ async fn every_pr_rest_action_hits_the_repository_the_pr_lives_in() {
     let mut h = rest_harness().await;
     let (state, path) = (h.fixture.state.clone(), h.path.clone());
 
-    approve_pr_targeted(&path, 42, None, &state).await.unwrap();
-    close_pr_targeted(&path, 42, None, &state).await.unwrap();
-    update_pr_branch_targeted(&path, 42, None, "abc", &state)
+    approve_pr_targeted(&path, 42, Some("org/hello"), &state)
         .await
         .unwrap();
-    let sha = merge_pr_github_targeted(&path, 42, None, "squash", "abc", &state)
+    close_pr_targeted(&path, 42, Some("org/hello"), &state)
+        .await
+        .unwrap();
+    update_pr_branch_targeted(&path, 42, Some("org/hello"), "abc", &state)
+        .await
+        .unwrap();
+    let sha = merge_pr_github_targeted(&path, 42, Some("org/hello"), "squash", "abc", &state)
         .await
         .unwrap();
     assert_eq!(sha, "mergesha");
-    let refs = get_pr_refs_targeted(&path, 42, None, &state).await.unwrap();
+    let refs = get_pr_refs_targeted(&path, 42, Some("org/hello"), &state)
+        .await
+        .unwrap();
     assert_eq!(refs.base_repo.as_deref(), Some("org/hello"));
     assert_eq!(refs.head_repo.as_deref(), Some("me/hello"));
     assert!(refs.head_from_fork);
-    get_pr_diff_targeted(&path, 42, None, &state).await.unwrap();
-    let _ =
-        post_pr_review_targeted(&path, 42, None, "looks good", Some("COMMENT"), &[], &state).await;
+    get_pr_diff_targeted(&path, 42, Some("org/hello"), &state)
+        .await
+        .unwrap();
+    let _ = post_pr_review_targeted(
+        &path,
+        42,
+        Some("org/hello"),
+        "looks good",
+        Some("COMMENT"),
+        &[],
+        &state,
+    )
+    .await;
 
     assert_eq!(
         rest_seen(&mut h),
@@ -1300,9 +1350,10 @@ async fn reruns_and_pr_graphql_target_the_named_repository() {
     );
 
     // GraphQL-backed PR calls carry the target repo in their variables.
-    let pr_api = crate::github_pr_api::RepoApi::resolve_for_pr(&state, &path, 42, None)
-        .await
-        .unwrap();
+    let pr_api =
+        crate::github_pr_api::RepoApi::resolve_for_pr(&state, &path, 42, Some("org/hello"))
+            .await
+            .unwrap();
     assert_eq!(
         (pr_api.owner.as_str(), pr_api.repo.as_str()),
         ("org", "hello")
@@ -1310,14 +1361,25 @@ async fn reruns_and_pr_graphql_target_the_named_repository() {
     assert_eq!(pr_api.variables(42)["owner"], "org");
     assert_eq!(pr_api.variables(42)["repo"], "hello");
     let _ = crate::github_pr_actions::action_state(&pr_api, pr_api.variables(42)).await;
-    let _ = get_ci_checks_targeted(&path, 42, None, &state).await;
-    let _ = get_pr_review_threads_targeted(&path, 42, None, &state).await;
+    let _ = get_ci_checks_targeted(&path, 42, Some("org/hello"), &state).await;
+    let _ = get_pr_review_threads_targeted(&path, 42, Some("org/hello"), &state).await;
+    let _ = crate::github_review_threads::get_pr_line_threads_targeted(
+        &path,
+        42,
+        Some("org/hello"),
+        None,
+        &state,
+    )
+    .await;
+    let _ =
+        crate::pr_open_threads::get_pr_open_threads_targeted(&path, 42, Some("org/hello"), &state)
+            .await;
     let mut graphql_owners = Vec::new();
     while let Ok(request) = h.fixture.requests.try_recv() {
         graphql_owners.push(request["variables"]["owner"].as_str().map(str::to_string));
     }
     assert!(
-        graphql_owners.iter().flatten().all(|o| o == "org") && graphql_owners.len() >= 3,
+        graphql_owners.len() >= 5 && graphql_owners.iter().all(|o| o.as_deref() == Some("org")),
         "{graphql_owners:?}"
     );
     h.fixture.close().await;
@@ -1329,8 +1391,10 @@ async fn ai_review_and_conflict_assist_read_the_upstream_pr() {
     let mut h = rest_harness().await;
     let (state, path) = (h.fixture.state.clone(), h.path.clone());
 
-    // The review fetches the PR's diff from the upstream (an empty diff is answered locally).
-    let review = crate::pr_review::run_pr_review_impl(path.clone(), 42, None, &state).await;
+    // The review fetches the PR's diff from the upstream. The loopback body carries no diff
+    // headers, so there are no files to review and the model is never asked.
+    let review =
+        crate::pr_review::run_pr_review_impl(path.clone(), 42, Some("org/hello"), &state).await;
     assert!(review.is_ok(), "{review:?}");
     assert_eq!(
         rest_seen(&mut h),
@@ -1339,9 +1403,14 @@ async fn ai_review_and_conflict_assist_read_the_upstream_pr() {
 
     // Conflict assist reads the refs from the upstream, then needs a remote for it: this
     // checkout only has `origin`, so it is refused by name instead of rebasing onto the fork.
-    let err = crate::conflict_assist::start_conflict_assist_impl(path.clone(), 42, None, &state)
-        .await
-        .unwrap_err();
+    let err = crate::conflict_assist::start_conflict_assist_impl(
+        path.clone(),
+        42,
+        Some("org/hello"),
+        &state,
+    )
+    .await
+    .unwrap_err();
     assert!(
         err.contains("org/hello") && err.contains("needs a git remote"),
         "{err}"
@@ -1367,4 +1436,186 @@ async fn ai_review_and_conflict_assist_read_the_upstream_pr() {
         "{err}"
     );
     h.fixture.close().await;
+}
+
+// ---------------------------------------------------------------------------
+// Re-poll limits, viewer-search dedupe, and merged PRs without a local branch
+// ---------------------------------------------------------------------------
+
+// Catches: a client looping on an unknown `baseRepo` forcing a full poll per request.
+#[tokio::test]
+async fn an_unknown_hint_cannot_force_a_poll_per_request() {
+    let repo = repo_with_remotes(&[("origin", FORK)]);
+    let path = repo.path().to_string_lossy().into_owned();
+    // The fork never answers, so no snapshot is ever produced and each call would re-poll.
+    let mut denied = forge(Some("org/hello"));
+    denied.fork_denied = true;
+    let mut fixture = serve(denied).await;
+    let account = github_com_account(&fixture.state);
+    for _ in 0..5 {
+        let _ = resolve_pr_target(
+            &fixture.state,
+            &account,
+            &path,
+            42,
+            Some("org/hello"),
+            "me",
+            "hello",
+        )
+        .await;
+        let _ = resolve_watched_repo(
+            &fixture.state,
+            &account,
+            &path,
+            Some("org/hello"),
+            "me",
+            "hello",
+        )
+        .await;
+    }
+    assert_eq!(
+        queries(&mut fixture).len(),
+        1,
+        "one poll per checkout per interval"
+    );
+    fixture.close().await;
+}
+
+// Catches: refusing an unwatched repo by replacing a perfectly good snapshot with a re-poll.
+#[tokio::test]
+async fn an_existing_snapshot_is_never_replaced_just_to_refuse_an_unwatched_repo() {
+    let mut h = rest_harness().await;
+    let (state, path) = (h.fixture.state.clone(), h.path.clone());
+    let account = github_com_account(&state);
+    let before = state.git_cache.github_status.get(&path).unwrap().len();
+    let err = resolve_watched_repo(
+        &state,
+        &account,
+        &path,
+        Some("torvalds/linux"),
+        "me",
+        "hello",
+    )
+    .await
+    .unwrap_err();
+    assert!(
+        err.contains("not a repository this checkout watches"),
+        "{err}"
+    );
+    assert!(h.fixture.requests.try_recv().is_err(), "no poll was made");
+    assert_eq!(
+        state.git_cache.github_status.get(&path).unwrap().len(),
+        before
+    );
+    h.fixture.close().await;
+}
+
+// Catches: an out-of-band re-poll ignoring the user's "hide drafts" setting and overwriting
+// the shared cache with a differently filtered list.
+#[tokio::test]
+async fn a_repoll_honours_the_hide_drafts_setting() {
+    let repo = repo_with_remotes(&[("origin", FORK)]);
+    let path = repo.path().to_string_lossy().into_owned();
+    for hide in [true, false] {
+        let mut fixture = serve(forge(Some("org/hello"))).await;
+        fixture
+            .state
+            .github
+            .pr_hide_drafts
+            .store(hide, std::sync::atomic::Ordering::Relaxed);
+        let account = github_com_account(&fixture.state);
+        let _ = resolve_pr_target(
+            &fixture.state,
+            &account,
+            &path,
+            42,
+            Some("org/hello"),
+            "me",
+            "hello",
+        )
+        .await;
+        let sent = queries(&mut fixture);
+        assert!(!sent.is_empty());
+        assert_eq!(
+            sent[0].contains("-is:draft"),
+            hide,
+            "hide={hide}: {}",
+            sent[0]
+        );
+        fixture.close().await;
+    }
+}
+
+// Catches: the same upstream PR surfacing twice when both the newest-N list and the viewer
+// search return it.
+#[tokio::test]
+async fn a_pr_found_by_both_the_list_and_the_viewer_search_appears_once() {
+    let state = crate::state::tests_support::make_test_app_state();
+    let mut results = seeded_results();
+    let mut via_search = pr_node(42, "feature", "org/hello", "me/hello");
+    via_search["repository"] = serde_json::json!({"nameWithOwner": "org/hello"});
+    let response = serde_json::json!({"data": {
+        "u0": {"pullRequests": {"nodes": [pr_node(42, "feature", "org/hello", "me/hello")]}},
+        "viewerPrs": {"nodes": [via_search]},
+    }});
+    adopt(&state, response, "me", &mut results).await;
+    assert_eq!(
+        results["/work"].iter().filter(|p| p.number == 42).count(),
+        1
+    );
+}
+
+// Catches: a merged upstream PR being dropped because its branch is not checked out here.
+#[tokio::test]
+async fn a_merged_upstream_pr_whose_branch_is_not_local_is_kept() {
+    let repo = crate::state::tests_support::create_temp_git_repo();
+    let path = repo.path().to_string_lossy().into_owned();
+    let state = crate::state::tests_support::make_test_app_state();
+    let mut node = pr_node(42, "no-such-local-branch", "org/hello", "me/hello");
+    node["state"] = serde_json::json!("MERGED");
+    node["headRefOid"] = serde_json::json!("1".repeat(40));
+    let response = serde_json::json!({"data": {"u0": {"pullRequests": {"nodes": [node]}}}});
+    let own = parse_pr_node(&pr_node(1, "other", "me/hello", "me/hello")).unwrap();
+    let mut results: std::collections::HashMap<String, Vec<BranchPrStatus>> =
+        std::iter::once((path.clone(), vec![own])).collect();
+    adopt_upstream_prs(
+        &state,
+        &github_com_account(&state),
+        &[(path.clone(), "me".into(), "hello".into())],
+        &[(path.clone(), "org".into(), "hello".into())],
+        &[("u0".into(), path.clone())],
+        true,
+        "",
+        &response,
+        &mut results,
+    )
+    .await;
+    assert!(results[&path].iter().any(|p| p.number == 42));
+}
+
+// Catches: the choice among several remotes for one repository depending on config order.
+#[test]
+fn remote_name_in_prefers_origin_then_the_first_listed() {
+    let host = crate::github_account::parse_remote_url(FORK).unwrap().0;
+    let remotes = |names: &[&str]| -> Vec<(String, String)> {
+        names
+            .iter()
+            .map(|n| (n.to_string(), UPSTREAM.to_string()))
+            .collect()
+    };
+    assert_eq!(
+        remote_name_in(&remotes(&["zzz", "upstream"]), &host, "org", "hello"),
+        Some("zzz".into()),
+        "first listed when none is origin"
+    );
+    assert_eq!(
+        remote_name_in(
+            &remotes(&["upstream", "origin", "zzz"]),
+            &host,
+            "org",
+            "hello"
+        ),
+        Some("origin".into())
+    );
+    assert_eq!(remote_name_in(&[], &host, "org", "hello"), None);
 }

@@ -2417,6 +2417,11 @@ pub(crate) struct GitHubState {
     /// viewer-login cache + rate budget, keyed by account id. github.com uses the
     /// global fields above, so a github.com-only user is byte-for-byte unchanged.
     pub(crate) ghe_state: DashMap<String, crate::github::GheAccountState>,
+    /// The user's "hide draft PRs" setting as the poller last received it. The poller keeps
+    /// its own copy; this mirror lets an out-of-band re-poll (a PR action whose snapshot
+    /// expired) poll with the same settings instead of overwriting the shared cache with a
+    /// differently filtered result.
+    pub(crate) pr_hide_drafts: std::sync::atomic::AtomicBool,
 }
 
 impl Default for GitHubState {
@@ -2432,6 +2437,7 @@ impl Default for GitHubState {
             viewer_login: parking_lot::RwLock::new(None),
             // u32::MAX means "no constraint known yet", not "no budget left".
             rate_limit_remaining: std::sync::atomic::AtomicU32::new(u32::MAX),
+            pr_hide_drafts: std::sync::atomic::AtomicBool::new(false),
             ghe_state: dashmap::DashMap::new(),
         }
     }
@@ -5394,6 +5400,9 @@ pub(crate) struct GitCacheState {
     /// expired; it lives for the process. An entry exists only once GitHub answered for the
     /// repository, so an inaccessible repo is retried.
     pub(crate) github_repo_parents: DashMap<String, Option<String>>,
+    /// When each checkout last had an out-of-band re-poll (`github::repoll_checkout`), so a
+    /// caller looping on an unknown `baseRepo` cannot force a full poll per request.
+    pub(crate) github_repoll_at: DashMap<String, Instant>,
     pub(crate) github_repo_access_errors: DashMap<String, crate::github::RepoAccessFailure>,
     /// Settled review-thread totals of PRs with more threads than the batch poll reads, keyed by
     /// "host/owner/name#number". Not a TTL cache: an entry is valid while the PR's `updatedAt` and head
@@ -5418,6 +5427,7 @@ impl GitCacheState {
             worktree_paths: build_git_cache(GIT_CACHE_TTL, Arc::clone(&ttl_fallbacks)),
             github_repo_cooldown: DashMap::new(),
             github_repo_parents: DashMap::new(),
+            github_repoll_at: DashMap::new(),
             github_repo_access_errors: DashMap::new(),
             settled_review_threads: DashMap::new(),
             ttl_fallbacks,

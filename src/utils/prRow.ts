@@ -35,3 +35,8 @@ export function prReference(pr: Pick<BranchPrStatus, "url" | "number">): string 
 export function canUpdatePrBranch(pr: BranchPrStatus): boolean {
 	return pr.state?.toUpperCase() === "OPEN" && pr.merge_state_status === "BEHIND" && !!pr.head_ref_oid;
 }
+
+/** Identity of a PR within one list: numbers are per repository, so a fork PR and an upstream PR can share one. */
+export function prKey(pr: Pick<BranchPrStatus, "number" | "base_repo">): string {
+	return `${pr.base_repo ?? ""}#${pr.number}`;
+}

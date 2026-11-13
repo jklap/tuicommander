@@ -268,3 +268,46 @@ describe("RemoteOnlyPrPopover — baseRepo forwarding", () => {
 		);
 	});
 });
+
+describe("RemoteOnlyPrPopover — PRs sharing a number across repositories", () => {
+	beforeEach(() => {
+		vi.clearAllMocks();
+		repoSettingsStore.getOrCreate("/repo", "Repo");
+		repoSettingsStore.update("/repo", { prMergeStrategy: null });
+	});
+
+	const forkPr = { ...mergeablePr, title: "Fork PR", branch: "feature/fork", base_repo: "fork/repo" };
+	const upstreamPr = { ...mergeablePr, title: "Upstream PR", branch: "feature/up", base_repo: "upstream/repo" };
+
+	// Catches: dismissing fork #42 also hiding upstream #42.
+	it("dismissing one PR does not hide the other with the same number", () => {
+		mockInvoke.mockResolvedValue({});
+		const { container } = render(() => <RemoteOnlyPrPopover {...defaultProps} prs={[forkPr, upstreamPr]} />);
+		fireEvent.click(container.querySelectorAll(".remoteOnlyRow")[0]);
+		fireEvent.click(container.querySelector('button[data-tooltip="Hide this PR from view"]')!);
+		const rows = container.querySelectorAll(".remoteOnlyRow");
+		expect(rows).toHaveLength(1);
+		expect(rows[0].textContent).toContain("Upstream PR");
+	});
+
+	// Catches: one PR's in-flight diff load disabling the other PR's Diff button.
+	it("a diff load in flight on one PR leaves the same-numbered PR's button enabled", async () => {
+		let finishDiff: (v: unknown) => void = () => {};
+		mockInvoke.mockImplementation((cmd: string) =>
+			cmd === "get_pr_diff"
+				? new Promise((resolve) => {
+						finishDiff = resolve;
+					})
+				: Promise.resolve({}),
+		);
+		const { container } = render(() => <RemoteOnlyPrPopover {...defaultProps} prs={[forkPr, upstreamPr]} />);
+		const diffButton = () => container.querySelector('button[data-tooltip="View PR diff"]') as HTMLButtonElement;
+		fireEvent.click(container.querySelectorAll(".remoteOnlyRow")[0]);
+		fireEvent.click(diffButton());
+		await waitFor(() => expect(diffButton().disabled).toBe(true));
+		fireEvent.click(container.querySelectorAll(".remoteOnlyRow")[1]);
+		await waitFor(() => expect(container.textContent).toContain("Upstream PR"));
+		expect(diffButton().disabled).toBe(false);
+		finishDiff({ diff: "", headSha: "abc" });
+	});
+});

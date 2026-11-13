@@ -642,7 +642,15 @@ fn pick_pr_target(
     }
     match bases.as_slice() {
         [] => Ok(None),
-        [one] => Ok(split(one)),
+        [one] if same_repo(one, bound) => Ok(None),
+        // The snapshot only holds the newest PRs, so "only upstream has a PR #N" does not
+        // prove the checkout's own repository has none: its #N may simply be older than the
+        // window. An action that is not pinned to a head SHA (approve, close, review) could
+        // land on the wrong PR, so a hint-less caller must say which repository it means.
+        [one] => Err(format!(
+            "PR #{pr_number} was found in {one}, not in this checkout's own repository ({bound}); \
+             the caller must say which one it means (baseRepo)"
+        )),
         _ => Err(format!(
             "PR #{pr_number} exists in more than one watched repository ({}); \
              the caller must say which one (baseRepo)",
@@ -704,11 +712,30 @@ pub(crate) async fn resolve_pr_target(
 /// Run one poll of a single checkout so its PR snapshot and fork parentage are fresh.
 /// Best-effort: a failure is logged and the caller falls back to what it has.
 async fn repoll_checkout(state: &AppState, repo_path: &str) {
+    // One out-of-band poll per checkout per interval: the callers are driven by client input
+    // (an unknown `baseRepo`), so an unthrottled loop would burn the user's rate budget.
+    const REPOLL_MIN_INTERVAL: std::time::Duration = std::time::Duration::from_secs(10);
+    let now = Instant::now();
+    if state
+        .git_cache
+        .github_repoll_at
+        .get(repo_path)
+        .is_some_and(|last| now.duration_since(*last) < REPOLL_MIN_INTERVAL)
+    {
+        return;
+    }
+    state
+        .git_cache
+        .github_repoll_at
+        .insert(repo_path.to_string(), now);
     if let Err(e) = get_all_batch_with_intake_impl(
         &[repo_path.to_string()],
         false,
         "disabled",
-        false,
+        state
+            .github
+            .pr_hide_drafts
+            .load(std::sync::atomic::Ordering::Relaxed),
         state,
         false,
     )
@@ -763,7 +790,12 @@ pub(crate) async fn resolve_watched_repo(
     if let Some(found) = watched(state) {
         return Ok(found);
     }
-    repoll_checkout(state, repo_path).await;
+    // A snapshot that exists already carries everything the poller learned (the parent is
+    // cached in the same cycle), so the repository is simply not watched: polling again
+    // would only replace a good snapshot. Learn the watch set only when there is none.
+    if state.git_cache.github_status.get(repo_path).is_none() {
+        repoll_checkout(state, repo_path).await;
+    }
     watched(state).ok_or_else(|| format!("{hint} is not a repository this checkout watches"))
 }
 
@@ -1606,6 +1638,11 @@ fn parent_cache_key(
     format!("{}/{owner}/{name}", account.host.as_str()).to_lowercase()
 }
 
+// DEFERRED (2026-11-12) — an upstream that stays unreachable (a stale `upstream` remote, a
+// private parent GitHub returns as null) is queried on every poll: the `u{i}` aliases skip
+// `record_repo_access`, so there is no cooldown and no UI error. The cost is one extra,
+// cheap, null alias per cycle; add a cooldown keyed like `github_repo_cooldown` if a real
+// report shows it matters.
 /// The upstream repositories to poll next to `repos`, as `(local path, owner, name)`:
 /// each checkout's `upstream` remote plus the parent GitHub reported for its repository
 /// on an earlier poll (cached, never re-asked). Duplicates (the usual case: the remote

@@ -18,6 +18,7 @@ import { onClickKeyDown } from "../../utils/a11y";
 import { writeClipboard } from "../../utils/clipboard";
 import { closeBranchTerminalPtys } from "../../utils/closeBranchTerminals";
 import { handleOpenUrl } from "../../utils/openUrl";
+import { prKey } from "../../utils/prRow";
 import { IssueDetailContent } from "../IssueDetailPopover/IssueDetailContent";
 import {
 	type CleanupStep,
@@ -78,7 +79,7 @@ export const GitHubPanel: Component<{
 	const [expandedPr, setExpandedPr] = createSignal<string | null>(null);
 	// Dismissed PRs per section — lifted for the same reason, so the navigable
 	// row list cannot include a PR the section has hidden.
-	const [dismissedPrs, setDismissedPrs] = createSignal<Record<string, number[]>>({});
+	const [dismissedPrs, setDismissedPrs] = createSignal<Record<string, string[]>>({});
 	const [closingIssue, setClosingIssue] = createSignal<number | null>(null);
 	const [issueActionError, setIssueActionError] = createSignal<{ num: number; msg: string } | null>(null);
 	// Changelog modal visibility. The modal runs the ego turn itself on mount.
@@ -191,11 +192,11 @@ export const GitHubPanel: Component<{
 	const dismissedIn = (id: SectionId) => dismissedPrs()[id] ?? [];
 	const visiblePrsFor = (id: SectionId, prs: BranchPrStatus[]) => {
 		const hidden = dismissedIn(id);
-		return hidden.length === 0 ? prs : prs.filter((pr) => !hidden.includes(pr.number));
+		return hidden.length === 0 ? prs : prs.filter((pr) => !hidden.includes(prKey(pr)));
 	};
 
-	const handleDismissPr = (id: SectionId, prNumber: number) =>
-		setDismissedPrs((prev) => ({ ...prev, [id]: [...(prev[id] ?? []), prNumber] }));
+	const handleDismissPr = (id: SectionId, pr: BranchPrStatus) =>
+		setDismissedPrs((prev) => ({ ...prev, [id]: [...(prev[id] ?? []), prKey(pr)] }));
 	const handleShowDismissedPrs = (id: SectionId) => setDismissedPrs((prev) => ({ ...prev, [id]: [] }));
 
 	const visibleMyPrs = createMemo(() => visiblePrsFor("my-prs", myPrs()));
@@ -474,7 +475,7 @@ export const GitHubPanel: Component<{
 								onToggleExpanded={toggleExpandedPr}
 								activeKey={activeKeyFor("my-prs")}
 								dismissedCount={dismissedIn("my-prs").length}
-								onDismiss={(n) => handleDismissPr("my-prs", n)}
+								onDismiss={(pr) => handleDismissPr("my-prs", pr)}
 								onShowDismissed={() => handleShowDismissedPrs("my-prs")}
 								onCheckout={props.onCheckout}
 								onCreateWorktree={props.onCreateWorktree}
@@ -496,7 +497,7 @@ export const GitHubPanel: Component<{
 							onToggleExpanded={toggleExpandedPr}
 							activeKey={activeKeyFor("prs")}
 							dismissedCount={dismissedIn("prs").length}
-							onDismiss={(n) => handleDismissPr("prs", n)}
+							onDismiss={(pr) => handleDismissPr("prs", pr)}
 							onShowDismissed={() => handleShowDismissedPrs("prs")}
 							onCheckout={props.onCheckout}
 							onCreateWorktree={props.onCreateWorktree}

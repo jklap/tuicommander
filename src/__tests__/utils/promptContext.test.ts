@@ -72,6 +72,7 @@ describe("promptContext helpers", () => {
 
 		expect(prContextVariables(pr)).toEqual({
 			pr_number: "42",
+			pr_base_repo: "",
 			pr_title: "Fix parser",
 			pr_url: "https://example.test/pr/42",
 			pr_state: "OPEN",

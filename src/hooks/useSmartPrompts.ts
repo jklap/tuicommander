@@ -349,13 +349,18 @@ export function useSmartPrompts() {
 		};
 		const promptBranch = tree?.branchName ?? activeRepo?.activeWorkspaceId;
 		const promptPr = repoRoot && promptBranch ? githubStore.getBranchPrData(repoRoot, promptBranch) : undefined;
+		// Reserved manual-variable key naming the repo the caller's PR targets. It is routing
+		// data, not a prompt variable: read it, then drop it so `{pr_base_repo}` stays unresolved.
+		const explicitBaseRepo = manualVariables?.pr_base_repo || undefined;
+		delete allVars.pr_base_repo;
 		// The open review threads are read from GitHub only when the prompt asks for them.
 		if (varNames.includes("pr_open_threads") && !("pr_open_threads" in allVars) && allVars.pr_number && repoRoot) {
 			try {
 				allVars.pr_open_threads = await invoke<string>("get_pr_open_threads", {
 					repoPath: repoRoot,
 					prNumber: Number(allVars.pr_number),
-					baseRepo: promptPr?.number === Number(allVars.pr_number) ? promptPr.base_repo : undefined,
+					baseRepo:
+						explicitBaseRepo ?? (promptPr?.number === Number(allVars.pr_number) ? promptPr.base_repo : undefined),
 				});
 			} catch (err) {
 				appLogger.warn("prompts", `Cannot read the open review threads for "${prompt.name}"`, err);

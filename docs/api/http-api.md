@@ -3931,12 +3931,12 @@ Desktop command arguments and HTTP bodies use the same camelCase fields.
 
 | Method | Route | Arguments |
 |---|---|---|
-| GET | `/repo/pr-line-threads` | `repoPath`, `prNumber`, optional `after` |
-| GET | `/repo/pr-open-threads` | `repoPath`, `prNumber` — returns the `get_pr_open_threads` string |
+| GET | `/repo/pr-line-threads` | `repoPath`, `prNumber`, optional `baseRepo`, optional `after` |
+| GET | `/repo/pr-open-threads` | `repoPath`, `prNumber`, optional `baseRepo` — returns the `get_pr_open_threads` string |
 | GET | `/repo/pr-thread-comments` | `repoPath`, `threadId`, optional `after` |
 | POST | `/repo/pr-thread-resolved` | `{repoPath, threadId, resolved}` |
 | POST | `/repo/pr-thread-reply` | `{repoPath, threadId, body}` |
-| POST | `/repo/pr-draft-review` | `{repoPath, prNumber, draft:{headSha, body, event, comments}}` |
+| POST | `/repo/pr-draft-review` | `{repoPath, prNumber, baseRepo?, draft:{headSha, body, event, comments}}` |
 
 Draft submission rejects a moved reviewed head and pins REST `commit_id`. Thread and comment connections expose pagination; outdated threads retain null current lines. Thread shapes match `get_pr_line_threads`: comment authors carry `bot`, and each thread carries a nullable parsed `finding` (untrusted bot text).
 
@@ -3944,10 +3944,10 @@ Draft submission rejects a moved reviewed head and pins REST `commit_id`. Thread
 
 | Method | Route | Arguments |
 |---|---|---|
-| GET | `/repo/pr-action-state` | `repoPath`, `prNumber` |
-| POST | `/repo/pr-auto-merge` | `{repoPath, prNumber, enabled, mergeMethod?, expectedHeadSha?}` |
-| POST | `/repo/pr-merge-queue` | `{repoPath, prNumber, enqueued, expectedHeadSha?}` |
-| POST | `/repo/pr-merge-or-enqueue` | `{repoPath, prNumber, mergeMethod, expectedHeadSha}` |
+| GET | `/repo/pr-action-state` | `repoPath`, `prNumber`, optional `baseRepo` |
+| POST | `/repo/pr-auto-merge` | `{repoPath, prNumber, baseRepo?, enabled, mergeMethod?, expectedHeadSha?}` |
+| POST | `/repo/pr-merge-queue` | `{repoPath, prNumber, baseRepo?, enqueued, expectedHeadSha?}` |
+| POST | `/repo/pr-merge-or-enqueue` | `{repoPath, prNumber, baseRepo?, mergeMethod, expectedHeadSha}` |
 | POST | `/repo/pr-rerun-failed` | `{repoPath, runId, baseRepo?}` |
 
 The routes share desktop command results. Enabling auto-merge and queue entry require the reviewed head. Merge policy read failures stop writes. The legacy `/repo/post-pr-review` and pinned `/repo/pr-draft-review` reject empty REQUEST_CHANGES bodies.

@@ -96,6 +96,13 @@ describe("githubStore", () => {
 		expect(notifications.state.notifications).toHaveLength(1);
 		expect(notifications.state.notifications[0]).toMatchObject({ connectionId: "mint", title: "[Mint] Remote PR" });
 		expect(terminal).not.toHaveBeenCalled();
+		// Another branch's notice for the same PR number/type is not a duplicate of the first.
+		emitEvent("github-transition", { ...transition, branch: "feature/y" });
+		await Promise.resolve();
+		await Promise.resolve();
+		await Promise.resolve();
+		expect(remoteRpc).toHaveBeenCalledTimes(2);
+		expect(notifications.state.notifications).toHaveLength(2);
 		emitEvent("github-pr-update", { repo_path: "/repo1", statuses: [] });
 		expect(store.getPrStatus("/repo1", "feature/x")?.number).toBe(42);
 		store.stopPolling();

@@ -321,3 +321,64 @@ describe("PrSection row actions — baseRepo forwarding", () => {
 		expect(baseRepoOf("get_pr_diff")).toBeUndefined();
 	});
 });
+
+describe("PrSection — PRs sharing a number across repositories", () => {
+	beforeEach(() => {
+		vi.clearAllMocks();
+		mockInvoke.mockReset();
+		mockInvoke.mockResolvedValue(undefined);
+	});
+	afterEach(() => vi.restoreAllMocks());
+
+	const fork = pr({ branch: "feat/fork", base_repo: "fork/api" });
+	const upstream = pr({ branch: "feat/up", base_repo: "upstream/api", head_ref_oid: "headsha2" });
+	const renderPair = () => {
+		const [key, setKey] = createSignal<string | null>(fork.branch);
+		const view = render(() => (
+			<PrSection
+				title="PRs"
+				prs={[fork, upstream]}
+				repoPath="/repo"
+				collapsed={false}
+				onToggleCollapsed={vi.fn()}
+				expandedKey={key()}
+				onToggleExpanded={vi.fn()}
+				activeKey={null}
+				dismissedCount={0}
+				onDismiss={vi.fn()}
+				onShowDismissed={vi.fn()}
+				onCheckout={vi.fn()}
+				onMerged={vi.fn()}
+			/>
+		));
+		return { ...view, setKey };
+	};
+
+	// Catches: busy state keyed by bare number, so fork #12 in flight disables upstream #12.
+	it("busy state of one PR does not disable the same-numbered PR", async () => {
+		let finish: (v?: unknown) => void = () => {};
+		mockInvoke.mockImplementationOnce(
+			() =>
+				new Promise((resolve) => {
+					finish = resolve;
+				}),
+		);
+		const { container, setKey } = renderPair();
+		fireEvent.click(button(container, "Update branch"));
+		await vi.waitFor(() => expect(button(container, "Update branch").disabled).toBe(true));
+		setKey(upstream.branch);
+		await vi.waitFor(() => expect(button(container, "Update branch")).toBeDefined());
+		expect(button(container, "Update branch").disabled).toBe(false);
+		finish();
+	});
+
+	// Catches: row error keyed by bare number, so fork #12's failure prints under upstream #12.
+	it("a row error of one PR is not shown on the same-numbered PR", async () => {
+		mockInvoke.mockRejectedValueOnce(new Error("boom"));
+		const { container, setKey } = renderPair();
+		fireEvent.click(button(container, "Update branch"));
+		await vi.waitFor(() => expect(container.textContent).toContain("boom"));
+		setKey(upstream.branch);
+		await vi.waitFor(() => expect(container.textContent).not.toContain("boom"));
+	});
+});

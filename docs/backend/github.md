@@ -383,13 +383,20 @@ repo for every polled checkout:
   Resolution order: a hint equal to the bound repo wins with no lookup; otherwise the last
   poll's snapshot (`github_status`) is consulted. A hint names a repository that holds that
   PR number in the snapshot or the call is refused (`pick_pr_target`): the token is never
-  pointed at an arbitrary repository. With no hint, one match is used, none falls back to
-  the bound repo, and **two matches are an error** (acting on the wrong PR is not
-  recoverable), so an older client that omits `baseRepo` fails closed.
+  pointed at an arbitrary repository. With no hint, a number found only in the checkout's
+  own repository, or nowhere, uses the bound repo; a number found **only in another
+  repository is an error**, because the snapshot holds just the newest PRs and the fork's
+  own older #N may exist outside it (an unpinned approve/close/review could land on the
+  wrong PR); and **two matches are an error** too. A client that omits `baseRepo` therefore
+  fails closed instead of guessing; the frontend always sends it.
 - **An expired snapshot is re-polled, not guessed:** when the cache entry is gone and the
-  checkout watches another repository (an `upstream` remote, a cached parent, or the caller
-  named one), `resolve_pr_target` runs one poll of that checkout first. A checkout with
-  nothing upstream never pays for it.
+  checkout watches another repository (an `upstream` remote, a cached parent) or the caller
+  named one, the resolver runs one poll of that checkout first (`repoll_checkout`). A
+  checkout with nothing upstream and no hint never pays for it. The re-poll uses the user's
+  hide-drafts setting (mirrored in `state.github.pr_hide_drafts`), never replaces an
+  existing snapshot (an unwatched hint against a live snapshot is simply refused), and runs
+  at most once per checkout per 10 s, so a caller looping on an unknown `baseRepo` cannot
+  force a poll per request.
 - **Fork status is cached for the process** (`github_repo_parents`, `host/owner/name`
   lowercase → parent or `None`): whether a repo is a fork never changes, so it is asked once
   and the answer (including "not a fork") is never refreshed. An unanswered (inaccessible)
@@ -401,6 +408,10 @@ repo for every polled checkout:
   upstream. The hint must be the bound repo, the checkout's `upstream` remote, its cached
   parent, or a repo a polled PR targets; anything else is refused, and an unknown watch set
   is learned by one re-poll. Omitted, they act on the bound repo.
+- **Access errors ignore the fork's parent:** `repo_access_error` skips errors whose path is
+  `[alias, "parent", …]`, so an SSO-protected or private parent (the `parent` selection added
+  for fork discovery) is never recorded as an access failure of the fork whose own data
+  loaded.
 - **Conflict assist works for a fork's PR against its upstream** (`conflict_assist.rs`,
   `plan_remotes`): `PrRefs` now carries `head_repo`/`base_repo`; the head branch is fetched from
   the remote whose URL is the head repository (usually `origin`, the fork) and the worktree
@@ -409,6 +420,11 @@ repo for every polled checkout:
   is typically stale). A head repository that is not a remote of the checkout (someone
   else's fork), or a fork PR with no remote for its base repository, is refused with a
   message naming the repository. The push stays a separate human-gated step to `origin`.
+  The head is fetched into `refs/remotes/<head remote>/<head>` with an explicit refspec, and
+  for a fork PR the local branch is created from exactly that ref (`adopt_fork_head`): git
+  would otherwise resolve the bare head name to a *local* branch of the same name, and a fork
+  PR's head is often `main`. An existing local branch is accepted only when it already points
+  at the fetched head; otherwise conflict assist refuses and leaves it untouched.
   `start_conflict_assist` and `run_pr_review` take `base_repo` like the other PR commands.
 - **Merged-PR proof for cleanup** (`worktree.rs` `query_merged_github_pr`): whether a merged
   PR proves a local branch tip is integrated also asks every watched upstream, since a

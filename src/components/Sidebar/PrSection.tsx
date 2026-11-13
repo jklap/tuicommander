@@ -17,7 +17,7 @@ import { writeClipboard } from "../../utils/clipboard";
 import { handleOpenUrl } from "../../utils/openUrl";
 import { canApprovePr, effectiveMergeMethod, mergeWithFallback } from "../../utils/prMerge";
 import { prContextVariables } from "../../utils/promptContext";
-import { canUpdatePrBranch, prAgeMarker, prReference } from "../../utils/prRow";
+import { canUpdatePrBranch, prAgeMarker, prKey, prReference } from "../../utils/prRow";
 import { PrDetailContent } from "../PrDetailPopover/PrDetailContent";
 import { SmartButtonStrip } from "../SmartButtonStrip/SmartButtonStrip";
 import { Button } from "../ui/Button";
@@ -42,7 +42,7 @@ export interface PrSectionProps {
 	/** Branch of the row the arrow keys currently sit on, or null. */
 	activeKey: string | null;
 	dismissedCount: number;
-	onDismiss: (prNumber: number) => void;
+	onDismiss: (pr: BranchPrStatus) => void;
 	onShowDismissed: () => void;
 	onCheckout: (branchName: string) => void;
 	onCreateWorktree?: (branchName: string) => void;
@@ -56,12 +56,12 @@ const failureMessage = (error: unknown, action: string) =>
 	(error instanceof Error ? error.message : String(error)).trim() || `${action} failed`;
 
 const createPrSet = () => {
-	const [prs, setPrs] = createSignal<ReadonlySet<number>>(new Set());
-	const set = (prNumber: number, on: boolean) =>
+	const [prs, setPrs] = createSignal<ReadonlySet<string>>(new Set());
+	const set = (key: string, on: boolean) =>
 		setPrs((current) => {
 			const next = new Set(current);
-			if (on) next.add(prNumber);
-			else next.delete(prNumber);
+			if (on) next.add(key);
+			else next.delete(key);
 			return next;
 		});
 	return [prs, set] as const;
@@ -71,18 +71,18 @@ const createPrSet = () => {
 export const UPDATE_BRANCH_HOLD_MS = 60_000;
 
 export const PrSection: Component<PrSectionProps> = (props) => {
-	const [diffLoadingPr, setDiffLoadingPr] = createSignal<number | null>(null);
+	const [diffLoadingPr, setDiffLoadingPr] = createSignal<string | null>(null);
 	/** PRs with an action in flight: per PR, so one finishing never re-enables another's buttons. */
 	const [busyPrs, setBusy] = createPrSet();
 	const [mergingPrs, setMerging] = createPrSet();
 	const [approvingPrs, setApproving] = createPrSet();
 	/** Error of a row action, kept per PR so another row never shows it and two failures coexist. */
-	const [rowErrors, setRowErrors] = createSignal<ReadonlyMap<number, string>>(new Map());
-	const setRowError = (prNumber: number, message: string | null) =>
+	const [rowErrors, setRowErrors] = createSignal<ReadonlyMap<string, string>>(new Map());
+	const setRowError = (key: string, message: string | null) =>
 		setRowErrors((errors) => {
 			const next = new Map(errors);
-			if (message === null) next.delete(prNumber);
-			else next.set(prNumber, message);
+			if (message === null) next.delete(key);
+			else next.set(key, message);
 			return next;
 		});
 	/** `prNumber:head` of update-branch requests accepted: GitHub answers 202 and the merge lands
@@ -112,7 +112,7 @@ export const PrSection: Component<PrSectionProps> = (props) => {
 	// collapsing rows never clears it.
 	createEffect(
 		on(
-			() => props.prs.map((pr) => pr.number),
+			() => props.prs.map(prKey),
 			(numbers) =>
 				setRowErrors((errors) => {
 					if ([...errors.keys()].every((n) => numbers.includes(n))) return errors;
@@ -134,8 +134,8 @@ export const PrSection: Component<PrSectionProps> = (props) => {
 	};
 
 	const handleMerge = async (pr: BranchPrStatus) => {
-		setMerging(pr.number, true);
-		setRowError(pr.number, null);
+		setMerging(prKey(pr), true);
+		setRowError(prKey(pr), null);
 		try {
 			const preferred =
 				repoSettingsStore.getEffectiveField(props.repoPath, "prMergeStrategy") ??
@@ -164,26 +164,26 @@ export const PrSection: Component<PrSectionProps> = (props) => {
 			props.onMerged(pr.branch, baseBranch, hasDirtyFiles);
 		} catch (e) {
 			const msg = failureMessage(e, "Merge");
-			setRowError(pr.number, msg);
+			setRowError(prKey(pr), msg);
 			appLogger.error("github", `Failed to merge PR #${pr.number}`, { error: msg });
 		} finally {
-			setMerging(pr.number, false);
+			setMerging(prKey(pr), false);
 		}
 	};
 
 	const handleApprove = async (pr: BranchPrStatus) => {
-		setApproving(pr.number, true);
-		setRowError(pr.number, null);
+		setApproving(prKey(pr), true);
+		setRowError(prKey(pr), null);
 		try {
 			await invoke("approve_pr", { repoPath: props.repoPath, prNumber: pr.number, baseRepo: pr.base_repo });
 			appLogger.info("github", `Approved PR #${pr.number}`);
 			githubStore.pollRepo(props.repoPath);
 		} catch (e) {
 			const msg = failureMessage(e, "Approve");
-			setRowError(pr.number, msg);
+			setRowError(prKey(pr), msg);
 			appLogger.error("github", `Failed to approve PR #${pr.number}`, { error: msg });
 		} finally {
-			setApproving(pr.number, false);
+			setApproving(prKey(pr), false);
 		}
 	};
 
@@ -193,8 +193,8 @@ export const PrSection: Component<PrSectionProps> = (props) => {
 	};
 
 	const handleUpdateBranch = async (pr: BranchPrStatus) => {
-		setBusy(pr.number, true);
-		setRowError(pr.number, null);
+		setBusy(prKey(pr), true);
+		setRowError(prKey(pr), null);
 		try {
 			await invoke("update_pr_branch", {
 				repoPath: props.repoPath,
@@ -207,10 +207,10 @@ export const PrSection: Component<PrSectionProps> = (props) => {
 			githubStore.pollRepo(props.repoPath);
 		} catch (e) {
 			const msg = failureMessage(e, "Update branch");
-			setRowError(pr.number, msg);
+			setRowError(prKey(pr), msg);
 			appLogger.error("github", `Failed to update branch of PR #${pr.number}`, { error: msg });
 		} finally {
-			setBusy(pr.number, false);
+			setBusy(prKey(pr), false);
 		}
 	};
 
@@ -219,23 +219,23 @@ export const PrSection: Component<PrSectionProps> = (props) => {
 			!window.confirm(t("sidebar.closePrConfirm", "Close PR #{number} without merging?", { number: String(pr.number) }))
 		)
 			return;
-		setBusy(pr.number, true);
-		setRowError(pr.number, null);
+		setBusy(prKey(pr), true);
+		setRowError(prKey(pr), null);
 		try {
 			await invoke("close_pr", { repoPath: props.repoPath, prNumber: pr.number, baseRepo: pr.base_repo });
 			appLogger.info("github", `Closed PR #${pr.number}`);
 			githubStore.pollRepo(props.repoPath);
 		} catch (e) {
 			const msg = failureMessage(e, "Close PR");
-			setRowError(pr.number, msg);
+			setRowError(prKey(pr), msg);
 			appLogger.error("github", `Failed to close PR #${pr.number}`, { error: msg });
 		} finally {
-			setBusy(pr.number, false);
+			setBusy(prKey(pr), false);
 		}
 	};
 
 	const handleViewDiff = async (pr: BranchPrStatus) => {
-		setDiffLoadingPr(pr.number);
+		setDiffLoadingPr(prKey(pr));
 		try {
 			const { diff, headSha } = await invoke<{ diff: string; headSha: string }>("get_pr_diff", {
 				repoPath: props.repoPath,
@@ -252,7 +252,7 @@ export const PrSection: Component<PrSectionProps> = (props) => {
 				"error",
 			);
 		} finally {
-			setDiffLoadingPr((current) => (current === pr.number ? null : current));
+			setDiffLoadingPr((current) => (current === prKey(pr) ? null : current));
 		}
 	};
 
@@ -346,7 +346,7 @@ export const PrSection: Component<PrSectionProps> = (props) => {
 												size="compact"
 												variant="ghost"
 												class={s.ghItemDismiss}
-												onClick={() => props.onDismiss(pr.number)}
+												onClick={() => props.onDismiss(pr)}
 												aria-label={t("sidebar.dismissPr", "Hide this PR from view")}
 												data-tooltip={t("sidebar.dismissPr", "Hide this PR from view")}
 												data-tooltip-pos="bottom"
@@ -391,12 +391,12 @@ export const PrSection: Component<PrSectionProps> = (props) => {
 															variant="primary"
 															class={cx(s.ghActionBtn, s.ghApproveBtn)}
 															onClick={() => handleApprove(pr)}
-															disabled={approvingPrs().has(pr.number)}
+															disabled={approvingPrs().has(prKey(pr))}
 															data-tooltip={t("sidebar.approvePr", "Approve this pull request")}
 															data-tooltip-pos="bottom"
 															data-tooltip-align="right"
 														>
-															{approvingPrs().has(pr.number)
+															{approvingPrs().has(prKey(pr))
 																? t("sidebar.approving", "Approving...")
 																: t("sidebar.approve", "Approve")}
 														</Button>
@@ -407,7 +407,7 @@ export const PrSection: Component<PrSectionProps> = (props) => {
 															variant="ghost"
 															class={s.ghActionBtn}
 															onClick={() => handleUpdateBranch(pr)}
-															disabled={busyPrs().has(pr.number)}
+															disabled={busyPrs().has(prKey(pr))}
 															data-tooltip={t("sidebar.updateBranchTitle", "Merge the base branch into this PR branch")}
 															data-tooltip-pos="bottom"
 															data-tooltip-align="right"
@@ -421,12 +421,12 @@ export const PrSection: Component<PrSectionProps> = (props) => {
 															variant="ghost"
 															class={cx(s.ghActionBtn, s.ghMergeBtn)}
 															onClick={() => handleMerge(pr)}
-															disabled={mergingPrs().has(pr.number)}
+															disabled={mergingPrs().has(prKey(pr))}
 															data-tooltip={t("sidebar.mergePr", "Merge this pull request")}
 															data-tooltip-pos="bottom"
 															data-tooltip-align="right"
 														>
-															{mergingPrs().has(pr.number) ? t("sidebar.merging", "Merging...") : mergeLabel(pr)}
+															{mergingPrs().has(prKey(pr)) ? t("sidebar.merging", "Merging...") : mergeLabel(pr)}
 														</Button>
 													</Show>
 													<Button
@@ -434,12 +434,12 @@ export const PrSection: Component<PrSectionProps> = (props) => {
 														variant="ghost"
 														class={s.ghActionBtn}
 														onClick={() => handleViewDiff(pr)}
-														disabled={diffLoadingPr() === pr.number}
+														disabled={diffLoadingPr() === prKey(pr)}
 														data-tooltip={t("sidebar.viewDiff", "View PR diff")}
 														data-tooltip-pos="bottom"
 														data-tooltip-align="right"
 													>
-														{diffLoadingPr() === pr.number
+														{diffLoadingPr() === prKey(pr)
 															? t("sidebar.loadingDiff", "Loading...")
 															: t("sidebar.diff", "Diff")}
 													</Button>
@@ -462,7 +462,7 @@ export const PrSection: Component<PrSectionProps> = (props) => {
 															variant="ghost"
 															class={cx(s.ghActionBtn, s.ghCloseBtn)}
 															onClick={() => handleClosePr(pr)}
-															disabled={busyPrs().has(pr.number)}
+															disabled={busyPrs().has(prKey(pr))}
 															data-tooltip={t("sidebar.closePr", "Close this pull request without merging")}
 															data-tooltip-pos="bottom"
 															data-tooltip-align="right"
@@ -497,7 +497,7 @@ export const PrSection: Component<PrSectionProps> = (props) => {
 														contextVariables={() => prContextVariables(pr)}
 													/>
 												</div>
-												<Show when={rowErrors().get(pr.number)}>
+												<Show when={rowErrors().get(prKey(pr))}>
 													{(message) => <div class={s.ghActionError}>{message()}</div>}
 												</Show>
 											</PrDetailContent>

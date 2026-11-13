@@ -876,6 +876,11 @@ pub fn build_unified_batch_query_with_upstream(
     if !viewer.is_empty() {
         let repo_filters: String = repos
             .iter()
+            // DEFERRED (2026-11-12) — the viewer search is one `first: 30` window shared by the
+            // fork and its upstream, so a viewer with 30+ open PRs across both can push the
+            // fork's own beyond-top-N PRs out. Each node carries the full PR selection (~6.5k
+            // GraphQL nodes), so a second search or a larger window costs real rate budget;
+            // revisit with a measured case, then give the upstream its own search.
             .chain(upstream.iter())
             .map(|(_, owner, name)| format!("repo:{owner}/{name}"))
             .collect::<Vec<_>>()

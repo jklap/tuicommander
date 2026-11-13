@@ -265,6 +265,7 @@ fn plan_remotes(
 }
 
 /// Everything the blocking git side of a run produces.
+#[derive(Debug)]
 struct PreparedRebase {
     worktree_path: String,
     conflicted: Vec<String>,
@@ -273,24 +274,88 @@ struct PreparedRebase {
     base_source: BaseSource,
 }
 
+/// `reference`'s commit id, if it names one.
+fn rev_parse(repo: &Path, reference: &str) -> Option<String> {
+    crate::git_cli::git_cmd(repo)
+        .args([
+            "rev-parse",
+            "--verify",
+            "--quiet",
+            &format!("{reference}^{{commit}}"),
+        ])
+        .run()
+        .ok()
+        .map(|out| out.stdout.trim().to_string())
+        .filter(|sha| !sha.is_empty())
+}
+
+/// Make a fork PR's head branch a local branch that provably IS the fetched head.
+///
+/// `git worktree add <path> <name>` resolves a bare name to an existing local branch of that
+/// name before it ever looks at remote-tracking refs, and a fork PR's head is usually a name
+/// the checkout already has for something else (`main`, `fix`). Using it would rebase the
+/// user's own branch instead of the PR. So: fetch the head into its remote-tracking ref,
+/// create the local branch from exactly that ref when it does not exist, accept an existing
+/// one only when it already points at the fetched head, and otherwise refuse.
+fn adopt_fork_head(repo: &Path, head_remote: &str, head_ref: &str) -> Result<(), String> {
+    let tracking = format!("refs/remotes/{head_remote}/{head_ref}");
+    let tracked = rev_parse(repo, &tracking).ok_or_else(|| {
+        format!(
+            "Could not fetch {head_ref} from {head_remote}, so the PR's head branch is unavailable."
+        )
+    })?;
+    match rev_parse(repo, &format!("refs/heads/{head_ref}")) {
+        None => crate::git_cli::git_cmd(repo)
+            .args(["branch", "--track", "--", head_ref, &tracking])
+            .run()
+            .map(|_| ())
+            .map_err(|e| {
+                format!(
+                    "Could not create local branch {head_ref} from {head_remote}/{head_ref}: {e}"
+                )
+            }),
+        Some(local) if local == tracked => Ok(()),
+        Some(_) => Err(format!(
+            "A local branch named '{head_ref}' already exists and is not at {head_remote}/{head_ref}, the PR's head. \
+             Conflict assist would otherwise rebase your branch instead of the PR. Rename or delete it (or move it to {head_remote}/{head_ref}) and retry."
+        )),
+    }
+}
+
 /// Fetch the head, create its worktree, rebase it onto the freshest base and collect the
 /// conflicts. All blocking git, kept apart from the GitHub lookups so it can be tested
-/// against real repositories.
+/// against real repositories. `fork_head` is true when the PR head lives in a different
+/// repository than its base (see [`adopt_fork_head`]).
+#[allow(clippy::too_many_arguments)] // One run's independent inputs; a struct would only rename them.
 fn prepare_rebase(
     repo_path: &str,
     worktrees_dir: &Path,
     plan: &RemotePlan,
     head_ref: &str,
     base_ref: &str,
+    fork_head: bool,
     pr_number: i64,
     fetch_timeout: Duration,
 ) -> Result<PreparedRebase, String> {
-    // Make the head branch available locally. Best-effort: it may already be present, or
-    // the remote may be unreachable for a local-only branch.
+    // Bring the head branch's remote-tracking ref up to date. Best-effort: it may already be
+    // present, or the remote may be unreachable for a local-only branch. An explicit refspec,
+    // not a bare `fetch <remote> <branch>`, so the ref is written whatever the remote's
+    // configured fetch refspec is.
     let _ = crate::git_cli::git_cmd(Path::new(repo_path))
         .timeout(fetch_timeout)
-        .args(["fetch", &plan.head_remote, "--", head_ref])
+        .args([
+            "fetch",
+            "--no-tags",
+            &plan.head_remote,
+            &format!(
+                "+refs/heads/{head_ref}:refs/remotes/{}/{head_ref}",
+                plan.head_remote
+            ),
+        ])
         .run_silent();
+    if fork_head {
+        adopt_fork_head(Path::new(repo_path), &plan.head_remote, head_ref)?;
+    }
 
     let config = crate::worktree::WorktreeConfig {
         task_name: format!("conflict-pr-{pr_number}"),
@@ -341,6 +406,7 @@ pub(crate) async fn start_conflict_assist_impl(
     let base_ref = refs.base_ref.clone();
     let repo_path_for_git = repo_path.clone();
     let plan_for_git = plan.clone();
+    let fork_head = refs.head_from_fork;
 
     // All blocking git work (fetch, worktree add, rebase, status) runs off the
     // async executor so a slow checkout/rebase doesn't stall other commands.
@@ -358,6 +424,7 @@ pub(crate) async fn start_conflict_assist_impl(
             &plan_for_git,
             &head_ref,
             &base_ref_for_git,
+            fork_head,
             pr_number,
             crate::git_cli::FETCH_TIMEOUT,
         )
@@ -818,10 +885,16 @@ mod tests {
 
     // ---- the git flow, against real repositories ---------------------------------------
 
-    /// `origin` = the fork (feature edits shared.txt), `upstream` = the repo the PR targets
-    /// (its main later edits the same line). Returns the work checkout cloned from the fork.
-    fn fork_checkout() -> (tempfile::TempDir, PathBuf, tempfile::TempDir) {
-        let (_seed_dir, seed) = fixture();
+    /// `origin` = the fork (its `feature` edits shared.txt), `upstream` = the repo the PR
+    /// targets (its `main` later edits the same line). `work` is cloned from the fork.
+    struct ForkFixture {
+        _dirs: Vec<tempfile::TempDir>,
+        work: PathBuf,
+        origin: PathBuf,
+    }
+
+    fn fork_fixture() -> ForkFixture {
+        let (seed_dir, seed) = fixture();
         commit_on(
             &seed,
             "feature",
@@ -879,73 +952,186 @@ mod tests {
                 upstream_dir.path().to_str().unwrap(),
             ],
         );
-        // Keep the bare repos alive for the test's duration.
-        std::mem::forget(origin_dir);
-        std::mem::forget(upstream_dir);
-        (work_dir, work, _seed_dir)
+        let origin = origin_dir.path().to_path_buf();
+        ForkFixture {
+            _dirs: vec![seed_dir, origin_dir, upstream_dir, work_dir],
+            work,
+            origin,
+        }
     }
 
-    // Catches: a fork PR being rebased onto the fork's stale main and reported "clean" while it
-    // conflicts with the upstream it will actually merge into.
-    #[test]
-    fn a_fork_pr_is_rebased_onto_the_upstreams_base_not_the_forks() {
-        let (_work_dir, work, _seed) = fork_checkout();
-        let wt_dir = tempfile::tempdir().expect("tempdir");
-        let run = |base_remote: &str| {
-            prepare_rebase(
-                work.to_str().unwrap(),
-                wt_dir.path(),
-                &RemotePlan {
-                    head_remote: "origin".into(),
-                    base_remote: base_remote.into(),
-                },
-                "feature",
-                "main",
-                7,
-                TEST_FETCH_TIMEOUT,
-            )
-        };
-
-        // Against the fork's own main (stale: it has no upstream edit) the PR looks clean.
-        let wrong = run("origin").expect("rebase onto the fork's main");
-        assert!(
-            wrong.rebase_ok && wrong.conflicted.is_empty(),
-            "{wrong:?}",
-            wrong = wrong.rebase_stderr
-        );
-        assert_eq!(wrong.base_source, BaseSource::FetchedRemote);
-    }
-
-    #[test]
-    fn a_fork_pr_conflicting_with_the_upstream_base_reports_the_conflict() {
-        let (_work_dir, work, _seed) = fork_checkout();
-        let wt_dir = tempfile::tempdir().expect("tempdir");
-        let prepared = prepare_rebase(
-            work.to_str().unwrap(),
-            wt_dir.path(),
+    fn run_assist(
+        f: &ForkFixture,
+        wt_dir: &Path,
+        head_ref: &str,
+        base_remote: &str,
+        fork_head: bool,
+    ) -> Result<PreparedRebase, String> {
+        prepare_rebase(
+            f.work.to_str().unwrap(),
+            wt_dir,
             &RemotePlan {
                 head_remote: "origin".into(),
-                base_remote: "upstream".into(),
+                base_remote: base_remote.into(),
             },
-            "feature",
+            head_ref,
             "main",
+            fork_head,
             7,
             TEST_FETCH_TIMEOUT,
         )
-        .expect("rebase onto the upstream's main");
+    }
+
+    fn stdout(repo: &Path, args: &[&str]) -> String {
+        String::from_utf8_lossy(&git(repo, args).stdout)
+            .trim()
+            .to_string()
+    }
+
+    // Catches: a fork PR being rebased onto the fork's own (stale) main and reported "clean"
+    // while it conflicts with the upstream it will actually be merged into.
+    #[test]
+    fn the_upstreams_base_decides_the_result_not_the_forks() {
+        let f = fork_fixture();
+        // Against the fork's own main (which lacks the upstream edit) the PR looks clean...
+        let wt = tempfile::tempdir().expect("tempdir");
+        let wrong = run_assist(&f, wt.path(), "feature", "origin", true).expect("fork main");
+        assert!(
+            wrong.rebase_ok && wrong.conflicted.is_empty(),
+            "{}",
+            wrong.rebase_stderr
+        );
+
+        // ...against the upstream's main it conflicts, which is the truth.
+        let f = fork_fixture();
+        let wt = tempfile::tempdir().expect("tempdir");
+        let prepared =
+            run_assist(&f, wt.path(), "feature", "upstream", true).expect("upstream main");
         assert!(!prepared.rebase_ok);
         assert_eq!(prepared.conflicted, vec!["shared.txt"]);
         assert_eq!(prepared.base_source, BaseSource::FetchedRemote);
-        // The base ref it rebased onto is the upstream's, fetched for this run.
-        let out = git(
-            &work,
-            &["rev-parse", "--verify", "refs/remotes/upstream/main"],
+        assert!(
+            git(
+                &f.work,
+                &["rev-parse", "--verify", "refs/remotes/upstream/main"]
+            )
+            .status
+            .success()
         );
-        assert!(out.status.success(), "the upstream base was fetched");
         // The worktree is left mid-rebase on the conflicted file, for the agent to resolve.
-        let status = git(Path::new(&prepared.worktree_path), &["status"]);
-        let status = String::from_utf8_lossy(&status.stdout);
-        assert!(status.contains("rebase in progress"), "{status}");
-        assert!(status.contains("shared.txt"), "{status}");
+        let status = stdout(Path::new(&prepared.worktree_path), &["status"]);
+        assert!(
+            status.contains("rebase in progress") && status.contains("shared.txt"),
+            "{status}"
+        );
+    }
+
+    // Catches: the PR's head not becoming a local branch that tracks (and pushes to) the fork.
+    #[test]
+    fn a_fork_head_becomes_a_local_branch_tracking_the_fork() {
+        let f = fork_fixture();
+        assert_eq!(
+            stdout(&f.work, &["branch", "--list", "feature"]),
+            "",
+            "no local feature yet"
+        );
+        let wt = tempfile::tempdir().expect("tempdir");
+        run_assist(&f, wt.path(), "feature", "upstream", true).expect("assist");
+        let local = stdout(&f.work, &["rev-parse", "refs/heads/feature"]);
+        // It is the fork's head (the original commit is rebased in the worktree afterwards,
+        // so compare the upstream-tracking configuration, not the moved tip).
+        assert_eq!(
+            stdout(&f.work, &["config", "branch.feature.remote"]),
+            "origin"
+        );
+        assert_eq!(
+            stdout(&f.work, &["config", "branch.feature.merge"]),
+            "refs/heads/feature"
+        );
+        assert!(!local.is_empty());
+    }
+
+    // Catches: a fork PR from a branch named like one the user already has (`main`, the
+    // common fork case) rebasing the user's OWN branch instead of the PR.
+    #[test]
+    fn a_fork_head_named_like_a_different_local_branch_is_refused_and_leaves_it_alone() {
+        let f = fork_fixture();
+        // The fork's `main` carries PR work the local `main` does not have.
+        let other = tempfile::tempdir().expect("tempdir");
+        let clone = other.path().join("clone");
+        assert!(
+            Command::new("git")
+                .args(["clone", f.origin.to_str().unwrap(), clone.to_str().unwrap()])
+                .output()
+                .unwrap()
+                .status
+                .success()
+        );
+        git(&clone, &["config", "user.email", "t@t"]);
+        git(&clone, &["config", "user.name", "T"]);
+        commit_on(&clone, "main", "pr.txt", "pr work\n", "fork main work");
+        git(&clone, &["push", "origin", "main"]);
+
+        let before = stdout(&f.work, &["rev-parse", "refs/heads/main"]);
+        // Free `main` in the work checkout so only the name collision can stop git.
+        git(&f.work, &["checkout", "-q", "-b", "elsewhere"]);
+        let wt = tempfile::tempdir().expect("tempdir");
+        let err = run_assist(&f, wt.path(), "main", "upstream", true).unwrap_err();
+        assert!(
+            err.contains("already exists") && err.contains("main"),
+            "{err}"
+        );
+        assert_eq!(
+            stdout(&f.work, &["rev-parse", "refs/heads/main"]),
+            before,
+            "local main untouched"
+        );
+        assert!(
+            std::fs::read_dir(wt.path()).unwrap().next().is_none(),
+            "no worktree was created"
+        );
+    }
+
+    // Catches: a local branch that already IS the fetched head being refused for no reason.
+    #[test]
+    fn a_local_branch_already_at_the_fork_head_is_reused() {
+        let f = fork_fixture();
+        git(
+            &f.work,
+            &["branch", "feature", "refs/remotes/origin/feature"],
+        );
+        let wt = tempfile::tempdir().expect("tempdir");
+        let prepared = run_assist(&f, wt.path(), "feature", "upstream", true).expect("reuse");
+        assert_eq!(prepared.conflicted, vec!["shared.txt"]);
+    }
+
+    // Catches: the head ref being fetched under a bare name (FETCH_HEAD only) so the explicit
+    // tracking ref the rest of the flow relies on never exists.
+    #[test]
+    fn the_head_is_fetched_into_its_remote_tracking_ref() {
+        let f = fork_fixture();
+        git(
+            &f.work,
+            &["update-ref", "-d", "refs/remotes/origin/feature"],
+        );
+        let wt = tempfile::tempdir().expect("tempdir");
+        run_assist(&f, wt.path(), "feature", "upstream", true).expect("assist");
+        assert!(
+            git(
+                &f.work,
+                &["rev-parse", "--verify", "refs/remotes/origin/feature"]
+            )
+            .status
+            .success()
+        );
+    }
+
+    // Catches: an unfetchable head silently falling through to a local branch.
+    #[test]
+    fn a_fork_head_that_cannot_be_fetched_is_an_error() {
+        let f = fork_fixture();
+        let wt = tempfile::tempdir().expect("tempdir");
+        let err = run_assist(&f, wt.path(), "no-such-branch", "upstream", true).unwrap_err();
+        assert!(err.contains("Could not fetch no-such-branch"), "{err}");
     }
 }

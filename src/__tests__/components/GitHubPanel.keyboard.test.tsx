@@ -286,3 +286,29 @@ describe("GitHubPanel — copy issue number", () => {
 		expect(panel()).not.toBeNull();
 	});
 });
+
+describe("GitHubPanel — dismissing a PR that shares its number with another repository's PR", () => {
+	beforeEach(() => {
+		vi.clearAllMocks();
+		resetCollapse();
+	});
+	afterEach(() => {
+		document.body.innerHTML = "";
+		uiStore._testCancelPendingSave();
+	});
+
+	// Catches: dismissedPrs keyed by bare number, hiding upstream #5 when fork #5 is dismissed.
+	it("keeps the other PR visible", () => {
+		const twins = [
+			{ number: 5, title: "Fork PR", branch: "feat/fork", state: "OPEN", base_repo: "fork/repo" },
+			{ number: 5, title: "Upstream PR", branch: "feat/up", state: "OPEN", base_repo: "upstream/repo" },
+		] as unknown as BranchPrStatus[];
+		render(() => <GitHubPanel {...baseProps} prs={twins} allPrs={twins} />);
+		fireEvent.keyDown(panel(), { key: "ArrowDown" });
+		fireEvent.keyDown(panel(), { key: "Enter" });
+		fireEvent.click(document.querySelector('button[data-tooltip="Hide this PR from view"]')!);
+		const text = rows().map(rowText).join("|");
+		expect(text).not.toContain("Fork PR");
+		expect(text).toContain("Upstream PR");
+	});
+});

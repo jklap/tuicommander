@@ -27,7 +27,9 @@ pub fn repo_access_error(
         .as_array()
         .into_iter()
         .flatten()
-        .filter(|e| e["path"][0].as_str() == Some(alias))
+        // An unreadable fork parent (SSO-enforced or private upstream) says nothing about
+        // access to the repository itself, whose own data loaded.
+        .filter(|e| e["path"][0].as_str() == Some(alias) && e["path"][1].as_str() != Some("parent"))
         .collect();
     if errors.is_empty() && !response["data"][alias].is_null() {
         return None;
@@ -103,5 +105,23 @@ mod tests {
             repo_access_error(&response, "repo0", "ok").unwrap().reason,
             RepoAccessReason::Unknown
         );
+    }
+
+    // Catches: a fork whose PRs loaded being flagged as inaccessible because its *parent*
+    // (a private/SSO-protected upstream) could not be read.
+    #[test]
+    fn an_unreadable_parent_is_not_an_access_error_for_the_fork() {
+        let response = serde_json::json!({
+            "data": {"r0": {"isFork": true, "parent": null, "pullRequests": {"nodes": []}}},
+            "errors": [{"type": "FORBIDDEN", "message": "SSO required", "path": ["r0", "parent"]}]
+        });
+        assert!(repo_access_error(&response, "r0", "me/hello").is_none());
+        // Any other nested failure of the same alias is still preserved.
+        let response = serde_json::json!({
+            "data": {"r0": {"pullRequests": {"nodes": []}}},
+            "errors": [{"type": "FORBIDDEN", "message": "nope", "path": ["r0", "pullRequests"]}]
+        });
+        let error = repo_access_error(&response, "r0", "me/hello").expect("still an access error");
+        assert_eq!(error.reason, RepoAccessReason::Forbidden);
     }
 }
