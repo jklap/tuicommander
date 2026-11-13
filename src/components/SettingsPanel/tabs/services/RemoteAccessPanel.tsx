@@ -14,12 +14,10 @@ import { useConfirmDialog } from "../../../../hooks/useConfirmDialog";
 import { t } from "../../../../i18n";
 import { reportSettingsConflicts, settingsRefresh } from "../../../../services/settingsRefresh";
 import { appLogger } from "../../../../stores/appLogger";
-import { settingsStore } from "../../../../stores/settings";
 import { rpc } from "../../../../transport";
 import { cx } from "../../../../utils";
 import { writeClipboard } from "../../../../utils/clipboard";
 import { mergeSettingsSnapshot } from "../../../../utils/mergeSettingsSnapshot";
-import { isAbsolutePath } from "../../../../utils/pathUtils";
 import { randomId } from "../../../../utils/randomId";
 import { ConfirmDialog } from "../../../ConfirmDialog";
 import { Button } from "../../../ui/Button";
@@ -73,34 +71,6 @@ export const RemoteAccessPanel: Component = () => {
 	const [localIps, { refetch: refetchLocalIps }] = createResource(() => rpc<LocalIpEntry[]>("get_local_ips"));
 	const availableIps = () => (localIps.error ? undefined : localIps());
 	const [selectedIp, setSelectedIp] = createSignal<string>("");
-
-	// --- Additional HTTP-readable directories ---
-	const [newReadableDir, setNewReadableDir] = createSignal("");
-	const [readableDirError, setReadableDirError] = createSignal<string | null>(null);
-	const readableDirs = (): string[] => settingsStore.state.additionalReadableDirs;
-	/** Mirrors the backend's `expand_readable_root` acceptance rule (fs_routes.rs) —
-	 *  an absolute path, or `~`/`~/...` — so a client-side entry that can never
-	 *  resolve to a real root is rejected here instead of silently sitting in the
-	 *  list looking identical to a working entry. Defense-in-depth only: the
-	 *  backend re-validates independently and is the actual enforcement point. */
-	const isValidReadableDirEntry = (entry: string): boolean =>
-		!entry.includes("..") && (entry === "~" || entry.startsWith("~/") || isAbsolutePath(entry));
-	const addReadableDir = () => {
-		const dir = newReadableDir().trim();
-		if (!dir) return;
-		if (!isValidReadableDirEntry(dir)) {
-			setReadableDirError(
-				t("services.readableDirs.invalid", "Must be an absolute path, or start with ~/ for your home directory"),
-			);
-			return;
-		}
-		setReadableDirError(null);
-		if (readableDirs().includes(dir)) return;
-		settingsStore.setAdditionalReadableDirs([...readableDirs(), dir]);
-		setNewReadableDir("");
-	};
-	const removeReadableDir = (dir: string) =>
-		settingsStore.setAdditionalReadableDirs(readableDirs().filter((d) => d !== dir));
 
 	// Remote access form state
 	const [raEnabled, setRaEnabled] = createSignal(false);
@@ -329,61 +299,6 @@ export const RemoteAccessPanel: Component = () => {
 	return (
 		<div class={`${s.section} ${layout.page}`}>
 			<SettingPageHeader title="Remote Access" scope="This machine" breadcrumb="Integrations / Remote Access" />
-			<SectionCard title={t("services.heading.fileAccess", "File Access")}>
-				<div class={s.group}>
-					<label>{t("services.label.additionalReadableDirs", "Additional Readable Directories")}</label>
-					<p class={s.hint}>
-						{t(
-							"services.hint.additionalReadableDirs",
-							"Absolute directories that web and remote clients may READ files from, in addition to your registered repositories. Desktop reads are never restricted. Never widens writing, copying, or moving. Use ~ for your home directory.",
-						)}
-					</p>
-
-					<For each={readableDirs()}>
-						{(dir) => (
-							<div class={s.copyPathRow}>
-								<span class={s.copyPathText}>{dir}</span>
-								<Button
-									data-setting-id="app.additional_readable_dirs"
-									size="compact"
-									onClick={() => removeReadableDir(dir)}
-								>
-									{t("services.readableDirs.remove", "Remove")}
-								</Button>
-							</div>
-						)}
-					</For>
-
-					<div class={s.copyPathRow}>
-						<Input
-							data-setting-id="app.additional_readable_dirs"
-							class={s.copyPathInput}
-							value={newReadableDir()}
-							onInput={(e) => {
-								setNewReadableDir(e.currentTarget.value);
-								setReadableDirError(null);
-							}}
-							onKeyDown={(e) => {
-								if (e.key === "Enter") addReadableDir();
-							}}
-							placeholder={t("services.readableDirs.placeholder", "e.g. ~/.claude/plans")}
-						/>
-						<Button
-							data-setting-id="app.additional_readable_dirs"
-							size="compact"
-							onClick={addReadableDir}
-							disabled={!newReadableDir().trim()}
-						>
-							{t("services.readableDirs.add", "Add")}
-						</Button>
-					</div>
-					<Show when={readableDirError()}>
-						<p class={s.hint} style={{ color: "var(--error)" }}>
-							{readableDirError()}
-						</p>
-					</Show>
-				</div>
-			</SectionCard>
 			<SectionCard title="Connection status">
 				<SettingToggle
 					settingId="app.services.server.enabled"
@@ -729,59 +644,57 @@ export const RemoteAccessPanel: Component = () => {
 							? t("services.status.selfSignedGeneratedInactive", "Generated, not yet active")
 							: t("services.status.selfSignedNotGenerated", "Not yet generated");
 					return (
-						<>
-							<SectionCard title={t("services.heading.selfSignedHttps", "Self-Signed HTTPS")}>
-								<div class={s.group}>
-									<div class={s.row}>
-										<label class={s.label}>{t("services.label.selfSignedStatus", "Status")}</label>
-										<span class={s.value}>
-											<span class={cx(s.mcpStatusDot, ss.active && s.running)} />
-											{statusText}
-											<Button
-												data-non-setting="Regenerate the self-signed certificate; a runtime action, not configuration"
-												size="compact"
-												disabled={regeneratingCert()}
-												onClick={async () => {
-													setRegeneratingCert(true);
-													try {
-														await rpc("regenerate_self_signed_cert");
-														// Server restart is async server-side; give it a moment before polling status.
-														setTimeout(refresh, 500);
-													} catch (e) {
-														appLogger.error("tailscale", "Self-signed cert regenerate failed", e);
-													} finally {
-														setRegeneratingCert(false);
-													}
-												}}
-												title={t("services.action.regenerateSelfSignedTitle", "Regenerate self-signed certificate")}
-											>
-												{regeneratingCert()
-													? t("services.action.regenerating", "Regenerating…")
-													: t("services.action.regenerate", "Regenerate")}
-											</Button>
-										</span>
-									</div>
-									<Show when={ss.fingerprint_sha256}>
-										{(fingerprint) => (
-											<div class={s.row}>
-												<label class={s.label}>{t("services.label.selfSignedFingerprint", "Fingerprint")}</label>
-												<span class={s.value} style={{ "font-family": "monospace", "font-size": "0.85em" }}>
-													{fingerprint()
-														.match(/.{1,2}/g)
-														?.join(":")}
-												</span>
-											</div>
-										)}
-									</Show>
-									<p class={s.hint}>
-										{t(
-											"services.hint.selfSignedExplain",
-											"Without Tailscale HTTPS, TUICommander serves a self-signed certificate so remote/LAN access still gets HTTPS (needed for the clipboard and other browser features that require a secure context). Each device shows a one-time browser security warning the first time it connects — that's expected; accept it to continue. Plain http:// links now redirect to https:// automatically.",
-										)}
-									</p>
+						<SectionCard title={t("services.heading.selfSignedHttps", "Self-Signed HTTPS")}>
+							<div class={s.group}>
+								<div class={s.row}>
+									<label class={s.label}>{t("services.label.selfSignedStatus", "Status")}</label>
+									<span class={s.value}>
+										<span class={cx(s.mcpStatusDot, ss.active && s.running)} />
+										{statusText}
+										<Button
+											data-non-setting="Regenerate the self-signed certificate; a runtime action, not configuration"
+											size="compact"
+											disabled={regeneratingCert()}
+											onClick={async () => {
+												setRegeneratingCert(true);
+												try {
+													await rpc("regenerate_self_signed_cert");
+													// Server restart is async server-side; give it a moment before polling status.
+													setTimeout(refresh, 500);
+												} catch (e) {
+													appLogger.error("tailscale", "Self-signed cert regenerate failed", e);
+												} finally {
+													setRegeneratingCert(false);
+												}
+											}}
+											title={t("services.action.regenerateSelfSignedTitle", "Regenerate self-signed certificate")}
+										>
+											{regeneratingCert()
+												? t("services.action.regenerating", "Regenerating…")
+												: t("services.action.regenerate", "Regenerate")}
+										</Button>
+									</span>
 								</div>
-							</SectionCard>
-						</>
+								<Show when={ss.fingerprint_sha256}>
+									{(fingerprint) => (
+										<div class={s.row}>
+											<label class={s.label}>{t("services.label.selfSignedFingerprint", "Fingerprint")}</label>
+											<span class={s.value} style={{ "font-family": "monospace", "font-size": "0.85em" }}>
+												{fingerprint()
+													.match(/.{1,2}/g)
+													?.join(":")}
+											</span>
+										</div>
+									)}
+								</Show>
+								<p class={s.hint}>
+									{t(
+										"services.hint.selfSignedExplain",
+										"Without Tailscale HTTPS, TUICommander serves a self-signed certificate so remote/LAN access still gets HTTPS (needed for the clipboard and other browser features that require a secure context). Each device shows a one-time browser security warning the first time it connects — that's expected; accept it to continue. Plain http:// links now redirect to https:// automatically.",
+									)}
+								</p>
+							</div>
+						</SectionCard>
 					);
 				})()}
 			</Show>

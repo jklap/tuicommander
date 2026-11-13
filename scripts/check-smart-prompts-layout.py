@@ -16,7 +16,8 @@ import urllib.request
 import uuid
 
 ROOT = Path(__file__).resolve().parents[1]
-WRAPPER = Path.home() / 'Gits/personal/brainstorming/tools/browser-stealth/ab-stealth.sh'
+# The stealth browser wrapper (the global rules' agent-browser entry point) is machine-specific.
+WRAPPER = Path(os.environ.get('TUIC_BROWSER_WRAPPER') or 'agent-browser-stealth-wrapper-not-configured')
 MEASURE = """JSON.stringify((() => {
  const editor=[...document.querySelectorAll('section')].find(s=>s.querySelector('h3')?.textContent==='Edit Layout review');
  const rect=e=>{const r=e.getBoundingClientRect();return {left:r.left,right:r.right,top:r.top,bottom:r.bottom,height:r.height,width:r.width};};

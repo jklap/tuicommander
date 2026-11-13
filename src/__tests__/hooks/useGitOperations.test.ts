@@ -2,8 +2,8 @@ import { mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join, normalize } from "node:path";
 import { cleanup, fireEvent, render } from "@solidjs/testing-library";
-import { createComponent } from "solid-js";
 import { listen } from "@tauri-apps/api/event";
+import { createComponent } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { IdeLauncher } from "../../components/IdeLauncher/IdeLauncher";
 import { createRepositoryRefreshCoordinator } from "../../hooks/git/createRepositoryRefreshCoordinator";
@@ -1694,6 +1694,8 @@ describe("useGitOperations", () => {
 			rebase_merge_allowed: true,
 			unresolved_threads: 0,
 			unresolved_threads_truncated: false,
+			// A fork's PR opened against its upstream: the merge must name the repo it lives in.
+			base_repo: "org/hello",
 		};
 
 		beforeEach(() => {
@@ -1713,7 +1715,7 @@ describe("useGitOperations", () => {
 
 			await gitOps.handleMergeAndArchive("/repo", "feature/x", "main", "archive");
 
-			expect(mockRepo.mergePrViaGithub).toHaveBeenCalledWith("/repo", 99, "squash", "abc1234");
+			expect(mockRepo.mergePrViaGithub).toHaveBeenCalledWith("/repo", 99, "squash", "abc1234", "org/hello");
 			expect(mockRepo.mergeAndArchiveWorktree).not.toHaveBeenCalled();
 			expect(mockRepo.finalizeMergedWorktree).toHaveBeenCalledWith("/repo", "feature/x", "archive");
 		});
@@ -1770,7 +1772,7 @@ describe("useGitOperations", () => {
 
 			await gitOps.handleMergeAndArchive("/repo", "feature/x", "main", "archive");
 
-			expect(mockRepo.mergePrViaGithub).toHaveBeenCalledWith("/repo", 99, "squash", "abc1234");
+			expect(mockRepo.mergePrViaGithub).toHaveBeenCalledWith("/repo", 99, "squash", "abc1234", "org/hello");
 		});
 
 		it("re-throws 405 error instead of silently falling back to local merge", async () => {
@@ -1832,6 +1834,30 @@ describe("useGitOperations", () => {
 			await gitOps.handleConflictAssist("/repo", 42);
 
 			expect(mockInvoke).toHaveBeenCalledWith("start_conflict_assist", { repoPath: "/repo", prNumber: 42 });
+			expect(mockSetStatusInfo).toHaveBeenCalledWith("PR #42 rebased cleanly onto main");
+			expect(repositoriesStore.get("/repo")?.workspaces["feature"]).toBeUndefined();
+		});
+
+		it("forwards the PR base repo to start_conflict_assist", async () => {
+			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
+			mockConflictAssist({
+				status: "clean",
+				worktree_path: "/repo/.worktrees/feature",
+				branch: "feature",
+				base: "main",
+				base_source: "fetched_remote",
+				base_warning: null,
+				conflicted_files: [],
+				prompt: "",
+			});
+
+			await gitOps.handleConflictAssist("/repo", 42, "up/stream");
+
+			expect(mockInvoke).toHaveBeenCalledWith("start_conflict_assist", {
+				repoPath: "/repo",
+				prNumber: 42,
+				baseRepo: "up/stream",
+			});
 			expect(mockSetStatusInfo).toHaveBeenCalledWith("PR #42 rebased cleanly onto main");
 			expect(repositoriesStore.get("/repo")?.workspaces["feature"]).toBeUndefined();
 		});

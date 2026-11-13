@@ -3,7 +3,7 @@
 
     plan.py --repo R --base B --stripped S --orig O --out DIR
             [--ledgers "a b"] [--personal-paths "x y"] [--personal-re RE]
-            [--main-subjects FILE] [--window N]
+            [--main-subjects FILE] [--window N] [--extra GROUP=PATHS ...]
 
 S is O with the ledger and personal paths reset to B's version in every commit (see
 squash-wip.sh). Walking S oldest first, each commit is placed:
@@ -243,7 +243,7 @@ def write(git, blocks, base, orig, out, ledgers):
 
 
 def plan(repo, base, stripped, orig, out, ledgers, personal_paths, personal_re,
-         main_subjects=None, window=60, log=sys.stderr):
+         main_subjects=None, window=60, log=sys.stderr, extra=None):
     os.makedirs(out, exist_ok=True)
     git = Git(repo, out)
     commits = C.assign_groups(C.read_commits(repo, base, stripped), C.load_subjects(main_subjects))
@@ -278,8 +278,19 @@ def plan(repo, base, stripped, orig, out, ledgers, personal_paths, personal_re,
             personal_members.append(dict(h=h, s=s, orig=h))
     if lt != tip:
         blocks.append(Block("ledgers", tip, lt, []))
-    if pt != lt:
-        blocks.append(Block("personal", lt, pt, personal_members))
+    # Extra tip groups (scrubbed, generated, internal, ...) sit between ledgers and personal. Each
+    # restores O's version of its own paths, so the personal commit stays last.
+    cur = lt
+    for group, paths in extra or []:
+        nt = git.with_paths(cur, paths, orig)
+        if nt != cur:
+            blocks.append(Block(group, cur, nt, []))
+        cur = nt
+    if cur != lt:
+        personal = list(personal_paths) + ([".gitignore"] if ".gitignore" in ledgers else [])
+        pt = git.with_paths(cur, personal, orig)
+    if pt != cur:
+        blocks.append(Block("personal", cur, pt, personal_members))
 
     if pt != git.tree(orig):
         raise PlanError("the planned history does not end on the original tree; nothing written")
@@ -299,10 +310,17 @@ def main(argv=None):
     ap.add_argument("--personal-re", default=r"^personal scripts$")
     ap.add_argument("--main-subjects")
     ap.add_argument("--window", type=int, default=60)
+    ap.add_argument("--extra", action="append", default=[], metavar="GROUP=PATHS",
+                    help="a tip group between ledgers and personal; PATHS is space separated")
     a = ap.parse_args(argv)
+    extra = []
+    for spec in a.extra:
+        group, _, paths = spec.partition("=")
+        if paths.split():
+            extra.append((group, paths.split()))
     try:
         print(plan(a.repo, a.base, a.stripped, a.orig, a.out, a.ledgers.split(), a.personal_paths.split(),
-                   a.personal_re, a.main_subjects, a.window))
+                   a.personal_re, a.main_subjects, a.window, extra=extra))
     except PlanError as e:
         sys.exit(f"plan.py: {e}")
 

@@ -198,4 +198,40 @@ describe("PrDiffTab review threads", () => {
 		expect(queryByLabelText("Review type")).toBeNull();
 		expect(mockInvoke).not.toHaveBeenCalledWith("get_pr_line_threads", expect.anything());
 	});
+
+	// Catches: PrDiffTab dropping its baseRepo prop, so a fork PR's threads and review go to the wrong repo.
+	it("forwards the baseRepo prop to the thread read and the review submission", async () => {
+		respond({ submit_pr_draft_review: () => ({ id: 1, url: "u", state: "COMMENTED" }) });
+		const { container, findByText } = render(() => (
+			<PrDiffTab prNumber={340803} prTitle="t" diff={DIFF} repoPath="/repo" baseRepo="org/hello" />
+		));
+		await findByText("Resolve");
+		expect(mockInvoke).toHaveBeenCalledWith(
+			"get_pr_line_threads",
+			expect.objectContaining({ repoPath: "/repo", prNumber: 340803, baseRepo: "org/hello" }),
+		);
+		const widget = container.querySelector('[data-testid="widget"]') as HTMLElement;
+		fireEvent.input(widget.querySelector("textarea") as Element, { target: { value: "Rename this" } });
+		fireEvent.click(
+			Array.from(widget.querySelectorAll("button")).find((b) => b.textContent === "Add to review") as Element,
+		);
+		await findByText("Pending comment", { selector: "span" });
+		fireEvent.click(
+			Array.from(container.querySelectorAll("button")).find((b) => b.textContent === "Submit review") as Element,
+		);
+		await waitFor(() =>
+			expect(mockInvoke).toHaveBeenCalledWith(
+				"submit_pr_draft_review",
+				expect.objectContaining({ repoPath: "/repo", prNumber: 340803, baseRepo: "org/hello" }),
+			),
+		);
+	});
+
+	it("sends no baseRepo on the thread read when the prop is absent", async () => {
+		const { findByText } = render(() => <PrDiffTab prNumber={340803} prTitle="t" diff={DIFF} repoPath="/repo" />);
+		await findByText("Resolve");
+		const call = mockInvoke.mock.calls.find(([c]) => c === "get_pr_line_threads");
+		expect(call).toBeDefined();
+		expect((call?.[1] as { baseRepo?: string } | undefined)?.baseRepo).toBeUndefined();
+	});
 });

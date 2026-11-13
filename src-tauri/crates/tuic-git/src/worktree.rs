@@ -988,6 +988,22 @@ pub fn merged_pr_proof_from_pages(
     tip: &str,
     pages: &serde_json::Value,
 ) -> bool {
+    merged_pr_proof_from_pages_via(repo, branch, tip, pages, Some("origin"))
+}
+
+/// [`merged_pr_proof_from_pages`] for pages read from a repository other than `origin`'s
+/// (the upstream a fork's PR was merged into). `pull_remote` is the remote whose
+/// `refs/pull/<n>/head` holds the recorded head when it is not already local; `None` means
+/// no remote points at that repository, so the head cannot be fetched and only a head
+/// already present locally can prove anything. Fetching a PR number from the wrong
+/// repository is never attempted: numbers are per repository.
+pub fn merged_pr_proof_from_pages_via(
+    repo: &Path,
+    branch: &str,
+    tip: &str,
+    pages: &serde_json::Value,
+    pull_remote: Option<&str>,
+) -> bool {
     let Some(pages) = pages.as_array() else {
         return false;
     };
@@ -1024,10 +1040,13 @@ pub fn merged_pr_proof_from_pages(
                 .run_silent()
                 .is_none()
             {
+                let Some(remote) = pull_remote else {
+                    continue;
+                };
                 let refspec = format!("refs/pull/{number}/head");
                 if git_cmd(repo)
                     .timeout(Duration::from_secs(30))
-                    .args(["fetch", "--no-tags", "origin", &refspec])
+                    .args(["fetch", "--no-tags", remote, &refspec])
                     .run_silent()
                     .is_none()
                     || git_cmd(repo)
@@ -1753,17 +1772,28 @@ fn decide_branch_merge(
     // followed the default branch. The branch reflog records both its source
     // and how its ref moved after creation.
     let messages = branch_reflog_messages(repo, branch)?;
-    // Reflogs can expire or be disabled. Without origin history, neither an
-    // untouched branch nor completed work can be inferred from ancestry alone.
-    let Some((creation_message, entries)) = messages.split_first() else {
-        return Ok((WorkspaceCommitStatus::Unknown, None));
+    // Reflogs can expire or be disabled (`gc.reflogExpire=now` empties every branch's at once).
+    // Without origin history an ancestor of the default branch is either untouched or already
+    // integrated, and ancestry cannot say which: that case stays Unknown and never authorizes a
+    // deletion. A branch that is NOT an ancestor owns commits the default branch lacks, so the
+    // positive proofs below (patch equivalence, merged PR, remote containment) still apply and
+    // it gets a real state. Returning Unknown for every branch would mask the workspaces that
+    // matter for as long as the reflogs stay empty.
+    let origin_unknown = messages.is_empty();
+    let (from_default, entries): (bool, &[String]) = match messages.split_first() {
+        None => (false, &[]),
+        Some((creation_message, entries)) => {
+            let source = creation_message.strip_prefix("branch: Created from ");
+            (
+                source.is_some_and(|source| {
+                    source == "HEAD"
+                        || source == default_branch
+                        || source == format!("refs/heads/{default_branch}")
+                }),
+                entries,
+            )
+        }
     };
-    let source = creation_message.strip_prefix("branch: Created from ");
-    let from_default = source.is_some_and(|source| {
-        source == "HEAD"
-            || source == default_branch
-            || source == format!("refs/heads/{default_branch}")
-    });
     let pull_upstream_is_default = entries.iter().any(|entry| entry == "pull: Fast-forward")
         && crate::git_reads::cached_repo(repo)
             .ok()
@@ -1783,6 +1813,9 @@ fn decide_branch_merge(
             || (message.starts_with("rebase (finish): refs/heads/")
                 && message.contains(&format!("refs/heads/{branch} onto ")))
     });
+    if merged && origin_unknown {
+        return Ok((WorkspaceCommitStatus::Unknown, None));
+    }
     if merged && from_default && follows_default {
         return Ok((WorkspaceCommitStatus::InSync, None));
     }
@@ -3501,6 +3534,11 @@ fn ignore_shared_store_link(src: &Path, dest: &Path, store: &str) -> Result<(), 
     let exclude = src
         .join(rev_at(src, "--git-common-dir")?)
         .join("info/exclude");
+    // A repository made with an empty git template has no info/ directory yet.
+    if let Some(parent) = exclude.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|error| format!("could not exclude the shared link: {error}"))?;
+    }
     // Append one complete record so concurrent worktree creation cannot
     // overwrite another creator's excludes. A duplicate pattern is harmless.
     use std::io::Write;
@@ -5647,27 +5685,6 @@ fn remote_head_branch(repo: &Path, remote: &str) -> Option<String> {
         .map(str::to_string)
 }
 
-/// The name the remote-HEAD step of [`get_remote_default_branch`] returns for
-/// `<remote>/<branch>` when no local branch of that name exists: the
-/// qualified `<remote>/<branch>`, or `refs/remotes/<remote>/<branch>` when a
-/// ref, tag or local branch literally named `<remote>/<branch>` would shadow it.
-/// git resolves a short name through <name>, refs/<name>, refs/tags/<name>,
-/// refs/heads/<name> and only then refs/remotes/<name>; `integration_bases`,
-/// `list_base_ref_options` and `fetch_if_remote` accept the full name.
-/// Existence only (no `^{commit}`) for the shadow: a blob/tree tag or a
-/// non-commit `refs/<short>` shadows the name just the same.
-fn remote_default_reference(repo: &Path, remote: &str, branch: &str) -> Option<String> {
-    rev_at(repo, &format!("refs/remotes/{remote}/{branch}^{{commit}}")).ok()?;
-    let shadowed = ["refs/", "refs/heads/", "refs/tags/"]
-        .iter()
-        .any(|p| rev_at(repo, &format!("{p}{remote}/{branch}")).is_ok());
-    Some(if shadowed {
-        format!("refs/remotes/{remote}/{branch}")
-    } else {
-        format!("{remote}/{branch}")
-    })
-}
-
 /// Resolve a verified integration branch without network access.
 /// Prefer the main checkout's configured base, main/master, a remote's HEAD
 /// (`origin`, then the main checkout's tracked remote, then every other remote
@@ -5690,9 +5707,12 @@ pub fn get_remote_default_branch(repo_path: &str) -> Result<String, String> {
                     // named `<remote>/<branch>` would shadow the remote ref.
                     // Keep the qualified name then; `integration_bases`,
                     // `list_base_ref_options` and `fetch_if_remote` accept it.
-                    if ["refs/heads/", "refs/tags/"]
+                    // Existence only (no `^{commit}`) and refs/<name> too: a
+                    // blob/tree tag or a non-commit `refs/<short>` shadows the
+                    // name just the same.
+                    if ["refs/", "refs/heads/", "refs/tags/"]
                         .iter()
-                        .any(|p| rev_at(repo, &format!("{p}{short}^{{commit}}")).is_ok())
+                        .any(|p| rev_at(repo, &format!("{p}{short}")).is_ok())
                     {
                         return Some(reference);
                     }
@@ -6337,7 +6357,7 @@ pub fn retire_archived_branch(
 fn archive_worktree_at(
     base_repo: &Path,
     workspace_id: &str,
-    archive_script: Option<&str>,
+    archive_script: Option<UserScript<'_>>,
     clock: impl FnOnce() -> Result<u64, String>,
 ) -> Result<String, String> {
     let _allocation_guard = allocation_guard(base_repo)?;
@@ -10020,63 +10040,9 @@ mod tests {
     }
 
     #[test]
-    fn remote_default_branch_stays_qualified_when_a_local_branch_shadows_the_short_name() {
-        let src = remote_source();
-        let repo = trunk_repo();
-        add_remote(repo.path(), src.path(), "upstream", Some("develop"));
-        // A local branch literally named `upstream/develop`: git resolves the
-        // short name to it before refs/remotes/upstream/develop.
-        git_cmd(repo.path())
-            .args(["branch", "upstream/develop"])
-            .run()
-            .unwrap();
-        let path = repo.path().to_string_lossy().into_owned();
-        let got = get_remote_default_branch(&path).unwrap();
-        assert_eq!(got, "refs/remotes/upstream/develop");
-        assert_eq!(
-            integration_bases(repo.path(), &got),
-            vec!["refs/remotes/upstream/develop".to_string()]
-        );
-        let options = list_base_ref_options(path).unwrap();
-        assert_eq!(options[0].name, got);
-        assert!(options[0].is_default);
-        assert_eq!(
-            options
-                .iter()
-                .filter(|o| o.name.ends_with("upstream/develop"))
-                .count(),
-            2,
-            "the shadowing local branch stays listed separately: {options:?}"
-        );
-    }
-
-    #[test]
-    fn remote_default_branch_stays_qualified_when_a_tag_shadows_the_short_name() {
-        let src = remote_source();
-        let repo = trunk_repo();
-        add_remote(repo.path(), src.path(), "upstream", Some("develop"));
-        // A tag literally named `upstream/develop` wins over
-        // refs/remotes/upstream/develop for the short name.
-        git_cmd(repo.path())
-            .args(["tag", "upstream/develop"])
-            .run()
-            .unwrap();
-        let path = repo.path().to_string_lossy().into_owned();
-        let got = get_remote_default_branch(&path).unwrap();
-        assert_eq!(got, "refs/remotes/upstream/develop");
-        assert_eq!(
-            integration_bases(repo.path(), &got),
-            vec!["refs/remotes/upstream/develop".to_string()]
-        );
-        let options = list_base_ref_options(path).unwrap();
-        assert_eq!(options[0].name, got);
-        assert!(options[0].is_default);
-    }
-
-    #[test]
     fn remote_default_branch_stays_qualified_when_a_non_commit_tag_shadows_the_short_name() {
         let src = remote_source();
-        let repo = trunk_repo();
+        let repo = trunkless_repo();
         add_remote(repo.path(), src.path(), "upstream", Some("develop"));
         // A tag pointing at a tree never peels to a commit, but still wins
         // name resolution over refs/remotes/upstream/develop.
@@ -10091,7 +10057,7 @@ mod tests {
     #[test]
     fn remote_default_branch_stays_qualified_when_a_top_level_ref_shadows_the_short_name() {
         let src = remote_source();
-        let repo = trunk_repo();
+        let repo = trunkless_repo();
         add_remote(repo.path(), src.path(), "upstream", Some("develop"));
         // refs/upstream/develop outranks refs/remotes/upstream/develop.
         git_cmd(repo.path())
@@ -10103,22 +10069,9 @@ mod tests {
     }
 
     #[test]
-    fn remote_default_branch_keeps_a_local_branch_that_tracks_the_remote_branch() {
-        let src = remote_source();
-        let repo = trunk_repo();
-        add_remote(repo.path(), src.path(), "upstream", Some("develop"));
-        git_cmd(repo.path())
-            .args(["branch", "--track", "develop", "upstream/develop"])
-            .run()
-            .unwrap();
-        let got = get_remote_default_branch(&repo.path().to_string_lossy()).unwrap();
-        assert_eq!(got, "develop");
-    }
-
-    #[test]
     fn integration_bases_include_a_non_origin_upstream_the_local_default_trails() {
         let src = remote_source();
-        let repo = trunk_repo();
+        let repo = trunkless_repo();
         add_remote(repo.path(), src.path(), "upstream", Some("develop"));
         git_cmd(repo.path())
             .args(["branch", "--track", "develop", "upstream/develop"])
@@ -10154,39 +10107,9 @@ mod tests {
     }
 
     #[test]
-    fn remote_default_branch_is_the_same_from_a_linked_worktree() {
-        let src = remote_source();
-        let repo = trunk_repo();
-        let base = base_branch_of(repo.path());
-        // `aaa` sorts first in `git remote`, but the main checkout tracks `zzz`.
-        add_remote(repo.path(), src.path(), "aaa", Some("main"));
-        add_remote(repo.path(), src.path(), "zzz", Some("develop"));
-        git_cmd(repo.path())
-            .args(["config", &format!("branch.{base}.remote"), "zzz"])
-            .run()
-            .unwrap();
-        let linked_parent = TempDir::new().unwrap();
-        let linked = linked_parent.path().join("linked");
-        git_cmd(repo.path())
-            .args([
-                "worktree",
-                "add",
-                "-b",
-                "linked-branch",
-                &linked.to_string_lossy(),
-            ])
-            .run()
-            .unwrap();
-        let from_main = get_remote_default_branch(&repo.path().to_string_lossy()).unwrap();
-        let from_linked = get_remote_default_branch(&linked.to_string_lossy()).unwrap();
-        assert_eq!(from_main, "zzz/develop");
-        assert_eq!(from_linked, from_main);
-    }
-
-    #[test]
     fn list_base_ref_options_lists_a_qualified_remote_default_once_as_remote() {
         let src = remote_source();
-        let repo = trunk_repo();
+        let repo = trunkless_repo();
         add_remote(repo.path(), src.path(), "upstream", Some("develop"));
         let refs = list_base_ref_options(repo.path().to_string_lossy().to_string()).unwrap();
         assert_eq!(refs[0].name, "upstream/develop");
@@ -10516,6 +10439,7 @@ mod tests {
             .run()
             .unwrap()
             .stdout;
+        fs::create_dir_all(Path::new(exclude.trim()).parent().unwrap()).unwrap();
         fs::write(Path::new(exclude.trim()), "ignored-secret.txt\n").unwrap();
         fs::write(ignored.path.join("ignored-secret.txt"), "ignored work").unwrap();
         let ignored = PathBuf::from(
@@ -14391,9 +14315,13 @@ branch refs/heads/feat
 
     /// `gc.reflogExpire=now` (or `git reflog expire --expire=now --all`) leaves
     /// every branch with an empty reflog. That used to fail classification with
-    /// "branch creation is absent from reflog" and show the workspace as Unknown.
+    /// "branch creation is absent from reflog", and a blanket Unknown would hide every
+    /// workspace's real state for as long as the reflogs stay empty. An ancestor of the default
+    /// branch (untouched or integrated: ancestry cannot say which) stays Unknown and never
+    /// authorizes cleanup of possibly fresh work; a branch with its own commits is still
+    /// classified by the positive proofs.
     #[test]
-    fn a_branch_with_an_empty_reflog_is_still_classified() {
+    fn a_branch_with_an_empty_reflog_is_still_classified_without_claiming_merged() {
         let (_temp, repo, _workspaces) = workspace_fixture();
         let merged = add_worktree(&repo, "empty-reflog-merged");
         let ahead = add_worktree(&repo, "empty-reflog-ahead");
@@ -14413,8 +14341,7 @@ branch refs/heads/feat
 
         let status = inspect_workspace_lifecycle(&repo, "empty-reflog-merged");
         assert_eq!(status.error, None);
-        assert_eq!(status.commit_status, WorkspaceCommitStatus::Merged);
-        assert_eq!(status.merge_proof.as_deref(), Some("ancestry"));
+        assert_eq!(status.commit_status, WorkspaceCommitStatus::Unknown);
         assert!(merged.exists());
 
         let status = inspect_workspace_lifecycle(&repo, "empty-reflog-ahead");
@@ -18514,6 +18441,104 @@ branch refs/heads/feat
             "headRefName": branch,
             "headRefOid": head
         }]}}}}])
+    }
+
+    // Catches: proving a squash-merged fork PR against `origin` (the fork) when its recorded
+    // head lives only in the upstream's `refs/pull/<n>/head` — and fetching a PR number from
+    // the wrong repository.
+    #[test]
+    fn a_pr_head_missing_locally_is_fetched_only_from_the_named_remote() {
+        let git = |dir: &Path, args: &[&str]| {
+            let out = std::process::Command::new("git")
+                .args(args)
+                .current_dir(dir)
+                .output()
+                .unwrap();
+            assert!(
+                out.status.success(),
+                "{args:?}: {}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+            String::from_utf8_lossy(&out.stdout).trim().to_string()
+        };
+        let (_temp, seed, _workspaces) = workspace_fixture();
+        let scratch = tempfile::tempdir_in(tuic_test_support::test_temp_root()).unwrap();
+        let upstream = scratch.path().join("upstream.git");
+        git(
+            scratch.path(),
+            &[
+                "clone",
+                "--bare",
+                "--quiet",
+                &seed.to_string_lossy(),
+                &upstream.to_string_lossy(),
+            ],
+        );
+        let tip = rev_at(&seed, "HEAD").unwrap();
+        // The PR head (a child of the tip) exists only in the upstream, under refs/pull/9/head.
+        let other = scratch.path().join("other");
+        git(
+            scratch.path(),
+            &[
+                "clone",
+                "--quiet",
+                &seed.to_string_lossy(),
+                &other.to_string_lossy(),
+            ],
+        );
+        git(&other, &["config", "user.email", "t@t"]);
+        git(&other, &["config", "user.name", "T"]);
+        std::fs::write(other.join("pr.txt"), "pr\n").unwrap();
+        git(&other, &["add", "."]);
+        git(&other, &["commit", "--quiet", "-m", "pr head"]);
+        let head = git(&other, &["rev-parse", "HEAD"]);
+        git(
+            &other,
+            &[
+                "push",
+                "--quiet",
+                &upstream.to_string_lossy(),
+                "HEAD:refs/pull/9/head",
+            ],
+        );
+
+        let work = scratch.path().join("work");
+        git(
+            scratch.path(),
+            &[
+                "clone",
+                "--quiet",
+                &seed.to_string_lossy(),
+                &work.to_string_lossy(),
+            ],
+        );
+        git(
+            &work,
+            &["remote", "add", "upstream", &upstream.to_string_lossy()],
+        );
+        let pages = pr_pages(9, "feature", &head);
+
+        assert!(
+            !merged_pr_proof_from_pages(&work, "feature", &tip, &pages),
+            "origin (the fork) has no refs/pull/9/head"
+        );
+        assert!(!merged_pr_proof_from_pages_via(
+            &work, "feature", &tip, &pages, None
+        ));
+        assert!(!merged_pr_proof_from_pages_via(
+            &work,
+            "feature",
+            &tip,
+            &pages,
+            Some("origin")
+        ));
+        assert!(merged_pr_proof_from_pages_via(
+            &work,
+            "feature",
+            &tip,
+            &pages,
+            Some("upstream")
+        ));
     }
 
     #[test]

@@ -2867,7 +2867,7 @@ fn denied_workflow_action_is_not_advertised() {
     let state = test_state();
     state.config.write().mcp_capabilities =
         crate::mcp_capabilities::McpCapabilities::from_legacy(&["workflow_run".into()]);
-    let workflow = filtered_native_tools(&state)
+    let workflow = filtered_native_tools(&state, true, true)
         .into_iter()
         .find(|tool| tool["name"] == "workflow")
         .unwrap();
@@ -4412,6 +4412,8 @@ async fn mcp_codex_spawn_carries_launch_instructions() {
 }
 
 #[cfg(unix)]
+// The app also probes the binary (`--help`) without the test's env; with `ARGV_OUTPUT` unset the
+// redirect target would be a bare `.tmp` in the test process's cwd (`src-tauri/.tmp`), outside TMPDIR.
 const MOCK_CODEX_ARGV_SCRIPT: &str = "#!/bin/sh\n[ -n \"$ARGV_OUTPUT\" ] || exit 0\nprintf '%s\\0' \"$@\" > \"$ARGV_OUTPUT.tmp\" && mv \"$ARGV_OUTPUT.tmp\" \"$ARGV_OUTPUT\"\n";
 
 // Catches: the mock run without ARGV_OUTPUT (a `--help` probe) writes `.tmp` into its cwd.
@@ -5335,7 +5337,7 @@ async fn single_settings_opt_in_exposes_tool() {
     *state.config.write() = defaults.clone();
     rebuild_tool_search_index(&state);
     assert!(
-        !filtered_native_tools(&state)
+        !filtered_native_tools(&state, true, true)
             .iter()
             .any(|tool| tool["name"] == "settings"),
         "default must keep settings off"
@@ -5346,7 +5348,7 @@ async fn single_settings_opt_in_exposes_tool() {
     let effects = crate::config::commit_config_save(&state, defaults, requested).unwrap();
     assert!(effects.tools_changed, "MCP clients must refresh tools/list");
     assert!(
-        filtered_native_tools(&state)
+        filtered_native_tools(&state, true, true)
             .iter()
             .any(|tool| tool["name"] == "settings"),
         "one switch must expose settings"
@@ -5362,7 +5364,7 @@ async fn single_settings_opt_in_exposes_tool() {
     assert!(reply["fields"].is_array(), "{reply}");
     // Diagnostics keeps its own switch.
     assert!(
-        !filtered_native_tools(&state)
+        !filtered_native_tools(&state, true, true)
             .iter()
             .any(|tool| tool["name"] == "debug")
     );
@@ -6640,8 +6642,7 @@ async fn migrated_capability_denials_filter_every_public_surface_without_index_r
         let schema = handle_get_tool_schema_for_session(
             &state,
             &serde_json::json!({"tool_name":tool}),
-            caller,
-        );
+            caller, None);
         let actions = schema["inputSchema"]["properties"]["action"]["enum"]
             .as_array()
             .unwrap();
@@ -6662,8 +6663,7 @@ async fn migrated_capability_denials_filter_every_public_surface_without_index_r
         let search = handle_search_tools_for_session(
             &state,
             &serde_json::json!({"query":match tool { "agent" => "Managed peers mail", "ui" => "TUIC interaction", _ => unreachable!() }, "limit":1, "schema_byte_budget":65536}),
-            caller,
-        );
+            caller, None);
         assert_eq!(search["top_schema"], schema, "{old}: {search}");
         for (name, args) in [
             (tool, serde_json::json!({"action":action})),

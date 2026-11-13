@@ -5,8 +5,9 @@
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { invoke, sendCommand } = vi.hoisted(() => ({
+const { invoke, sendCommand, getBranchPrData } = vi.hoisted(() => ({
 	invoke: vi.fn(),
+	getBranchPrData: vi.fn((): unknown => null),
 	sendCommand: vi.fn(async (_session: string, _text: string) => {}),
 }));
 
@@ -19,9 +20,13 @@ vi.mock("../../stores/terminals", () => ({
 	},
 }));
 vi.mock("../../stores/repositories", () => ({
-	repositoriesStore: { getActive: () => ({ path: "/repo" }), get: () => undefined, state: { repositories: {} } },
+	repositoriesStore: {
+		getActive: () => ({ path: "/repo", activeWorkspaceId: "feat" }),
+		get: () => undefined,
+		state: { repositories: {} },
+	},
 }));
-vi.mock("../../stores/github", () => ({ githubStore: { getBranchPrData: () => null } }));
+vi.mock("../../stores/github", () => ({ githubStore: { getBranchPrData } }));
 vi.mock("../../stores/promptLibrary", () => ({
 	promptLibraryStore: {
 		markAsUsed: vi.fn(),
@@ -60,7 +65,10 @@ const addressComments = () => {
 	return { ...prompt, autoExecute: true };
 };
 
-beforeEach(() => vi.clearAllMocks());
+beforeEach(() => {
+	vi.clearAllMocks();
+	getBranchPrData.mockReturnValue(null);
+});
 
 describe("Address Review Comments", () => {
 	// Catches: the prompt still telling the agent to go and find the comments, so
@@ -82,6 +90,72 @@ describe("Address Review Comments", () => {
 		});
 		const result = await useSmartPrompts().executeSmartPrompt(addressComments(), { pr_number: "7" });
 		expect(result).toEqual({ ok: false, reason: "Error: GitHub token missing" });
+		expect(sendCommand).not.toHaveBeenCalled();
+	});
+
+	// Catches: reading a fork PR's threads from the wrong repo when PR numbers collide.
+	it("names the branch PR's base repo when its number matches", async () => {
+		getBranchPrData.mockReturnValue({ number: 7, base_repo: "org/hello" });
+		backend(async () => LIST);
+		await useSmartPrompts().executeSmartPrompt(addressComments(), { pr_number: "7" });
+		expect(invoke).toHaveBeenCalledWith("get_pr_open_threads", {
+			repoPath: "/repo",
+			prNumber: 7,
+			baseRepo: "org/hello",
+		});
+	});
+
+	// Catches: a different PR's base repo leaking onto the number the popover asked for.
+	it("sends no baseRepo when the branch PR is a different number", async () => {
+		getBranchPrData.mockReturnValue({ number: 8, base_repo: "org/hello" });
+		backend(async () => LIST);
+		await useSmartPrompts().executeSmartPrompt(addressComments(), { pr_number: "7" });
+		const call = invoke.mock.calls.find((c) => c[0] === "get_pr_open_threads");
+		expect(call).toBeDefined();
+		expect((call?.[1] as { baseRepo?: string } | undefined)?.baseRepo).toBeUndefined();
+	});
+
+	it("sends no baseRepo when the branch PR has none", async () => {
+		getBranchPrData.mockReturnValue({ number: 7 });
+		backend(async () => LIST);
+		await useSmartPrompts().executeSmartPrompt(addressComments(), { pr_number: "7" });
+		const call = invoke.mock.calls.find((c) => c[0] === "get_pr_open_threads");
+		expect(call).toBeDefined();
+		expect((call?.[1] as { baseRepo?: string } | undefined)?.baseRepo).toBeUndefined();
+	});
+
+	// Catches: upstream PR #5's popover reading the threads of the terminal branch's fork PR #5.
+	it("prefers the caller's explicit pr_base_repo over a branch PR with the same number", async () => {
+		getBranchPrData.mockReturnValue({ number: 5, base_repo: "fork/hello" });
+		backend(async () => LIST);
+		await useSmartPrompts().executeSmartPrompt(addressComments(), { pr_number: "5", pr_base_repo: "upstream/hello" });
+		expect(invoke).toHaveBeenCalledWith("get_pr_open_threads", {
+			repoPath: "/repo",
+			prNumber: 5,
+			baseRepo: "upstream/hello",
+		});
+	});
+
+	it("falls back to the branch PR when pr_base_repo is empty", async () => {
+		getBranchPrData.mockReturnValue({ number: 5, base_repo: "fork/hello" });
+		backend(async () => LIST);
+		await useSmartPrompts().executeSmartPrompt(addressComments(), { pr_number: "5", pr_base_repo: "" });
+		expect(invoke).toHaveBeenCalledWith("get_pr_open_threads", {
+			repoPath: "/repo",
+			prNumber: 5,
+			baseRepo: "fork/hello",
+		});
+	});
+
+	// Catches: the reserved routing key becoming a usable prompt variable.
+	it("does not substitute {pr_base_repo} into a prompt", async () => {
+		backend(async () => LIST);
+		const prompt = { ...addressComments(), content: "Repo {pr_base_repo}" };
+		const result = await useSmartPrompts().executeSmartPrompt(prompt, {
+			pr_number: "5",
+			pr_base_repo: "upstream/hello",
+		});
+		expect(result).toEqual({ ok: false, reason: "unresolved_variables", output: JSON.stringify(["pr_base_repo"]) });
 		expect(sendCommand).not.toHaveBeenCalled();
 	});
 });

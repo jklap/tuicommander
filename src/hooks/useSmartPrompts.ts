@@ -339,8 +339,7 @@ export function useSmartPrompts() {
 		const vars: Record<string, string> = {};
 		const repo = repositoriesStore.get(repoPath);
 		const resolvedBranch =
-			branch ??
-			(repo?.activeWorkspaceId ? (repo.workspaces?.[repo.activeWorkspaceId]?.branchName ?? "") : "");
+			branch ?? (repo?.activeWorkspaceId ? (repo.workspaces?.[repo.activeWorkspaceId]?.branchName ?? "") : "");
 		if (resolvedBranch) {
 			const pr = githubStore.getBranchPrData(repoPath, resolvedBranch);
 			if (pr) Object.assign(vars, prContextVariables(pr));
@@ -394,7 +393,9 @@ export function useSmartPrompts() {
 		const tree = resolvePromptTreeIn(targetPath ?? activeTerminal?.cwd, repositoriesStore.state.repositories);
 		const activeRepo = repositoriesStore.getActive();
 		const repoRoot = tree?.repoPath ?? activeRepo?.path ?? "";
-		const varsPath = tree?.treePath ?? repoRoot;
+		// No registered tree owns the path: use the checkout the prompt actually runs in
+		// (the terminal's cwd — what `apiRoot()` and `canExecute` also read), not the repo root.
+		const varsPath = tree?.treePath ?? targetPath ?? activeTerminal?.cwd ?? repoRoot;
 
 		// Single IPC: extract needed variable names + resolve only those from git.
 		const { vars: gitVars, needed: varNames } = await invoke<{ vars: Record<string, string>; needed: string[] }>(
@@ -418,6 +419,12 @@ export function useSmartPrompts() {
 			...resolveFrontendVars(repoRoot, tree?.branchName),
 			...manualVariables,
 		};
+		const promptBranch = tree?.branchName ?? activeRepo?.activeWorkspaceId;
+		const promptPr = repoRoot && promptBranch ? githubStore.getBranchPrData(repoRoot, promptBranch) : undefined;
+		// Reserved manual-variable key naming the repo the caller's PR targets. It is routing
+		// data, not a prompt variable: read it, then drop it so `{pr_base_repo}` stays unresolved.
+		const explicitBaseRepo = manualVariables?.pr_base_repo || undefined;
+		delete allVars.pr_base_repo;
 		const branchCheck = branchPromptCheck(prompt, allVars.branch, allVars.base_branch);
 		if (!branchCheck.ok) return branchCheck;
 		// The open review threads are read from GitHub only when the prompt asks for them.
@@ -426,6 +433,8 @@ export function useSmartPrompts() {
 				allVars.pr_open_threads = await invoke<string>("get_pr_open_threads", {
 					repoPath: repoRoot,
 					prNumber: Number(allVars.pr_number),
+					baseRepo:
+						explicitBaseRepo ?? (promptPr?.number === Number(allVars.pr_number) ? promptPr.base_repo : undefined),
 				});
 			} catch (err) {
 				appLogger.warn("prompts", `Cannot read the open review threads for "${prompt.name}"`, err);

@@ -1042,7 +1042,9 @@ fn merged_branches(repo_path: &Path, only: Option<&[String]>) -> Result<Vec<Stri
     match batch {
         Ok(merged) => Ok(merged),
         Err(error) => {
-            tracing::debug!("batched merged-branch classification failed ({error}); classifying per branch");
+            tracing::debug!(
+                "batched merged-branch classification failed ({error}); classifying per branch"
+            );
             let mut merged = Vec::new();
             for branch in fallback_candidates {
                 let classified =
@@ -1056,7 +1058,9 @@ fn merged_branches(repo_path: &Path, only: Option<&[String]>) -> Result<Vec<Stri
                         )
                     });
                 match classified {
-                    Ok((crate::worktree::WorkspaceCommitStatus::Merged, _)) => merged.push(branch),
+                    Ok(((crate::worktree::WorkspaceCommitStatus::Merged, _), _, _)) => {
+                        merged.push(branch);
+                    }
                     Ok(_) => {}
                     Err(error) => {
                         tracing::debug!("merged-branch check skipped for '{branch}': {error}");
@@ -3230,7 +3234,7 @@ mod tests {
     }
 
     #[test]
-    fn test_get_merged_branches_classifies_a_reflogless_branch_by_ancestry() {
+    fn test_get_merged_branches_leaves_a_reflogless_branch_out_without_failing() {
         let (_dir, repo_root) = history_fixture_repo(3);
         git_in(&repo_root, &["branch", "merged-feature", "main~1"]);
         git_in(&repo_root, &["branch", "no-reflog", "main~2"]);
@@ -3247,15 +3251,17 @@ mod tests {
             merged.contains(&"merged-feature".to_string()),
             "other branches are still classified, got: {merged:?}"
         );
+        // An empty reflog cannot tell a fresh untouched branch from a merged one, so it is
+        // left out of the merged set rather than offered for automatic cleanup.
         assert!(
-            merged.contains(&"no-reflog".to_string()),
-            "a reflog-less ancestor of main is merged by ancestry, got: {merged:?}"
+            !merged.contains(&"no-reflog".to_string()),
+            "a reflog-less branch must not be reported merged, got: {merged:?}"
         );
     }
 
     #[test]
     fn merged_branch_set_still_reports_merged_branches_when_one_branch_is_unclassifiable() {
-        // `merged_branch_set` feeds the sidebar's `is_merged`; before the fix one
+        // `get_merged_branches_impl` feeds the sidebar's `is_merged`; before the fix one
         // reflog-less branch made it fall back to an EMPTY set, so every merged
         // branch silently stopped showing as merged. A reflog-less ancestor of
         // main is itself classified (merged by ancestry) now.
@@ -3265,10 +3271,13 @@ mod tests {
         std::fs::remove_file(repo_root.join(".git/logs/refs/heads/no-reflog"))
             .expect("remove the branch's reflog");
 
-        let set = merged_branch_set(&repo_root);
+        let set: std::collections::HashSet<String> = get_merged_branches_impl(&repo_root)
+            .expect("merged branches")
+            .into_iter()
+            .collect();
 
         assert!(set.contains("merged-feature"), "got: {set:?}");
-        assert!(set.contains("no-reflog"), "got: {set:?}");
+        assert!(!set.contains("no-reflog"), "got: {set:?}");
     }
 
     #[test]
@@ -6041,7 +6050,7 @@ fn get_git_diff_with_options_sync(
 ) -> Result<String, String> {
     let repo_path = PathBuf::from(path);
 
-    let mut list_args = diff_base_args(scope)?;
+    let mut list_args = diff_base_args(&repo_path, scope)?;
     list_args.push("--name-status".into());
     list_args.push("-z".into());
     let list_args_str: Vec<&str> = list_args.iter().map(|s| s.as_str()).collect();

@@ -508,30 +508,6 @@ pub enum AppEvent {
     /// request must dismiss it; `confirmed` is the answer that won.
     #[serde(rename = "mcp-confirm-resolved")]
     McpConfirmResolved { request_id: String, confirmed: bool },
-    /// A zsh shell detected the user already has their own
-    /// `claude`/`codex`/`goose` function and there is no recorded decision for
-    /// that exact function (fingerprint) — see
-    /// `agent_wrap_prompt::request`. Deliberately NOT built on
-    /// `McpConfirm`/`McpConfirmResolved`'s oneshot/timeout shape: that
-    /// mechanism collapses "explicit No" and "dismissed without answering"
-    /// into the same `bool`, which is exactly the distinction this feature
-    /// needs to keep. Broadcast to every client — the first answer wins,
-    /// same reasoning as `McpConfirm`.
-    #[serde(rename = "agent-wrap-prompt")]
-    AgentWrapPrompt {
-        request_id: String,
-        agent_type: String,
-    },
-    /// The prompt was answered (persisting `Some(decision)`) or dismissed
-    /// (`decision: None`, snoozed for this app run only — see
-    /// `AppState::agent_wrap_snoozed`). Clients showing that agent's prompt
-    /// must dismiss it.
-    #[serde(rename = "agent-wrap-prompt-resolved")]
-    AgentWrapPromptResolved {
-        request_id: String,
-        agent_type: String,
-        decision: Option<bool>,
-    },
     /// Something happened on an ACP connection that a client may want to look at.
     ///
     /// Only the wake signal rides this bus. The ordered frames of a turn stay on
@@ -997,6 +973,7 @@ pub(crate) fn worktree_warm_completed_payload(
 /// re-deriving this if/else a second time and risking the two callers
 /// disagreeing. `session_state_with_shell` keeps only the first element,
 /// exactly as before this extraction.
+#[allow(clippy::too_many_arguments)] // The ladder's independent evidence inputs, one per rung.
 pub(crate) fn resolve_agent_state(
     agent_type: Option<&str>,
     foreground_input_blocked: bool,
@@ -2524,6 +2501,11 @@ pub(crate) struct GitHubState {
     /// viewer-login cache + rate budget, keyed by account id. github.com uses the
     /// global fields above, so a github.com-only user is byte-for-byte unchanged.
     pub(crate) ghe_state: DashMap<String, crate::github::GheAccountState>,
+    /// The user's "hide draft PRs" setting as the poller last received it. The poller keeps
+    /// its own copy; this mirror lets an out-of-band re-poll (a PR action whose snapshot
+    /// expired) poll with the same settings instead of overwriting the shared cache with a
+    /// differently filtered result.
+    pub(crate) pr_hide_drafts: std::sync::atomic::AtomicBool,
 }
 
 impl Default for GitHubState {
@@ -2539,6 +2521,7 @@ impl Default for GitHubState {
             viewer_login: parking_lot::RwLock::new(None),
             // u32::MAX means "no constraint known yet", not "no budget left".
             rate_limit_remaining: std::sync::atomic::AtomicU32::new(u32::MAX),
+            pr_hide_drafts: std::sync::atomic::AtomicBool::new(false),
             ghe_state: dashmap::DashMap::new(),
         }
     }
@@ -3277,18 +3260,6 @@ pub struct AppState {
     pub(crate) settings_api: tokio::sync::OnceCell<crate::settings::api::Settings>,
     pub(crate) plugin_keybinding_actions: Arc<parking_lot::RwLock<Option<Vec<String>>>>,
     pub(crate) confirm_responses: DashMap<String, tokio::sync::oneshot::Sender<bool>>,
-    /// One in-flight "wrap my shell function?" prompt per agent type (agent
-    /// type → pending request: id + the user-function fingerprint it asks
-    /// about) — deliberately app-wide, not per-session: a workspace with many
-    /// tabs, each detecting the same undecided `claude`/`codex`/`goose`
-    /// function, must open the dialog once, not once per tab. See
-    /// `agent_wrap_prompt::request`.
-    pub(crate) agent_wrap_pending: DashMap<String, crate::agent_wrap_prompt::PendingWrapPrompt>,
-    /// Agent types whose "wrap my shell function?" prompt was dismissed
-    /// without an explicit answer this app run. In-memory only, by design —
-    /// this is the confirmed dismiss semantics (snooze for this run,
-    /// re-prompt on restart if still undecided), never persisted to disk.
-    pub(crate) agent_wrap_snoozed: DashSet<String>,
     /// App-wide process-tree snapshot shared by agent lifecycle polling.
     pub(crate) process_snapshot_cache: crate::pty::ProcessSnapshotCache,
     /// Repos with active terminals — used to throttle watcher/polling for cold repos.
@@ -3372,10 +3343,7 @@ impl AppState {
         // state lane for an agent that animates its OSC title (each distinct
         // title is a `PtyTitle` and, once applied, a `SessionRenamed` from
         // `osc_title::apply_osc_title`, which the accumulator ignores anyway).
-        if !matches!(
-            &event,
-            AppEvent::PtyTitle { .. } | AppEvent::SessionRenamed { .. }
-        ) {
+        if !matches!(&event, AppEvent::SessionRenamed { .. }) {
             let parented = self.event_is_parented(&event);
             self.session_maps
                 .session_state_events
@@ -5040,8 +5008,6 @@ impl AppState {
             settings_api: tokio::sync::OnceCell::new(),
             plugin_keybinding_actions: Default::default(),
             confirm_responses: DashMap::new(),
-            agent_wrap_pending: DashMap::new(),
-            agent_wrap_snoozed: DashSet::new(),
             process_snapshot_cache: crate::pty::ProcessSnapshotCache::default(),
             hot_repo_paths: parking_lot::RwLock::new(std::collections::HashSet::new()),
             #[cfg(test)]
@@ -5536,6 +5502,8 @@ pub(crate) enum WorktreeSetupStatus {
         exit_code: Option<i64>,
         error: Option<String>,
     },
+}
+
 /// Bounded, TTL-evicted cache of [`WorktreeSetupStatus`] snapshots, keyed by
 /// `(repo_path, branch)`. Same shape as [`GitCache`] (moka, capacity + TTL
 /// bound) but keyed on a pair rather than a single repo path, so it lives
@@ -5554,6 +5522,8 @@ pub(crate) fn build_worktree_setup_status_cache() -> WorktreeSetupStatusCache {
         .max_capacity(GIT_CACHE_CAPACITY)
         .time_to_live(Duration::from_secs(30 * 60))
         .build()
+}
+
 /// TTL caches for git and GitHub query results, keyed by repo path.
 pub(crate) struct GitCacheState {
     worktree_storage_settings: Mutex<WorktreeStorageSettings>,
@@ -5572,6 +5542,15 @@ pub(crate) struct GitCacheState {
     /// Excluded from batch queries until the cooldown expires (24 hours).
     /// NOT a TTL value cache — kept as a plain `DashMap` set with custom expiry.
     pub(crate) github_repo_cooldown: DashMap<String, Instant>,
+    /// Fork parentage learned from GitHub, keyed by `host/owner/name` (lowercase): the
+    /// parent's `owner/name`, or `None` for a repository that is not a fork. Whether a
+    /// repository is a fork is fixed for its lifetime, so an entry is never refreshed or
+    /// expired; it lives for the process. An entry exists only once GitHub answered for the
+    /// repository, so an inaccessible repo is retried.
+    pub(crate) github_repo_parents: DashMap<String, Option<String>>,
+    /// When each checkout last had an out-of-band re-poll (`github::repoll_checkout`), so a
+    /// caller looping on an unknown `baseRepo` cannot force a full poll per request.
+    pub(crate) github_repoll_at: DashMap<String, Instant>,
     pub(crate) github_repo_access_errors: DashMap<String, crate::github::RepoAccessFailure>,
     /// Settled review-thread totals of PRs with more threads than the batch poll reads, keyed by
     /// "host/owner/name#number". Not a TTL cache: an entry is valid while the PR's `updatedAt` and head
@@ -5596,6 +5575,8 @@ impl GitCacheState {
             git_status: build_git_cache(GIT_CACHE_TTL, Arc::clone(&ttl_fallbacks)),
             worktree_paths: build_git_cache(GIT_CACHE_TTL, Arc::clone(&ttl_fallbacks)),
             github_repo_cooldown: DashMap::new(),
+            github_repo_parents: DashMap::new(),
+            github_repoll_at: DashMap::new(),
             github_repo_access_errors: DashMap::new(),
             settled_review_threads: DashMap::new(),
             ttl_fallbacks,
@@ -7245,8 +7226,6 @@ impl AppState {
             | AppEvent::ProviderQuotaChanged(_)
             | AppEvent::ProviderQuotaBindingChanged(_)
             | AppEvent::IdeasChanged
-            | AppEvent::AgentWrapPrompt { .. }
-            | AppEvent::AgentWrapPromptResolved { .. }
             | AppEvent::RepositoriesChanged
             | AppEvent::DirChanged { .. }
             | AppEvent::SessionWorktreeDeclared { .. }
@@ -13723,11 +13702,29 @@ mod tests {
     #[test]
     fn resolve_agent_state_error_rung_sits_between_awaiting_and_background_work() {
         assert_eq!(
-            resolve_agent_state(Some("claude"), false, false, false, true, true, true, Some("busy")),
+            resolve_agent_state(
+                Some("claude"),
+                false,
+                false,
+                false,
+                true,
+                true,
+                true,
+                Some("busy")
+            ),
             (Some("error"), "agent_error")
         );
         assert_eq!(
-            resolve_agent_state(Some("claude"), false, true, false, true, false, false, Some("busy")),
+            resolve_agent_state(
+                Some("claude"),
+                false,
+                true,
+                false,
+                true,
+                false,
+                false,
+                Some("busy")
+            ),
             (Some("awaiting_input"), "awaiting_or_choice_prompt")
         );
     }
@@ -13785,6 +13782,9 @@ mod tests {
             session.agent_type = Some("claude".into());
             session.choice_prompt = Some(crate::output_parser::ChoicePromptPayload {
                 title: "Confirm".into(),
+                header: None,
+                question_index: None,
+                question_count: None,
                 options: vec![
                     crate::output_parser::ChoiceOption {
                         key: "1".into(),

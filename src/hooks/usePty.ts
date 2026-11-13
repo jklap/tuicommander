@@ -178,7 +178,7 @@ export function usePty() {
 		return await rpc<EnqueuedCommand>("enqueue_agent_command", {
 			sessionId,
 			text,
-			idempotencyKey: crypto.randomUUID(),
+			idempotencyKey: randomId(""),
 		});
 	}
 

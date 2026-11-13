@@ -13,8 +13,8 @@ import {
 } from "../../hooks/useSmartPrompts";
 import { t } from "../../i18n";
 import { appLogger } from "../../stores/appLogger";
-import { type PromptCategory, promptLibraryStore, type SavedPrompt } from "../../stores/promptLibrary";
 import { registerModal } from "../../stores/modalStack";
+import { type PromptCategory, promptLibraryStore, type SavedPrompt } from "../../stores/promptLibrary";
 import { terminalsStore } from "../../stores/terminals";
 import { toastsStore } from "../../stores/toasts";
 import { cx } from "../../utils";
@@ -667,7 +667,7 @@ const PromptEditor: Component<PromptEditorProps> = (props) => {
 					createdAt: 0,
 					updatedAt: 0,
 					executionMode: "inject",
-					injectTarget: "compose",
+					injectTarget: "auto",
 					autoExecute: false,
 				},
 	);
@@ -736,6 +736,7 @@ const PromptEditor: Component<PromptEditorProps> = (props) => {
 					</p>
 				</Show>
 				<SmartPromptEditor
+					autoFocusName
 					prompt={draft}
 					title={props.prompt ? "Edit Prompt" : "New Prompt"}
 					headlessAgents={headlessAgents()}

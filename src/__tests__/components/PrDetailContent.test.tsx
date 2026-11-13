@@ -83,6 +83,26 @@ describe("PrDetailContent — ego review result metadata", () => {
 		expect(getByText("No findings")).toBeTruthy();
 	});
 
+	// Catches: CI logs of a fork's PR being read from the fork instead of the upstream it targets.
+	it("names the PR's base repo when fetching a check log", async () => {
+		mockGithubStore.getBranchPrData.mockReturnValue({ ...basePr, base_repo: "org/hello" });
+		mockGithubStore.getCheckDetails.mockReturnValue([
+			{ context: "ci/circleci: test", state: "failure", html_url: "https://circleci.com/gh/org/hello/42" },
+		]);
+		mockRpc.mockResolvedValue("failed step");
+		const repo = nextRepo();
+		const { getByText, findByText } = render(() => <PrDetailContent repoPath={repo} branch="feature" />);
+		fireEvent.click(getByText("Log"));
+		expect(mockRpc).toHaveBeenCalledWith("fetch_ci_failure_logs", {
+			repoPath: repo,
+			branch: "feature",
+			checkUrl: "https://circleci.com/gh/org/hello/42",
+			headSha: "a".repeat(40),
+			baseRepo: "org/hello",
+		});
+		expect(await findByText("failed step")).toBeTruthy();
+	});
+
 	it("fetches and renders a failed CircleCI check log without opening its URL", async () => {
 		mockGithubStore.getCheckDetails.mockReturnValue([
 			{ context: "ci/circleci: test", state: "failure", html_url: "https://circleci.com/gh/acme/widget/42" },
@@ -270,5 +290,124 @@ describe("PrDetailContent — readiness and unresolved threads", () => {
 		const { container } = render(() => <PrDetailContent repoPath={repo} branch="feature" />);
 		expect(container.querySelector("[data-readiness]")?.getAttribute("data-readiness")).toBe("ready");
 		expect(mockRpc).not.toHaveBeenCalledWith("get_pr_review_threads", expect.anything());
+	});
+});
+
+describe("PrDetailContent — baseRepo forwarding", () => {
+	beforeEach(() => {
+		vi.clearAllMocks();
+		mockGithubStore.getCheckSummary.mockReturnValue(null);
+		mockGithubStore.getCheckDetails.mockReturnValue([]);
+	});
+
+	const baseRepoOfInvoke = (cmd: string): string | undefined => {
+		const call = mockInvoke.mock.calls.find(([c]) => c === cmd);
+		expect(call, `${cmd} was not invoked`).toBeDefined();
+		return (call?.[1] as { baseRepo?: string } | undefined)?.baseRepo;
+	};
+	const reviewWithFinding = {
+		repo_path: "/repo",
+		pr_number: 42,
+		head_sha: "abc",
+		summary: "One bug.",
+		files: [
+			{
+				path: "src/bug.ts",
+				summary: "s",
+				findings: [
+					{ path: "src/bug.ts", line: 7, hunk: null, severity: "bug", confidence: 0.9, message: "Null deref" },
+				],
+			},
+		],
+	};
+
+	// Catches: CI check details of a fork's PR read from the wrong repo when numbers collide.
+	it.each([
+		["with", "org/hello"],
+		["without", undefined],
+	])("loads check details %s base_repo", async (_label, baseRepo) => {
+		mockGithubStore.getBranchPrData.mockReturnValue({ ...basePr, base_repo: baseRepo });
+		const repo = nextRepo();
+		render(() => <PrDetailContent repoPath={repo} branch="feature" />);
+		await waitFor(() => expect(mockGithubStore.loadCheckDetails).toHaveBeenCalled());
+		expect(mockGithubStore.loadCheckDetails).toHaveBeenCalledWith(repo, "feature", 42, baseRepo);
+	});
+
+	// Catches: unresolved-thread counts of a fork's PR read from the wrong repo.
+	it.each([
+		["with", "org/hello"],
+		["without", undefined],
+	])("reads review threads %s base_repo", async (_label, baseRepo) => {
+		mockGithubStore.getBranchPrData.mockReturnValue({
+			...basePr,
+			base_repo: baseRepo,
+			conflict_state: "clear",
+			review_decision: "APPROVED",
+			unresolved_threads: 3,
+			unresolved_threads_truncated: false,
+		});
+		mockRpc.mockImplementation(async (cmd: string) =>
+			cmd === "get_pr_review_threads" ? { bot: 1, human: 1, ego: 1 } : null,
+		);
+		const repo = nextRepo();
+		render(() => <PrDetailContent repoPath={repo} branch="feature" />);
+		await waitFor(() => expect(mockRpc).toHaveBeenCalledWith("get_pr_review_threads", expect.anything()));
+		const args = mockRpc.mock.calls.find(([c]) => c === "get_pr_review_threads")?.[1] as { baseRepo?: string };
+		expect(args.baseRepo).toBe(baseRepo);
+	});
+
+	// Catches: the AI review run (and its stored result) reading the wrong repo's PR.
+	it.each([
+		["with", "org/hello"],
+		["without", undefined],
+	])("run review %s base_repo", async (_label, baseRepo) => {
+		mockGithubStore.getBranchPrData.mockReturnValue({ ...basePr, base_repo: baseRepo });
+		mockInvoke.mockResolvedValue({ ...reviewWithFinding, files: [] });
+		const repo = nextRepo();
+		const { getByText } = render(() => <PrDetailContent repoPath={repo} branch="feature" />);
+		fireEvent.click(getByText("Run"));
+		await waitFor(() => expect(mockInvoke).toHaveBeenCalledWith("run_pr_review", expect.anything()));
+		expect(baseRepoOfInvoke("run_pr_review")).toBe(baseRepo);
+	});
+
+	// Catches: posting review comments to the wrong repo's PR.
+	it.each([
+		["with", "org/hello"],
+		["without", undefined],
+	])("post review %s base_repo", async (_label, baseRepo) => {
+		mockGithubStore.getBranchPrData.mockReturnValue({ ...basePr, base_repo: baseRepo });
+		mockInvoke.mockResolvedValue(reviewWithFinding);
+		// happy-dom ships no window.confirm; posting asks first.
+		window.confirm = vi.fn(() => true);
+		const repo = nextRepo();
+		const { getByText, findByText } = render(() => <PrDetailContent repoPath={repo} branch="feature" />);
+		fireEvent.click(getByText("Run"));
+		await findByText("Null deref");
+		fireEvent.click(getByText("Post review"));
+		await waitFor(() => expect(mockInvoke).toHaveBeenCalledWith("post_pr_review", expect.anything()));
+		expect(baseRepoOfInvoke("post_pr_review")).toBe(baseRepo);
+	});
+
+	// Catches: conflict assist starting on the wrong repo's PR (the callback is the only carrier).
+	it.each([
+		["with", "org/hello"],
+		["without", undefined],
+	])("resolve conflicts hands the callback the PR number and base_repo %s", (_label, baseRepo) => {
+		mockGithubStore.getBranchPrData.mockReturnValue({
+			...basePr,
+			base_repo: baseRepo,
+			mergeable: "CONFLICTING",
+			conflict_state: "conflicting",
+			merge_state_status: "DIRTY",
+			merge_state_label: { label: "Conflicts", css_class: "conflicting" },
+			is_draft: false,
+		});
+		const onConflictAssist = vi.fn();
+		const repo = nextRepo();
+		const { getByText } = render(() => (
+			<PrDetailContent repoPath={repo} branch="feature" onConflictAssist={onConflictAssist} />
+		));
+		fireEvent.click(getByText("Resolve conflicts"));
+		expect(onConflictAssist).toHaveBeenCalledWith(42, baseRepo);
 	});
 });

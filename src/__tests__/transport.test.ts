@@ -5267,3 +5267,83 @@ it("maps neutral workflow actions without changing casing or nested mappings", (
 		body: action,
 	});
 });
+
+// Catches: a browser client dropping baseRepo so a fork/upstream PR number resolves ambiguously.
+describe("PR commands forward baseRepo over HTTP exactly when set", () => {
+	const base = { repoPath: "/r", path: "/r", prNumber: 7 };
+	const withRepo = { ...base, baseRepo: "up/stream" };
+	const postCommands: Array<[string, string]> = [
+		["approve_pr", "/repo/approve-pr"],
+		["update_pr_branch", "/repo/update-pr-branch"],
+		["close_pr", "/repo/close-pr"],
+		["merge_pr_via_github", "/repo/merge-pr"],
+		["post_pr_review", "/repo/post-pr-review"],
+		["set_pr_auto_merge", "/repo/pr-auto-merge"],
+		["set_pr_merge_queue", "/repo/pr-merge-queue"],
+		["merge_or_enqueue_pr", "/repo/pr-merge-or-enqueue"],
+		["submit_pr_draft_review", "/repo/pr-draft-review"],
+	];
+
+	it.each(postCommands)("%s puts baseRepo in the POST body", (cmd, path) => {
+		const set = mapCommandToHttp(cmd, withRepo)!;
+		expect(set.method).toBe("POST");
+		expect(set.path).toBe(path);
+		expect((set.body as Record<string, unknown>).baseRepo).toBe("up/stream");
+		const unset = mapCommandToHttp(cmd, base)!;
+		expect((unset.body as Record<string, unknown>).baseRepo).toBeUndefined();
+	});
+
+	const getCommands: Array<[string, string]> = [
+		["get_ci_checks", "base_repo"],
+		["get_pr_review_threads", "base_repo"],
+		["get_pr_diff", "base_repo"],
+		["get_pr_action_state", "baseRepo"],
+		["get_pr_line_threads", "baseRepo"],
+		["get_pr_open_threads", "baseRepo"],
+	];
+
+	it.each(getCommands)("%s puts the base repo in the GET query", (cmd, key) => {
+		const set = mapCommandToHttp(cmd, withRepo)!;
+		expect(set.method).toBe("GET");
+		expect(new URL(set.path, "http://localhost").searchParams.get(key)).toBe("up/stream");
+		const unset = mapCommandToHttp(cmd, base)!;
+		expect(unset.path).not.toMatch(/base_?[rR]epo/);
+	});
+
+	it("rerun_failed_pr_jobs puts baseRepo in the POST body only when set", () => {
+		const set = mapCommandToHttp("rerun_failed_pr_jobs", { repoPath: "/r", runId: 9, baseRepo: "up/stream" })!;
+		expect(set.path).toBe("/repo/pr-rerun-failed");
+		expect((set.body as Record<string, unknown>).baseRepo).toBe("up/stream");
+		const unset = mapCommandToHttp("rerun_failed_pr_jobs", { repoPath: "/r", runId: 9 })!;
+		expect((unset.body as Record<string, unknown>).baseRepo).toBeUndefined();
+	});
+
+	it("fetch_ci_failure_logs puts baseRepo in the GET query only when set", () => {
+		const args = { repoPath: "/r", branch: "feat", checkUrl: "https://x/y", headSha: "abc" };
+		const set = mapCommandToHttp("fetch_ci_failure_logs", { ...args, baseRepo: "up/stream" })!;
+		const url = new URL(set.path, "http://localhost");
+		expect(url.pathname).toBe("/repo/ci-failure-logs");
+		expect(url.searchParams.get("baseRepo")).toBe("up/stream");
+		expect(url.searchParams.get("checkUrl")).toBe("https://x/y");
+		expect(
+			new URL(mapCommandToHttp("fetch_ci_failure_logs", args)!.path, "http://localhost").searchParams.has("baseRepo"),
+		).toBe(false);
+	});
+
+	it.each([
+		["start_conflict_assist", "/repo/conflict-assist"],
+		["run_pr_review", "/repo/pr-review"],
+	])("%s puts baseRepo in the POST body only when set", (cmd, path) => {
+		const set = mapCommandToHttp(cmd, { repoPath: "/r", prNumber: 7, baseRepo: "up/stream" })!;
+		expect(set.method).toBe("POST");
+		expect(set.path).toBe(path);
+		expect(set.body as Record<string, unknown>).toMatchObject({ repoPath: "/r", prNumber: 7, baseRepo: "up/stream" });
+		const unset = mapCommandToHttp(cmd, { repoPath: "/r", prNumber: 7 })!;
+		expect((unset.body as Record<string, unknown>).baseRepo).toBeUndefined();
+	});
+
+	it("merge_pr_via_github sends expectedHeadSha", () => {
+		const m = mapCommandToHttp("merge_pr_via_github", { ...base, mergeMethod: "squash", expectedHeadSha: "abc" })!;
+		expect((m.body as Record<string, unknown>).expectedHeadSha).toBe("abc");
+	});
+});

@@ -3363,7 +3363,7 @@ fn long_claude_submission_frames_the_recorded_dictation_payload() {
     write_agent_command_to_pty(&state, "claude-long-dictation", text).unwrap();
     assert_eq!(
         *bytes.lock().unwrap(),
-        format!("\x15\x1b[200~{text}\x1b[201~\r").as_bytes()
+        format!("\x1b[200~{text}\x1b[201~\r").as_bytes()
     );
 }
 
@@ -4865,7 +4865,7 @@ fn chat_pending_send_now_and_idle_drain_deliver_exactly_once() {
         );
         assert_eq!(
             *bytes.lock().unwrap(),
-            b"\x15Review now\r",
+            b"Review now\r",
             "idle_wins={idle_wins}"
         );
         assert!(list_queued_commands(&state, "chat-pending").is_empty());
@@ -4915,7 +4915,7 @@ fn chat_pending_codex_send_now_still_interrupts_then_submits() {
     assert_eq!(send.join().unwrap(), Ok(true));
     // The idle edge's FIFO flush types the prompt, as the silence timer does.
     flush_pending_injections_blocking(&state, "chat-codex");
-    assert_eq!(*bytes.lock().unwrap(), b"\x1b\x15chosen\r");
+    assert_eq!(*bytes.lock().unwrap(), b"\x1bchosen\r");
 }
 
 // Catches: the tooltip promising background for a harness that interrupts, or
@@ -4983,7 +4983,7 @@ fn steer_interrupts_each_working_harness_before_delivering_owner_text() {
         assert_eq!(result, Ok(true), "{agent}");
         assert_eq!(
             *bytes.lock().unwrap(),
-            b"\x1b\x15owner correction\r",
+            b"\x1bowner correction\r",
             "{agent}"
         );
         let remaining = list_queued_commands(&state, sid);
@@ -5029,10 +5029,10 @@ fn steer_clears_a_prompt_claude_restored_into_the_composer() {
             .as_bytes(),
     );
     state.grid.vt_log_buffers.insert(sid.into(), Mutex::new(vt));
-    wait_for(b"\x1b\x15");
+    wait_for(b"\x1b");
     interrupt_settles_to_idle_edge(&state, sid);
     assert_eq!(send.join().unwrap(), Ok(true));
-    assert_eq!(*bytes.lock().unwrap(), b"\x1b\x15\x15owner correction\r");
+    assert_eq!(*bytes.lock().unwrap(), b"\x1bowner correction\r");
 }
 
 // Catches: unsupported or dialog-owned composers losing the queued prompt before refusal.
@@ -5100,7 +5100,7 @@ fn chat_pending_concurrent_turn_end_and_steer_have_one_writer() {
     send_queued_command_now(&state, "chat-race", id).unwrap();
     idle.join().unwrap();
     // Either writer finds the agent idle: no running tool to background.
-    assert_eq!(&*bytes.lock().unwrap(), b"\x15once\r");
+    assert_eq!(&*bytes.lock().unwrap(), b"once\r");
     assert!(list_queued_commands(&state, "chat-race").is_empty());
 }
 
@@ -5197,7 +5197,7 @@ fn chat_send_now_owner_text_wins_the_interrupt_idle_edge_over_mail_wakes() {
 
         let written = String::from_utf8(bytes.lock().unwrap().clone()).unwrap();
         assert!(
-            written.starts_with("\x1b\x15Boss steering\r"),
+            written.starts_with("\x1bBoss steering\r"),
             "orchestrator={orchestrator}: the owner text must be the first turn after the interrupt, got {written:?} (send now: {result:?})"
         );
         assert_eq!(result, Ok(true), "orchestrator={orchestrator}");
@@ -5294,7 +5294,7 @@ fn chat_send_now_repeat_while_interrupt_pending_writes_no_second_esc() {
         assert_eq!(&*bytes.lock().unwrap(), b"\x1b");
         interrupt_settles_to_idle_edge(&state, sid);
         assert_eq!(send.join().unwrap(), Ok(true));
-        assert_eq!(&*bytes.lock().unwrap(), b"\x1b\x15first\r");
+        assert_eq!(&*bytes.lock().unwrap(), b"\x1bfirst\r");
         assert_eq!(list_queued_commands(&state, sid)[0].text, "second");
     }
 }
@@ -5512,7 +5512,7 @@ fn send_now_delivers_a_compose_command_to_an_agent_that_refused_its_turn() {
         .push_back(parked);
 
     assert_eq!(send_queued_command_now(&state, sid, id), Ok(true));
-    assert_eq!(&*bytes.lock().unwrap(), b"\x15config fixed, continue\r");
+    assert_eq!(&*bytes.lock().unwrap(), b"config fixed, continue\r");
     assert!(list_queued_commands(&state, sid).is_empty());
 }
 

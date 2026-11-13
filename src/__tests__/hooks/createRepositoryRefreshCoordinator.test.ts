@@ -35,6 +35,7 @@ describe("createRepositoryRefreshCoordinator", () => {
 		createRepositoryRefreshCoordinator({
 			repo: {
 				getInfo: async () => ({ branch: "main", is_git_repo: true }),
+				sweepArchiveRetention: async () => ({ deleted: [], kept: [] }),
 				getRepoStructure: async () => ({
 					worktree_paths: worktreePaths,
 					merged_branches: [],

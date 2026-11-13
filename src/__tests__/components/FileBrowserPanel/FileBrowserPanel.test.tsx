@@ -53,7 +53,6 @@ const emitEvent = (event: string, payload: unknown) => {
 
 const { FileBrowserPanel } = await import("../../../components/FileBrowserPanel/FileBrowserPanel");
 const { uiStore } = await import("../../../stores/ui");
-const { appLogger } = await import("../../../stores/appLogger");
 const { mdTabsStore } = await import("../../../stores/mdTabs");
 const { editorTabsStore } = await import("../../../stores/editorTabs");
 const { repositoriesStore } = await import("../../../stores/repositories");
@@ -185,9 +184,9 @@ describe("FileBrowserPanel external filesystem refresh", () => {
 		"%s — catches unwatched expanded children and stale collapsed caches",
 		async (scenario) => {
 			// Under the per-run test root (scripts/with-test-tmp.sh sets TMPDIR), not the checkout: an agent
-		// sandbox denies `git init`'s .git/config write anywhere below it. Physical spelling, because
-		// the watcher reports resolved paths.
-		const scratch = join(realpathSync(tmpdir()), "file-tree-external");
+			// sandbox denies `git init`'s .git/config write anywhere below it. Physical spelling, because
+			// the watcher reports resolved paths.
+			const scratch = join(realpathSync(tmpdir()), "file-tree-external");
 			mkdirSync(scratch, { recursive: true });
 			const root = mkdtempSync(join(scratch, "tree-"));
 			const nested = scenario === "non-git root with nested git repo";

@@ -110,7 +110,7 @@ export interface PrDetailContentProps {
 	branch: string;
 	/** Shown only when the PR merge state is conflicting — rebases the PR head
 	 *  branch onto its base in a worktree and opens an agent to resolve conflicts. */
-	onConflictAssist?: (prNumber: number) => void;
+	onConflictAssist?: (prNumber: number, baseRepo?: string) => void;
 	/** Push the (rebased/resolved) conflict worktree branch to origin. Shown when a
 	 *  local worktree exists for this branch. Gated behind a confirm() by the caller. */
 	onPushBranch?: (worktreePath: string) => void;
@@ -152,6 +152,7 @@ export const PrDetailContent: Component<PrDetailContentProps> = (props) => {
 				branch: props.branch,
 				checkUrl: url,
 				headSha: prData()?.head_ref_oid,
+				baseRepo: prData()?.base_repo,
 			});
 			setCircleCiLogs((logs) => ({ ...logs, [url]: { text } }));
 		} catch (error) {
@@ -165,7 +166,7 @@ export const PrDetailContent: Component<PrDetailContentProps> = (props) => {
 	// reopening shows its running/done/error state instead of resetting to "Run".
 	const reviewEntry = () => {
 		const pr = prData();
-		return pr ? prReviewStore.get(props.repoPath, pr.number) : undefined;
+		return pr ? prReviewStore.get(props.repoPath, pr.number, pr.base_repo) : undefined;
 	};
 	const review = () => reviewEntry()?.result ?? null;
 	const reviewLoading = () => reviewEntry()?.status === "running";
@@ -180,13 +181,13 @@ export const PrDetailContent: Component<PrDetailContentProps> = (props) => {
 	function runAiReview() {
 		const pr = prData();
 		if (!pr) return;
-		void prReviewStore.run(props.repoPath, pr.number);
+		void prReviewStore.run(props.repoPath, pr.number, pr.base_repo);
 	}
 
 	function toggleFinding(id: string) {
 		const pr = prData();
 		if (!pr) return;
-		prReviewStore.toggleFinding(props.repoPath, pr.number, id);
+		prReviewStore.toggleFinding(props.repoPath, pr.number, id, pr.base_repo);
 	}
 
 	function postSelectedFindings() {
@@ -194,7 +195,7 @@ export const PrDetailContent: Component<PrDetailContentProps> = (props) => {
 		const findings = selectedFindings();
 		if (!pr || findings.length === 0 || reviewPosting()) return;
 		if (!window.confirm(t("prDetail.postReviewConfirm", "Post selected AI review findings to GitHub?"))) return;
-		void prReviewStore.post(props.repoPath, pr.number, findings);
+		void prReviewStore.post(props.repoPath, pr.number, findings, pr.base_repo);
 	}
 
 	// Lazy-load CI check details when this content mounts.
@@ -210,9 +211,10 @@ export const PrDetailContent: Component<PrDetailContentProps> = (props) => {
 		if (pr) {
 			const { repoPath, branch } = props;
 			const prNumber = pr.number;
+			const baseRepo = pr.base_repo;
 			queueMicrotask(() => {
 				githubStore
-					.loadCheckDetails(repoPath, branch, prNumber)
+					.loadCheckDetails(repoPath, branch, prNumber, baseRepo)
 					.catch((e) => appLogger.warn("github", "Failed to load check details", { error: String(e) }));
 			});
 		}
@@ -258,14 +260,16 @@ export const PrDetailContent: Component<PrDetailContentProps> = (props) => {
 		() => {
 			const pr = prData();
 			return pr && (pr.unresolved_threads > 0 || pr.unresolved_threads_truncated) && !isTerminalState()
-				? { path: props.repoPath, prNumber: pr.number, unresolved: pr.unresolved_threads }
+				? { path: props.repoPath, prNumber: pr.number, baseRepo: pr.base_repo, unresolved: pr.unresolved_threads }
 				: null;
 		},
-		({ path, prNumber }) =>
-			rpc<{ bot: number; human: number; ego: number }>("get_pr_review_threads", { path, prNumber }).catch((e) => {
-				appLogger.warn("github", "Failed to load review threads", { error: String(e) });
-				return null;
-			}),
+		({ path, prNumber, baseRepo }) =>
+			rpc<{ bot: number; human: number; ego: number }>("get_pr_review_threads", { path, prNumber, baseRepo }).catch(
+				(e) => {
+					appLogger.warn("github", "Failed to load review threads", { error: String(e) });
+					return null;
+				},
+			),
 	);
 
 	// Keyed on the conflict state, not the readiness verdict: the verdict ranks "draft" above
@@ -437,7 +441,7 @@ export const PrDetailContent: Component<PrDetailContentProps> = (props) => {
 							<Show when={props.onConflictAssist}>
 								<Button
 									type="button"
-									onClick={() => props.onConflictAssist?.(pr().number)}
+									onClick={() => props.onConflictAssist?.(pr().number, pr().base_repo)}
 									title={t(
 										"prDetail.resolveConflictsHint",
 										"Rebase the PR branch and open an agent to resolve conflicts",

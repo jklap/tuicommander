@@ -544,4 +544,30 @@ describe("useAutoDeleteBranch", () => {
 		await vi.waitFor(() => expect(mockConfirm).toHaveBeenCalledTimes(2));
 		dispose?.();
 	});
+
+	it("does not let a fork PR and an upstream PR with the same number swallow each other", async () => {
+		mockGetEffective.mockReturnValue({ autoDeleteOnPrClose: "auto" });
+		mockGet.mockReturnValue({
+			workspaces: {
+				"feature/fork-side": { branchName: "feature/fork-side", isMain: false },
+				"feature/upstream-side": { branchName: "feature/upstream-side", isMain: false },
+			},
+		});
+		const dispose = setup();
+		const cb = getCapturedCallback();
+
+		cb("/repo1", "feature/fork-side", 5, "merged");
+		cb("/repo1", "feature/upstream-side", 5, "merged");
+		cb("/repo1", "feature/upstream-side", 5, "merged"); // exact repeat
+
+		await vi.waitFor(() => {
+			expect(mockInvoke.mock.calls.filter((c) => c[0] === "delete_local_branch")).toHaveLength(2);
+		});
+		const branches = mockInvoke.mock.calls
+			.filter((c) => c[0] === "delete_local_branch")
+			.map((c) => (c[1] as { branchName: string }).branchName)
+			.sort();
+		expect(branches).toEqual(["feature/fork-side", "feature/upstream-side"]);
+		dispose?.();
+	});
 });

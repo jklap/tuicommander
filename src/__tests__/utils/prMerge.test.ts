@@ -174,3 +174,34 @@ describe("head moved during merge", () => {
 		expect(isAlreadyMerged(new Error("GitHub merge failed (409): Merge conflict"))).toBe(true);
 	});
 });
+
+describe("mergeWithFallback baseRepo", () => {
+	beforeEach(() => {
+		mockInvoke.mockReset();
+	});
+
+	it("forwards baseRepo on every attempt, including the 405 fallback", async () => {
+		mockInvoke.mockRejectedValueOnce(new Error("405")).mockResolvedValueOnce(undefined);
+
+		await mergeWithFallback("/repo", 42, "merge", "sha42", "upstream/repo");
+
+		expect(mockInvoke).toHaveBeenNthCalledWith(1, "merge_pr_via_github", {
+			repoPath: "/repo",
+			prNumber: 42,
+			mergeMethod: "merge",
+			expectedHeadSha: "sha42",
+			baseRepo: "upstream/repo",
+		});
+		expect(mockInvoke).toHaveBeenNthCalledWith(
+			2,
+			"merge_pr_via_github",
+			expect.objectContaining({ mergeMethod: "squash", baseRepo: "upstream/repo" }),
+		);
+	});
+
+	it("sends no baseRepo when none is given", async () => {
+		mockInvoke.mockResolvedValueOnce(undefined);
+		await mergeWithFallback("/repo", 42, "merge", "sha42");
+		expect((mockInvoke.mock.calls[0][1] as { baseRepo?: string }).baseRepo).toBeUndefined();
+	});
+});

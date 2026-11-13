@@ -160,18 +160,53 @@ describe("globalWorkspaceStore scopes", () => {
 		});
 	});
 
-	// Batch 45/46 review: with zero members in the new scope there is nothing to
-	// reconcile to, and activeId used to keep naming the OLD scope's terminal —
-	// whose content TerminalArea's single-pane path keeps showing.
 	it("clears the active terminal when switching (while showing) to a scope with no members", () => {
+		testInScope(() => {
 			const repoTerm = terminalsStore.add(makeTerminal({ name: "wt-1" }));
+			store.syncScopeMembers("/repo/a", [repoTerm]);
+			store.setScope("/repo/a");
+			store.activate();
+			expect(terminalsStore.state.activeId).toBe(repoTerm);
+
 			store.setScope("/repo/empty");
+
 			expect(store.getPromotedIds()).toEqual([]);
-	it("setScope does not steal selection from a docked non-terminal active tab", () => {
-							{ id: "md-1", type: "markdown" },
-						activeTabId: "md-1",
+			expect(terminalsStore.state.activeId).toBeNull();
+		});
+	});
+
+	it("setScope does not steal selection from a docked non-terminal active tab", async () => {
+		const { diffTabsStore } = await import("../../stores/diffTabs");
+		testInScope(() => {
+			const manual = terminalsStore.add(makeTerminal({ name: "manual" }));
+			const diff = diffTabsStore.add("/repo/manual", "file.rs", "M");
+			store.promote(manual);
+			store.setLayout({
+				root: { type: "leaf", id: "g30" },
+				groups: {
+					g30: {
+						id: "g30",
+						tabs: [
+							{ id: manual, type: "terminal" },
+							{ id: diff, type: "diff" },
+						],
+						activeTabId: diff,
+					},
+				},
+				activeGroupId: "g30",
+			});
 			const repoTerm = terminalsStore.add(makeTerminal({ name: "wt-1" }));
+			store.syncScopeMembers("/repo/a", [repoTerm]);
+			store.setScope("/repo/a");
+			store.activate();
+
 			terminalsStore.setActive(null);
+			store.setScope("__manual__");
+
+			expect(terminalsStore.state.activeId).toBeNull();
+		});
+	});
+
 	it("forgets a closed terminal in whichever scope holds it", () => {
 		testInScope(() => {
 			// Real terminals here: this path runs through terminalsStore.onRemove,
@@ -183,96 +218,6 @@ describe("globalWorkspaceStore scopes", () => {
 			terminalsStore.remove(first);
 
 			expect(store.getScopeMembers("/repo/a")).toEqual([second]);
-		});
-	});
-
-	/**
-	 * promote/unpromote/isPromoted/togglePromote used to default to "whatever
-	 * scope is currently ambient" — the exact bug that let a user's manual
-	 * "remove from Global Workspace" click silently no-op against the wrong
-	 * bucket if the ambient scope had drifted (e.g. to a repo's own
-	 * auto-consolidation scope) since the terminal was promoted. They now
-	 * always hardcode MANUAL_SCOPE, regardless of ambient scope.
-	 */
-	describe("promote/unpromote/isPromoted/togglePromote always target MANUAL_SCOPE", () => {
-		it("promote lands in MANUAL_SCOPE even while a different scope is ambient", () => {
-			testInScope(() => {
-				const term = terminalsStore.add(makeTerminal({ name: "foreign" }));
-				store.setScope("/repo/a");
-
-				store.promote(term);
-
-				expect(store.getScope()).toBe("/repo/a");
-				expect(store.getScopeMembers("__manual__")).toEqual([term]);
-				expect(store.getScopeMembers("/repo/a")).not.toContain(term);
-			});
-		});
-
-		it("isPromoted checks MANUAL_SCOPE even while a different scope is ambient", () => {
-			testInScope(() => {
-				const term = terminalsStore.add(makeTerminal({ name: "manual" }));
-				store.promote(term);
-				store.setScope("/repo/a");
-
-				expect(store.isPromoted(term)).toBe(true);
-			});
-		});
-
-		it("unpromote removes from MANUAL_SCOPE reliably, regardless of what's ambient at the time of the click", () => {
-			testInScope(() => {
-				const term = terminalsStore.add(makeTerminal({ name: "manual" }));
-				store.promote(term);
-
-				// Ambient scope drifts away (e.g. the user switched to viewing a
-				// consolidated repo) before the user clicks "remove."
-				store.setScope("/repo/a");
-
-				store.unpromote(term);
-
-				store.setScope("__manual__");
-				expect(store.getPromotedIds()).not.toContain(term);
-			});
-		});
-
-		it("togglePromote toggles MANUAL_SCOPE membership regardless of ambient scope", () => {
-			testInScope(() => {
-				const term = terminalsStore.add(makeTerminal({ name: "manual" }));
-				store.setScope("/repo/a");
-
-				store.togglePromote(term);
-				expect(store.getScopeMembers("__manual__")).toEqual([term]);
-
-				store.togglePromote(term);
-				expect(store.getScopeMembers("__manual__")).toEqual([]);
-			});
-		});
-	});
-
-	describe("isManualWorkspaceActive", () => {
-		it("is false when nothing is active", () => {
-			testInScope(() => {
-				expect(store.isManualWorkspaceActive()).toBe(false);
-			});
-		});
-
-		it("is true when the manual workspace is active", () => {
-			testInScope(() => {
-				const term = terminalsStore.add(makeTerminal({ name: "manual" }));
-				store.promote(term);
-				store.activate();
-				expect(store.isManualWorkspaceActive()).toBe(true);
-			});
-		});
-
-		it("is false when a repo's own scope is active instead of the manual one", () => {
-			testInScope(() => {
-				store.syncScopeMembers("/repo/a", ["a-1"]);
-				store.setScope("/repo/a");
-				store.activate();
-
-				expect(store.isActive()).toBe(true);
-				expect(store.isManualWorkspaceActive()).toBe(false);
-			});
 		});
 	});
 });

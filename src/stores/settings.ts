@@ -19,7 +19,7 @@ import {
 	sanitizeIndicatorOverrides,
 } from "../indicators/validate";
 import { invoke } from "../invoke";
-import { settingNumberDefault } from "../services/settingsCatalogue";
+import { settingNumberDefault } from "../services/settingsCatalogueCore";
 import { settingsRefresh } from "../services/settingsRefresh";
 import { HttpRpcError } from "../transport/http";
 import type { IssueFilterMode } from "../types";
@@ -131,7 +131,6 @@ interface RustAppConfig {
 	attachment_max_bytes?: number;
 	standby_timeout_minutes?: number;
 	custom_launchers?: CustomLauncher[];
-	additional_readable_dirs?: string[];
 	inline_blame_enabled?: boolean;
 	/** The one binary the host may launch for ACP. Empty means ACP is unconfigured. */
 	ego_executable?: string;
@@ -414,7 +413,6 @@ interface SettingsStoreState {
 	attachmentMaxBytes: number;
 	webviewUnloadMinutes: number;
 	customLaunchers: CustomLauncher[];
-	additionalReadableDirs: string[];
 	customPtyEnv: CustomEnvVarEntry[];
 	inlineBlameEnabled: boolean;
 	/**
@@ -509,7 +507,6 @@ function createSettingsStore() {
 		attachmentMaxBytes: settingNumberDefault("app.attachment_max_bytes"),
 		webviewUnloadMinutes: settingNumberDefault("app.background.webview_unload_minutes"),
 		customLaunchers: [],
-		additionalReadableDirs: ["~/.claude/plans"],
 		customPtyEnv: [],
 		inlineBlameEnabled: true,
 		egoExecutable: "",
@@ -616,7 +613,6 @@ function createSettingsStore() {
 		values.webviewUnloadMinutes =
 			config.background?.webview_unload_minutes ?? settingNumberDefault("app.background.webview_unload_minutes");
 		values.customLaunchers = config.custom_launchers ?? [];
-		values.additionalReadableDirs = config.additional_readable_dirs ?? ["~/.claude/plans"];
 		// Revalidated here, not just on write — this reaches real process env vars.
 		// Already sanitized by the backend on load and on every save
 		// (`config::sanitize_custom_pty_env`: malformed, reserved and
@@ -719,7 +715,6 @@ function createSettingsStore() {
 			attachment_max_bytes: values.attachmentMaxBytes,
 			standby_timeout_minutes: values.standbyTimeoutMinutes,
 			custom_launchers: [...values.customLaunchers],
-			additional_readable_dirs: [...values.additionalReadableDirs],
 			custom_pty_env: values.customPtyEnv.map((e) => ({ ...e })),
 			inline_blame_enabled: values.inlineBlameEnabled,
 			ego_executable: values.egoExecutable,
@@ -1142,12 +1137,6 @@ function createSettingsStore() {
 		/** Replace the full list of custom launchers (add/edit/remove all go through here) */
 		setCustomLaunchers(launchers: CustomLauncher[]): void {
 			setState("customLaunchers", launchers);
-			save();
-		},
-
-		/** Replace the full list of additional HTTP-readable directories (add/remove go through here) */
-		setAdditionalReadableDirs(dirs: string[]): void {
-			setState("additionalReadableDirs", dirs);
 			save();
 		},
 

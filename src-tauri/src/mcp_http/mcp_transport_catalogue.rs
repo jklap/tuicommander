@@ -363,15 +363,22 @@ pub(super) fn render_mcp_instructions(
         } else if ctx.role == super::caller_role::CallerRole::Agent {
             out.push_str(super::caller_role::AGENT_MISSING_LINE);
         } else if spawn_preferred && !launch_channel {
-            out.push_str("- Delegate or parallelize via TUIC `agent action=spawn`/`launch`, not client-native subagents; peers stay visible, mailable and managed.\n");
+            out.push_str("- **Multi-agent teams:** every teammate is created with `agent action=spawn`. Do not use your own built-in agent-spawning tool for this.\n");
         }
-        out.push_str(if session_enabled {
-            "- `agent action=list_peers`; `session action=list`.\n"
-        } else {
-            "- `agent action=list_peers`.\n"
-        });
+        let mut lookups: Vec<&str> = Vec::new();
+        if messaging_preferred {
+            lookups.push("`agent action=list_peers`");
+        }
+        if session_enabled {
+            lookups.push("`session action=list`");
+        }
+        if !lookups.is_empty() {
+            out.push_str(&format!("- {}.\n", lookups.join("; ")));
+        }
         if repo_enabled && spawn_preferred {
-            out.push_str("- **Isolated branches:** `repo action=worktree_create spawn_session=true`.\n");
+            out.push_str(
+                "- **Isolated branches:** `repo action=worktree_create spawn_session=true`.\n",
+            );
         }
         if messaging_preferred {
             out.push_str("- **Mail:** default normal; `agent send urgency=urgent` requests a course change before the next step.\n");
@@ -966,7 +973,7 @@ pub(super) fn native_tool_help_for(
         .find(|tool| tool["name"] == name)
         .map(|tool| serde_json::json!({"description":tool["description"]}))?;
     if super::mcp_input_contract::TYPE_NOTES_IN_HELP.contains(&name)
-        && let Some(tool) = native_validation_tool_definitions()
+        && let Some(tool) = native_validation_tool_definitions(prefer_spawning, prefer_messaging)
             .as_array()
             .and_then(|tools| tools.iter().find(|tool| tool["name"] == name))
     {
@@ -1449,7 +1456,8 @@ pub(super) fn merged_tool_definitions_for_caller(
 
     let (prefer_spawning, prefer_messaging) =
         resolve_prefer_tuic_flags_for_caller(state, mcp_session_id, stateless_client_name);
-    let mut tools = filtered_native_tools_for_session(state, mcp_session_id, prefer_spawning, prefer_messaging);
+    let mut tools =
+        filtered_native_tools_for_session(state, mcp_session_id, prefer_spawning, prefer_messaging);
     let allowed = resolve_allowed_upstreams(state, mcp_session_id);
     let upstream_tools = state
         .mcp
@@ -1552,7 +1560,8 @@ pub(super) fn handle_search_tools_for_session(
     // state decide which native tools it may find.
     let (prefer_spawning, prefer_messaging) =
         resolve_prefer_tuic_flags_for_caller(state, mcp_session_id, stateless_client_name);
-    let native = filtered_native_tools_for_session(state, mcp_session_id, prefer_spawning, prefer_messaging);
+    let native =
+        filtered_native_tools_for_session(state, mcp_session_id, prefer_spawning, prefer_messaging);
     let registered = native_tool_definitions(true, true);
     let available = |name: &str| {
         !registered
@@ -1664,7 +1673,15 @@ pub(super) async fn handle_call_tool(
     mcp_session_id: Option<&str>,
     managed_parent_cwd: Option<&str>,
 ) -> serde_json::Value {
-    handle_call_tool_for_client(state, caller, args, mcp_session_id, managed_parent_cwd, None).await
+    handle_call_tool_for_client(
+        state,
+        caller,
+        args,
+        mcp_session_id,
+        managed_parent_cwd,
+        None,
+    )
+    .await
 }
 
 pub(super) async fn handle_call_tool_for_client(

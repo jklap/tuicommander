@@ -181,13 +181,13 @@ async fn measure_github_client_fixture_1995() {
         let open_clock = Instant::now();
         // The real frontend trace has one get_ci_checks on open, none for ten
         // identical snapshots or a stable mounted panel, then one on reopen.
-        let checks = crate::github::get_ci_checks_impl(&repo_path, 42, &state).await;
+        let checks = crate::github::get_ci_checks_targeted(&repo_path, 42, None, &state).await;
         assert_eq!(checks.len(), 1, "fixture check must reach the PR consumer");
         tokio::time::sleep(BASE_INTERVAL + Duration::from_millis(200)).await;
         let open_end = receiver.counts();
         let open_seconds = open_clock.elapsed().as_secs_f64();
         let reopen_start = receiver.counts();
-        crate::github::get_ci_checks_impl(&repo_path, 42, &state).await;
+        crate::github::get_ci_checks_targeted(&repo_path, 42, None, &state).await;
         let reopen_end = receiver.counts();
         stop_poller(&state).await.unwrap();
         let account = crate::github::github_com_account(&state);

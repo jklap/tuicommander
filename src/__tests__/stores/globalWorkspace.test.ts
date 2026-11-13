@@ -595,9 +595,11 @@ describe("globalWorkspaceStore", () => {
 			});
 		});
 
-		it("activate does not steal selection from a docked non-terminal active tab", () => {
+		it("activate does not steal selection from a docked non-terminal active tab", async () => {
+			const { diffTabsStore } = await import("../../stores/diffTabs");
 			testInScope(() => {
 				const term = terminalsStore.add(makeTerminal({ name: "T1" }));
+				const diff = diffTabsStore.add("/repo/manual", "file.rs", "M");
 				store.promote(term);
 				store.setLayout({
 					root: { type: "leaf", id: "g20" },
@@ -606,9 +608,9 @@ describe("globalWorkspaceStore", () => {
 							id: "g20",
 							tabs: [
 								{ id: term, type: "terminal" },
-								{ id: "md-1", type: "markdown" },
+								{ id: diff, type: "diff" },
 							],
-							activeTabId: "md-1",
+							activeTabId: diff,
 						},
 					},
 					activeGroupId: "g20",
@@ -618,7 +620,7 @@ describe("globalWorkspaceStore", () => {
 				store.activate();
 
 				expect(terminalsStore.state.activeId).toBeNull();
-				expect(paneLayoutStore.state.groups.g20?.activeTabId).toBe("md-1");
+				expect(paneLayoutStore.state.groups.g20?.activeTabId).toBe(diff);
 			});
 		});
 	});

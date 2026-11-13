@@ -94,19 +94,61 @@ async fn query_merged_github_pr(
     branch: &str,
     tip: &str,
 ) -> Option<bool> {
-    let api = crate::github_pr_api::RepoApi::resolve(state, repo.to_str()?)
+    let path = repo.to_str()?;
+    let api = crate::github_pr_api::RepoApi::resolve(state, path)
         .await
         .ok()?;
-    let variables = serde_json::json!({"owner":api.owner, "name":api.repo, "branch":branch});
-    query_merged_github_pr_with(&api, variables, repo, branch, tip).await
+    // A fork's PR is merged in the upstream, not in the fork: ask every repository this
+    // checkout watches. Proving the tip needs the recorded head to contain it, which a
+    // different contributor's same-named branch cannot satisfy, so more repos can only add
+    // true proofs, never forge one.
+    let remotes = crate::git::list_remotes(repo);
+    let mut targets: Vec<(String, String, Option<String>)> = vec![(
+        api.owner.clone(),
+        api.repo.clone(),
+        crate::github::remote_name_in(&remotes, &api.account.host, &api.owner, &api.repo)
+            .or_else(|| Some("origin".to_string())),
+    )];
+    for (_, owner, name) in crate::github::watched_upstreams(
+        state,
+        &api.account,
+        &[(path.to_string(), api.owner.clone(), api.repo.clone())],
+    ) {
+        let remote = crate::github::remote_name_in(&remotes, &api.account.host, &owner, &name);
+        targets.push((owner, name, remote));
+    }
+    let mut answers = Vec::new();
+    for (owner, name, remote) in &targets {
+        let variables = serde_json::json!({"owner":owner, "name":name, "branch":branch});
+        let answer =
+            query_merged_github_pr_via(&api, variables, repo, branch, tip, remote.as_deref()).await;
+        if answer == Some(true) {
+            return Some(true);
+        }
+        answers.push(answer);
+    }
+    // Not proven anywhere: a definite "no" only if every repository answered.
+    answers.iter().all(Option::is_some).then_some(false)
 }
 
+#[cfg(test)]
 async fn query_merged_github_pr_with(
     api: &impl crate::github_pr_api::PrApi,
     variables: serde_json::Value,
     repo: &Path,
     branch: &str,
     tip: &str,
+) -> Option<bool> {
+    query_merged_github_pr_via(api, variables, repo, branch, tip, Some("origin")).await
+}
+
+async fn query_merged_github_pr_via(
+    api: &impl crate::github_pr_api::PrApi,
+    variables: serde_json::Value,
+    repo: &Path,
+    branch: &str,
+    tip: &str,
+    pull_remote: Option<&str>,
 ) -> Option<bool> {
     let query = r#"query($owner: String!, $name: String!, $branch: String!, $endCursor: String) {
       repository(owner: $owner, name: $name) {
@@ -127,8 +169,12 @@ async fn query_merged_github_pr_with(
     .await
     .ok()?;
     let pages = serde_json::Value::Array(pages);
-    Some(tuic_git::worktree::merged_pr_proof_from_pages(
-        repo, branch, tip, &pages,
+    Some(tuic_git::worktree::merged_pr_proof_from_pages_via(
+        repo,
+        branch,
+        tip,
+        &pages,
+        pull_remote,
     ))
 }
 
@@ -2599,12 +2645,19 @@ pub(crate) fn merge_and_archive_worktree_impl_with_confirmation(
                 .unwrap_or_else(|| format!("Failed to checkout {target_branch}: {e}"))
         })?;
 
-    // 2. Apply the explicit UI merge policy, not a second parser for mergeOptions.
+    // 2. Merge with whatever the repository's own configuration says (merge.ff, mergeOptions):
+    //    no override flag. A fast-forward-only repository refuses a diverged merge before
+    //    changing anything, and the worktree is then kept as is (nothing is archived).
     if let Err(e) = git_cmd(&base_repo)
         .args(["merge", &branch_name, "--no-edit"])
-        .args([crate::git_cli::requested_merge_ff_policy(&base_repo)])
         .run()
     {
+        if crate::git_cli::is_fast_forward_refusal(&e) {
+            return Err(crate::git_cli::fast_forward_refusal_message(
+                &branch_name,
+                &target_branch,
+            ));
+        }
         return Err(finish_failed_git_operation_after_abort(
             &base_repo,
             "merge",
@@ -3409,6 +3462,7 @@ mod tests {
             false,
             None,
             false,
+            false,
             true,
         );
         assert!(deleted.is_err(), "stale safe dialog authorized deletion");
@@ -3602,6 +3656,7 @@ mod tests {
                     true,
                     false,
                     None,
+                    false,
                     false,
                     true,
                 );
@@ -3900,6 +3955,26 @@ mod tests {
         diverge: bool,
         options: Option<&str>,
     ) -> (TempDir, String, usize) {
+        let (repo, tip, res) = merge_archive_result_with_ff_config(ff, diverge, options);
+        let res = res.unwrap_or_else(|e| panic!("merge.ff={ff} diverge={diverge}: {e}"));
+        assert!(res.merged, "merge.ff={ff} diverge={diverge}");
+        let parents = git_cmd(repo.path())
+            .args(["rev-list", "--parents", "-n", "1", "HEAD"])
+            .run()
+            .unwrap()
+            .stdout
+            .split_whitespace()
+            .count()
+            - 1;
+        (repo, tip, parents)
+    }
+
+    /// Same, but hands back merge-and-archive's own result so a refusal can be asserted.
+    fn merge_archive_result_with_ff_config(
+        ff: &str,
+        diverge: bool,
+        options: Option<&str>,
+    ) -> (TempDir, String, Result<MergeArchiveResult, String>) {
         let (_cfg, _guard) = isolated_config();
         let repo = setup_test_repo();
         let base = base_branch_of(repo.path());
@@ -3939,19 +4014,8 @@ mod tests {
             base,
             "archive".to_string(),
             false,
-        )
-        .unwrap_or_else(|e| panic!("merge.ff={ff} diverge={diverge}: {e}"));
-        assert!(res.merged, "merge.ff={ff} diverge={diverge}");
-
-        let parents = git_cmd(repo.path())
-            .args(["rev-list", "--parents", "-n", "1", "HEAD"])
-            .run()
-            .unwrap()
-            .stdout
-            .split_whitespace()
-            .count()
-            - 1;
-        (repo, tip, parents)
+        );
+        (repo, tip, res)
     }
 
     // Catches: a flag-shaped commit message being mistaken for fast-forward policy.
@@ -3962,12 +4026,54 @@ mod tests {
         assert_eq!(parents, 2, "a message is not a fast-forward policy flag");
     }
 
+    // Catches: a repository that forbids merge commits receiving one anyway (a UI-requested merge
+    // must honor merge.ff=only), and a refused merge archiving or deleting the worktree.
     #[test]
-    fn merge_and_archive_merges_a_diverged_target_under_merge_ff_only() {
-        let (repo, _tip, parents) = merge_archive_with_ff_config("only", true, None);
-        assert_eq!(parents, 2, "a diverged target gets a merge commit");
-        assert!(repo.path().join("work.txt").exists());
-        assert!(repo.path().join("base-only.txt").exists());
+    fn merge_and_archive_refuses_a_diverged_target_under_merge_ff_only() {
+        let (repo, _tip, res) = merge_archive_result_with_ff_config("only", true, None);
+        let error = res
+            .err()
+            .expect("a fast-forward-only repository must refuse a diverged merge");
+        assert!(error.contains("only allows fast-forward merges"), "{error}");
+        assert!(error.contains("Rebase"), "{error}");
+        let parents = git_cmd(repo.path())
+            .args(["rev-list", "--parents", "-n", "1", "HEAD"])
+            .run()
+            .unwrap()
+            .stdout
+            .split_whitespace()
+            .count()
+            - 1;
+        assert_eq!(parents, 1, "no merge commit was created");
+        assert!(
+            !repo.path().join("work.txt").exists(),
+            "target is unchanged"
+        );
+        assert!(
+            git_cmd(repo.path())
+                .args(["rev-parse", "--verify", "refs/heads/feat-ffcfg"])
+                .run()
+                .is_ok(),
+            "the branch is kept"
+        );
+        assert!(
+            git_cmd(repo.path())
+                .args(["worktree", "list"])
+                .run()
+                .unwrap()
+                .stdout
+                .contains("feat-ffcfg"),
+            "the worktree is not archived after a refused merge"
+        );
+    }
+
+    // Catches: the same refusal through the branch's mergeOptions instead of merge.ff.
+    #[test]
+    fn merge_and_archive_refuses_a_diverged_target_under_branch_ff_only_options() {
+        let (_repo, _tip, res) =
+            merge_archive_result_with_ff_config("true", true, Some("--ff-only"));
+        let error = res.err().expect("mergeOptions --ff-only must be honored");
+        assert!(error.contains("only allows fast-forward merges"), "{error}");
     }
 
     #[test]
@@ -4403,6 +4509,7 @@ mod tests {
             false,
             false,
             None,
+            false,
             false,
             false,
         )
@@ -4897,6 +5004,7 @@ mod tests {
                     false,
                     None,
                     false,
+                    false,
                     override_busy,
                 )
             };
@@ -4994,6 +5102,7 @@ mod tests {
                     repo_path.clone(),
                     "ipc".into(),
                     Some(false),
+                    None,
                     None,
                     None,
                     None,
@@ -5697,7 +5806,7 @@ mod tests {
                 aliased_orphan("alias-remove");
             let state = crate::state::tests_support::make_test_app_state();
 
-            remove_orphan_checkout(&state, &aliased_repo, &aliased_linked, true, &[])
+            remove_orphan_checkout(&state, &aliased_repo, &aliased_linked, true, &[], None)
                 .expect("the aliased spelling names the registered orphan");
 
             assert!(!linked.exists(), "the checkout must be gone");
@@ -5734,7 +5843,7 @@ mod tests {
 
             // Explicit (not safe-only) removal: the only path main lets discard an
             // unavailable registration.
-            remove_orphan_checkout(&state, &aliased_repo, &aliased_linked, false, &[])
+            remove_orphan_checkout(&state, &aliased_repo, &aliased_linked, false, &[], None)
                 .expect("a vanished orphan is removable by its aliased spelling");
             assert!(!registered(), "the registration must be gone");
         }
@@ -5776,7 +5885,8 @@ mod tests {
             let leaf = leaf.to_string_lossy().to_string();
             let state = crate::state::tests_support::make_test_app_state();
 
-            let error = remove_orphan_checkout(&state, &repo_path, &leaf, true, &[]).unwrap_err();
+            let error =
+                remove_orphan_checkout(&state, &repo_path, &leaf, true, &[], None).unwrap_err();
             assert!(error.contains("is a symlink"), "{error}");
             let error = check_orphan_removal(&state, &repo_path, &leaf, false, &[]).unwrap_err();
             assert!(error.contains("is a symlink"), "{error}");

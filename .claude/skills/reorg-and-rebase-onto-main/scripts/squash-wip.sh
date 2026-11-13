@@ -11,7 +11,9 @@
 #   3. verify  the new tip's tree must equal the working branch's, byte for byte
 #
 # Config: <repo>/.claude/wip.conf (WIP_BRANCH, WIP_UPSTREAM, WIP_LEDGERS, WIP_PERSONAL_PATHS,
-# WIP_PERSONAL_RE), each overridable from the environment.
+# WIP_PERSONAL_RE, WIP_SCRUBBED_PATHS, WIP_GENERATED_PATHS, WIP_INTERNAL_NAMES), each overridable from the
+# environment. Tip commits, in order: ledgers, scrubbed (drop when rebasing), generated (regenerate),
+# internal (kept on wip), personal.
 #
 # Without --dry-run the ONLY change to <repo> is a non-forced fetch of refs/heads/<branch>-squashed,
 # which fails rather than overwrite an existing one. The branch itself, its remote and the
@@ -36,7 +38,10 @@ HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 : "${WIP_PERSONAL_RE:=^personal scripts\$}"
 read -r -a LEDGERS <<<"$WIP_LEDGERS"
 read -r -a PERSONAL <<<"$WIP_PERSONAL_PATHS"
-STRIP_PATHS=("${LEDGERS[@]}" "${PERSONAL[@]}")
+: "${WIP_SCRUBBED_PATHS:=}" "${WIP_GENERATED_PATHS:=}" "${WIP_INTERNAL_NAMES:=}"
+read -r -a SCRUBBED <<<"$WIP_SCRUBBED_PATHS"
+read -r -a GENERATED <<<"$WIP_GENERATED_PATHS"
+read -r -a INTERNAL_NAMES <<<"$WIP_INTERNAL_NAMES"
 RESULT=$WIP_BRANCH-squashed
 
 WORK=$(mktemp -d "${TMPDIR:?TMPDIR must be set}/squash-wip.XXXXXX")
@@ -60,6 +65,15 @@ cd "$R"
 
 TIP=$(git rev-parse refs/squash/orig)
 BASE=$(git merge-base refs/squash/orig refs/squash/upstream)
+# Internal files are named by basename and may sit at any depth: expand them from the tip and base trees.
+INTERNAL=()
+if ((${#INTERNAL_NAMES[@]})); then
+  while IFS= read -r f; do INTERNAL+=("$f"); done < <(
+    { git ls-tree -r --name-only "$TIP"; git ls-tree -r --name-only "$BASE"; } | sort -u |
+      awk -v names="${INTERNAL_NAMES[*]}" 'BEGIN { n = split(names, a, " "); for (i = 1; i <= n; i++) want[a[i]] = 1 }
+        { b = $0; sub(".*/", "", b); if (b in want) print }')
+fi
+STRIP_PATHS=("${LEDGERS[@]}" "${PERSONAL[@]}" "${SCRUBBED[@]}" "${GENERATED[@]}" "${INTERNAL[@]}")
 git log --format=%s "$BASE..refs/squash/upstream" > "$OUT/upstream-subjects.txt"
 
 echo "== 1. strip ${STRIP_PATHS[*]:-nothing} from $(git rev-list --count "$BASE..$TIP") commits"
@@ -76,6 +90,7 @@ echo "   $(git rev-list --count "$BASE..refs/squash/stripped") commits remain"
 echo "== 2. plan and write commits"
 NEW=$(python3 "$HERE/plan.py" --repo "$R" --base "$BASE" --stripped refs/squash/stripped --orig "$TIP" \
   --out "$OUT" --ledgers "${LEDGERS[*]}" --personal-paths "${PERSONAL[*]}" \
+  --extra "scrubbed=${SCRUBBED[*]:-}" --extra "generated=${GENERATED[*]:-}" --extra "internal=${INTERNAL[*]:-}" \
   --personal-re "$WIP_PERSONAL_RE" --main-subjects "$OUT/upstream-subjects.txt")
 
 echo "== 3. verify"
