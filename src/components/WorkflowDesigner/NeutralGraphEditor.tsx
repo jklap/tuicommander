@@ -1,4 +1,5 @@
 import { For, Show } from "solid-js";
+import { randomUuid } from "../../utils/randomId";
 import { Button } from "../ui/Button";
 import { Input } from "../ui/Input";
 import { Select } from "../ui/Select";
@@ -30,7 +31,7 @@ export function NeutralGraphEditor(props: {
 		});
 	};
 	function add(node: ControlNode) {
-		const id = crypto.randomUUID();
+		const id = randomUuid();
 		replaceNode(id, node);
 		props.onSelect(id);
 	}

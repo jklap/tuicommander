@@ -35,8 +35,7 @@ fn workflow_is_not_listed_without_a_definition_or_run() {
     let search = handle_search_tools_for_session(
         &state,
         &serde_json::json!({"query": "workflow run definition launch"}),
-        None,
-    );
+        None, None);
     let found: Vec<&str> = search["results"]
         .as_array()
         .unwrap()
@@ -47,8 +46,7 @@ fn workflow_is_not_listed_without_a_definition_or_run() {
     let schema = handle_get_tool_schema_for_session(
         &state,
         &serde_json::json!({"tool_name": "workflow"}),
-        None,
-    );
+        None, None);
     assert!(schema.get("error").is_some(), "{schema}");
 
     let instructions = build_mcp_instructions_for_session(&state, None, false, None);

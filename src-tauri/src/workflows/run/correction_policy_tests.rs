@@ -41,6 +41,8 @@ async fn policy_assessment_consumes_retained_role_findings_and_real_native_floor
                 name
             })
             .collect::<Vec<_>>();
+        // Fixture repos are made with an empty git template: no info/ until something creates it.
+        std::fs::create_dir_all(f.context.workspace_path().join(".git/info")).unwrap();
         std::fs::write(
             f.context.workspace_path().join(".git/info/exclude"),
             names.join("\n"),

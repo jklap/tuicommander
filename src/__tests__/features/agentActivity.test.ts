@@ -28,7 +28,7 @@ describe("agent activity ticker", () => {
 			sessionId: `s-${ids.length}`,
 			fontSize: 14,
 			name: "t",
-			cwd: "/tmp",
+			cwd: "/work",
 			awaitingInput: null,
 			agentType: "claude",
 		});

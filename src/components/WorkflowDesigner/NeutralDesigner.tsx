@@ -1,4 +1,5 @@
 import { createSignal, For, Show } from "solid-js";
+import { randomUuid } from "../../utils/randomId";
 import { Button } from "../ui/Button";
 import { Input } from "../ui/Input";
 import { ActivityPresets } from "./ActivityPresets";
@@ -39,7 +40,7 @@ export function NeutralDesigner(props: { project: string }) {
 	};
 	function add(descriptor: ActivityDescriptor) {
 		const definition = state.definition();
-		const id = crypto.randomUUID();
+		const id = randomUuid();
 		state.edit({
 			...definition,
 			instances: [...definition.instances, { descriptor: descriptor.id, config: {}, execution_policy: "" }],

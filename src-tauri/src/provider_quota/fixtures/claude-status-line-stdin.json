@@ -2,7 +2,7 @@
   "session_id": "e77778ee-0ec7-450f-9852-3edd2ecb6be3",
   "transcript_path": "/home/user/.claude/projects/-work-project/e77778ee-0ec7-450f-9852-3edd2ecb6be3.jsonl",
   "cwd": "/work/project",
-  "scratchpad_dir": "/tmp/claude/-work-project/e77778ee-0ec7-450f-9852-3edd2ecb6be3/scratchpad",
+  "scratchpad_dir": "/var/claude/-work-project/e77778ee-0ec7-450f-9852-3edd2ecb6be3/scratchpad",
   "prompt_id": "7524c3b7-4a1d-4996-a10b-8e76bb01af6d",
   "effort": {
     "level": "medium"

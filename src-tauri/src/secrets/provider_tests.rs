@@ -90,7 +90,7 @@ fn op_rejects_flag_like_input_before_spawning() {
     let p = op(5000);
     let bad_account = SecretRef::Op {
         reference: "op://v/i/ok".into(),
-        account: Some("--config=/tmp/x".into()),
+        account: Some("--config=/srv/x".into()),
     };
     let bad_ref = SecretRef::Op {
         reference: "--help".into(),
@@ -222,7 +222,7 @@ async fn op_reference_reaches_only_the_spawned_child_env() {
     if let Some(entry) = state.session_maps.sessions.get(&id) {
         let _ = entry.lock()._child.kill();
     }
-    crate::pty::cleanup_session(&id, &state);
+    crate::pty::cleanup_session(&id, &state, "test cleanup");
     server.abort();
 
     assert_eq!(seen, VALUE, "the child env must hold the resolved value");

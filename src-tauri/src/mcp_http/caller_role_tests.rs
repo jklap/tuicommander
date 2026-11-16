@@ -164,7 +164,7 @@ fn agent_catalogue_follows_the_caller_role() {
 // ownership table, so every child silently loses it.
 #[test]
 fn every_agent_field_has_an_owning_action() {
-    let definition = crate::mcp_http::mcp_transport_catalogue::native_validation_tool_definitions()
+    let definition = crate::mcp_http::mcp_transport_catalogue::native_validation_tool_definitions(true, true)
         .as_array()
         .unwrap()
         .iter()

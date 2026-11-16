@@ -577,6 +577,8 @@ mod tests {
             &plain,
         );
         let hooks = repo.join(".git/hooks");
+        // Fixture repos are made with an empty git template: no hooks/ until something creates it.
+        std::fs::create_dir_all(&hooks).unwrap();
         for (name, body) in [
             ("pre-commit", "touch ran-pre-commit"),
             ("pre-push", "exit 3"),

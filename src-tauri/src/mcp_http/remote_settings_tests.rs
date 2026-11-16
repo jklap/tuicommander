@@ -219,7 +219,7 @@ fn save_body(change: impl FnOnce(&mut crate::config::AppConfig)) -> Value {
 async fn put_config_refuses_owner_confirmed_settings() {
     type Change = fn(&mut crate::config::AppConfig);
     let changes: [(&str, Change); 4] = [
-        ("ego_executable", |c| c.ego_executable = "/tmp/evil".into()),
+        ("ego_executable", |c| c.ego_executable = "/opt/evil".into()),
         ("services.server.port", |c| c.services.server.port = 9981),
         ("services.auth.username", |c| {
             c.services.auth.username = "intruder".into()
@@ -261,7 +261,7 @@ async fn put_config_refuses_custom_launcher_execution_edits() {
     let body = save_body(|c| {
         c.custom_launchers.push(crate::config::CustomLauncher {
             id: "x".into(),
-            executable: "/tmp/evil".into(),
+            executable: "/opt/evil".into(),
             ..Default::default()
         })
     });
@@ -319,7 +319,7 @@ fn stored_profiles(state: &AppState) -> Vec<Value> {
 async fn tunnel_profile_route_refuses_owner_confirmed_changes() {
     type Change = fn(&mut Value);
     let changes: [(&str, Change); 3] = [
-        ("port", |p| p["port"] = json!(2222)),
+        ("port", |p| p["ssh"]["port"] = json!(2222)),
         ("auto_connect", |p| p["auto_connect"] = json!(true)),
         (
             "forwards",

@@ -41,7 +41,7 @@ describe("refused owner-confirmed settings edit", () => {
 		await settingsStore.hydrate();
 		const original = settingsStore.state.egoExecutable;
 
-		settingsStore.setEgoExecutable("/tmp/other-ego");
+		settingsStore.setEgoExecutable("/opt/other-ego");
 		await vi.advanceTimersByTimeAsync(600);
 		expect(settingsStore.state.egoExecutable).toBe(original);
 		expect(toastsStore.toasts.some((t) => /confirm/i.test(`${t.title} ${t.message}`))).toBe(true);

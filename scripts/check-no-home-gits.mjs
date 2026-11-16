@@ -42,6 +42,15 @@ const ALLOWED = new Map([
 	["scripts/publish-snapshot.py", "--tool defaults to the orchestrator's release snapshot tool; overridable"],
 	["scripts/test_release_targets.py", "locates the orchestrator's release snapshot tool, as publish-snapshot.py does"],
 	["scripts/workflow-e2e/live-sandbox-trial.sh", "sources the orchestrator's .env (credentials live there); the output dir is temp-dir based"],
+	// DEFERRED (2026-11-17): developer tooling that upstream added after the guard (2.1.x) and that
+	// hard-codes the upstream author's own ~/Gits layout. Manual spikes, release-snapshot and
+	// workflow-e2e drivers, never test scratch for the suite; allow-listed until upstream moves them.
+	["scripts/spikes/2727-story-adapter/adapter.cjs", "one-off spike confined to the author's ~/Gits/.tmp"],
+	["scripts/spikes/2727-story-adapter/measure.cjs", "one-off spike confined to the author's ~/Gits/.tmp"],
+	["scripts/workflow-e2e/daemon_control.py", "live workflow e2e driver, confined to the author's ~/Gits/.tmp"],
+	["scripts/workflow-e2e/fabbrica_prepare.py", "live workflow e2e driver, confined to the author's ~/Gits/.tmp"],
+	["scripts/workflow-e2e/run.py", "live workflow e2e driver, confined to the author's ~/Gits"],
+	["src-tauri/src/fixtures/agent_hook_payload/record_claude_2634.py", "manual capture recorder writing to the author's ~/Gits/.tmp"],
 ]);
 
 const HOME_PATTERNS = [

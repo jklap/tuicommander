@@ -108,7 +108,7 @@ fn changed_argv_cannot_reuse_secret_consent() {
     let names = vec!["PASS".to_string()];
     assert!(store.allowed(&approved, &names, "/repo"));
     for changed in [
-        argv(&["/tmp/git", "-c", "color.ui=false", "status"]),
+        argv(&["/opt/other/git", "-c", "color.ui=false", "status"]),
         argv(&["/usr/bin/git", "-c", "core.pager=sh", "status"]),
         argv(&["/usr/bin/git", "-c", "color.ui=false", "status", "-v"]),
         argv(&["/usr/bin/git", "-c", "color.ui=false"]),

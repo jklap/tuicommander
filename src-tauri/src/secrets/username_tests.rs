@@ -175,7 +175,7 @@ async fn username_form_preserves_real_shell_prompts_in_existing_and_new_terminal
                 if let Some(entry) = self.state.session_maps.sessions.get(id) {
                     let _ = entry.lock()._child.kill();
                 }
-                crate::pty::cleanup_session(id, &self.state);
+                crate::pty::cleanup_session(id, &self.state, "test cleanup");
             }
             self.server.abort();
         }

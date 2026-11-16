@@ -61,8 +61,9 @@ make check  # every gate CI enforces
 
 `make check` must pass with zero errors and zero warnings. It runs, in order:
 `tsc --noEmit`, Biome, the architecture cycle checks, the plugin capability doc
-sync check, `cargo fmt --check`, `cargo clippy --release -- -D warnings`,
-`cargo nextest run --workspace` plus doctests, Vitest, the plugin tests,
+sync check, `cargo fmt --check`, `cargo clippy --workspace --exclude bm25
+--all-targets --features dictation --release -- -D warnings`,
+`cargo nextest run --workspace --features dictation` plus doctests, Vitest, the plugin tests,
 `pnpm audit`, and `cargo audit`.
 
 Cargo owns the executables in `src-tauri/target/`: sidecar staging never
@@ -100,7 +101,7 @@ is installed.
 ### Code Style
 
 - Match the style of surrounding code. Consistency within a file matters more than any external style guide.
-- Rust: `cargo clippy --release -- -D warnings` must be clean — that is the exact gate in `make check`.
+- Rust: `cargo clippy --workspace --exclude bm25 --all-targets --features dictation --release -- -D warnings` must be clean — that is the exact gate in `make check` (it lints test code and needs Meson and Ninja for `dictation`).
 - TypeScript: `tsc --noEmit` must be clean. No `any` types.
 - Use `appLogger` for logging, never `console.log`.
 

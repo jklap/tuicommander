@@ -4,6 +4,7 @@ import { invoke } from "../../invoke";
 import { appLogger } from "../../stores/appLogger";
 import { workflowsUi } from "../../stores/workflowsUi";
 import { HttpRpcError } from "../../transport";
+import { randomUuid } from "../../utils/randomId";
 import { Button } from "../ui/Button";
 import s from "./StoriesDialog.module.css";
 
@@ -76,7 +77,7 @@ export const StoryDelivery: Component<{ project: string; storyId: string }> = (p
 		<section aria-label={t("stories.delivery.title", "Delivery workflow")}>
 			<h4>{t("stories.delivery.title", "Delivery workflow")}</h4>
 			<div class={s.inline}>
-				<Button type="button" disabled={busy()} onClick={() => void start(crypto.randomUUID())}>
+				<Button type="button" disabled={busy()} onClick={() => void start(randomUuid())}>
 					{t("stories.delivery.run", "Run delivery workflow")}
 				</Button>
 				<Button type="button" onClick={() => workflowsUi.open(props.project)}>
