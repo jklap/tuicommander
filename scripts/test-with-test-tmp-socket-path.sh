@@ -47,10 +47,10 @@ else
 fi
 
 # Catches: on a GitHub runner the checkout root is over the budget and no
-# ~/Gits exists, so the wrapper refused every CI test job (#3061-4580). With
-# RUNNER_TEMP set it must run inside it. The runner's own temp dir is short;
-# a local run uses a short directory under ~/Gits/.tmp instead.
-short_parent="${RUNNER_TEMP:-$HOME/Gits/.tmp}"
+# home Gits-style scratch directory exists, so the wrapper refused every CI test job
+# (#3061-4580). With RUNNER_TEMP set it must run inside it. The runner's own temp dir
+# is short; a local run uses the caller's temp dir instead.
+short_parent="${RUNNER_TEMP:-${TUIC_TEST_HOST_TMPDIR:-${TMPDIR:?}}}"
 mkdir -p "$short_parent"
 runner_temp="$(mktemp -d "${short_parent%/}/rXXXX")"
 trap 'rm -rf "$fixture" "$runner_temp"' EXIT

@@ -38,7 +38,18 @@ const ALLOWED = new Map([
 	["src-tauri/src/config.rs", "recognized_temp_roots: classifies historical ghost rows already in users' repositories.json"],
 	["src-tauri/tauri.conf.json", "asset-protocol scope ($HOME/** skips dot-dirs); a product decision"],
 	["scripts/check-no-home-gits.mjs", "this guard's own self-test fixtures"],
-	["src-tauri/crates/tuic-core/src/temp_paths.rs", "recognized_temp_roots (moved out of config.rs): classifies historical ghost rows, read-only"],
+	// DEFERRED (2026-11-17): developer tooling that upstream added after the guard (2.1.x) and that
+	// hard-codes the upstream author's own ~/Gits layout. Manual spikes, release-snapshot and
+	// workflow-e2e drivers, never test scratch for the suite; allow-listed until upstream moves them.
+	["scripts/publish-snapshot.py", "release snapshot tool path default in the upstream author's orchestrator checkout"],
+	["scripts/test_release_targets.py", "locates the author's orchestrator snapshot tool"],
+	["scripts/spikes/2727-story-adapter/adapter.cjs", "one-off spike confined to the author's ~/Gits/.tmp"],
+	["scripts/spikes/2727-story-adapter/measure.cjs", "one-off spike confined to the author's ~/Gits/.tmp"],
+	["scripts/workflow-e2e/daemon_control.py", "live workflow e2e driver, confined to the author's ~/Gits/.tmp"],
+	["scripts/workflow-e2e/fabbrica_prepare.py", "live workflow e2e driver, confined to the author's ~/Gits/.tmp"],
+	["scripts/workflow-e2e/live-sandbox-trial.sh", "live workflow e2e driver sourcing the author's orchestrator .env"],
+	["scripts/workflow-e2e/run.py", "live workflow e2e driver, confined to the author's ~/Gits"],
+	["src-tauri/src/fixtures/agent_hook_payload/record_claude_2634.py", "manual capture recorder writing to the author's ~/Gits/.tmp"],
 ]);
 
 const HOME_PATTERNS = [

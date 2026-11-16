@@ -286,6 +286,7 @@ pub(crate) fn test_process_entry(
         name: name.into(),
         command: command.into(),
         age_seconds: Some(age_seconds),
+        argv_unknown: false,
     }
 }
 
