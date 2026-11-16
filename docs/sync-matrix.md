@@ -148,8 +148,6 @@ When adding a new `app.emit(event_name, payload)` call, document it here and lis
 | `ui-tab` | `{id,title,html,url?,pinned,focus,origin_repo_path?,opener_tuic_session?}` | MCP UI tab handler; desktop emit plus SSE with the same optional stable caller identity | `useAppInit.ts` stores the opener on native Markdown tabs; desktop publication carries it to mobile Markdown menu metadata |
 | `mcp-confirm` | `{ request_id, title, message, origin_repo_path?, origin_session_id? }` | `mcp_transport.rs` — `ui action=confirm`, dual-emitted, plus a mobile push. It used to be a native OS dialog, which no remote human could answer; every client now gets the request and the first answer wins. Also raised by `mcp_http/mod.rs`'s `confirm_open_url` for an OSC 1337 `OpenURL` request (no mobile push; same `confirm_responses` map and `mcp_confirm_response` answer path) | `McpConfirmHost.tsx` (mounted by BOTH `ApplicationOverlays.tsx` and `MobileApp.tsx`) → `stores/mcpConfirm.ts` queue → `ConfirmDialog`; remote confirmations retain the origin connection, show its locally saved host name, route answers to that daemon, and clear on disconnect. Resolution is scoped by connection and request id |
 | `mcp-confirm-resolved` | `{ request_id, confirmed }` | `mcp_http/mod.rs` `resolve_mcp_confirm()` on an answer, and `mcp_transport.rs` when the 300 s wait expires | `McpConfirmHost.tsx` → drops that request from the queue, so the clients that lost the race take the dialog down |
-| `agent-wrap-prompt` | `{ request_id: string, agent_type: "claude" \| "codex" \| "goose" }` | `agent_wrap_prompt.rs request()` — raised by `pty.rs`'s OSC 7770 `userwrap` arm (only at the shell prompt, payload bound to the PTY's own session); one pending prompt per agent, 10 min TTL; `AppState::emit_dual` | `stores/agentWrapPrompt.ts` → `AgentWrapPromptHost` (desktop `ApplicationOverlays`, mobile `MobileApp`) |
-| `agent-wrap-prompt-resolved` | `{ request_id: string, agent_type: string, decision: boolean \| null }` | `agent_wrap_prompt.rs resolve()` after an answer (IPC `agent_wrap_prompt_response` or `POST /agent-wrap-prompt/response`); `AppState::emit_dual` | `stores/agentWrapPrompt.ts` → drops that agent's dialog on every client |
 | `pty-description-changed` | `{ session_id: string, description: string | null }` | `state.rs` — MCP `agent spawn` / `session submit` / `session input` updates the orchestrator-owned PTY description | `useAppInit.ts` → `terminalsStore.ptyDescription` → Context bar |
 | `chat-view-changed` | `{ session_id: string, seq: number }` | `state.rs notify_chat_view_changed()` — called by the chat view ticker (`chat_view/mod.rs`) when the tailed transcript produced new entries; dual-emitted to the desktop window and `event_bus` → `/events` SSE. Wake only: entries come from `chat_view_snapshot` | `stores/chatView.ts` `watch()` → `refresh()` for the terminal named by `session_id` |
 | `session-renamed` | `{ session_id: string, name: string \| null, is_custom: boolean }` | `state.rs` `rename_session_from_backend` (MCP `session rename`, the tmux shim's `select-pane -T`), `clear_session_name_from_backend` (`select-pane -T ""`, `name: null`), `rename_session_from_frontend` (IPC/HTTP `set_session_name`, once per real change, so other windows see a rename live; `name: null` = cleared) and `osc_title.rs` OSC 0/2 title sync, all via `emit_dual` | `useAppInit.ts` → `terminalsStore.applyBackendRename(session_id, name, is_custom)` (null name keeps the label, applies `is_custom` only) → tab bar and sidebar — applied with `{ echo: false }`, never a plain `update()`, which would echo the name back to `set_session_name` |
@@ -275,21 +273,6 @@ When changing an agent's hook event map, adding/removing an OSC 7770 verb, or to
 | `docs/FEATURES.md` | Section 1.19 (red-tick tier description) |
 | `plans/docs/hook-lifecycle.html` (main checkout only, gitignored — NOT repo-root/tracked despite this table's other rows; confirmed absent from `git ls-files` 2026-09-15) | Full event→verb→feature lifecycle diagram, CLI surface, and rationale |
 | `agent-signal-architecture.html` (repo root, tracked) | Per-agent signal matrix and the command-block/scrollbar-tick section — update if a hook map, block producer, or per-agent classifier changes |
-
-### Agent wrap consent prompt (zsh `userwrap`)
-When changing how TUIC asks to wrap a user's own `claude`/`codex`/`goose` zsh function:
-
-| File | What to update |
-|------|----------------|
-| `src-tauri/src/shell_integration.rs` | The zsh emitter (`userwrap=<agent>:<fingerprint>:<$TUIC_SESSION>`, `cksum` fingerprint) and its quoting (`zsh_single_quote`) |
-| `src-tauri/src/pty.rs` | The OSC 7770 `userwrap` arm: honoured only between OSC 133 D/A and C (at the prompt), via `agent_wrap_prompt::bound_userwrap_payload` |
-| `src-tauri/src/agent_wrap_prompt.rs` | Payload validation + session binding, pending map (one per agent, `PENDING_WRAP_PROMPT_TTL`), `request`/`resolve`, persisted decision |
-| `src-tauri/src/event_wire.rs` | `agent-wrap-prompt` / `agent-wrap-prompt-resolved` arms |
-| `src-tauri/src/lib.rs` + `src-tauri/src/mcp_http/mod.rs` | IPC `agent_wrap_prompt_response` and its shared route `POST /agent-wrap-prompt/response` (same body, 400 for an unknown agent) |
-| `src/transport/commandTable.ts` + `src/__tests__/transport.test.ts` | Core `COMMAND_TABLE` entry (mobile answers it) + mapping assertion |
-| `src/stores/agentWrapPrompt.ts`, `src/components/AgentWrapPromptHost/` | Queue, dialog, first-answer-wins dismissal |
-| `docs/user-guide/ai-agents.md`, `docs/api/http-api.md`, `docs/backend/alacritty-integration.md` | User-facing consent text, route contract, OSC 7770 verb table |
-| `AGENTS.md` | Accepted Security Decisions entry for the route |
 
 ### Session state explain (troubleshooting dump for agent state detection)
 Cross-cutting: `pty.rs`'s ranked-evidence arbiter + `state.rs`'s `agent_state` ladder, all 3
@@ -876,7 +859,9 @@ When adding or removing a process-inspection call site, or the logged `ps` fallb
 
 | File | What to update |
 |------|----------------|
-| `scripts/check-no-process-exec.mjs` | The `file::fn` allow-list (a stale entry fails `--self-test`); wired into `make check` and `.github/workflows/ci.yml` |
+| `scripts/check-no-process-exec.mjs` | The `file::fn` allow-list (a stale entry fails `--self-test`); the per-body scoping (rustfmt indentation ends a fn) and the dash / BSD-letter `ps` patterns, each pinned by a `--self-test` fixture; wired into `make check` and `.github/workflows/ci.yml` |
+| `src-tauri/crates/tuic-core/src/process_info.rs` | The `ProcessSource` trait (a new method needs a `FakeProcessSource` answer or a default), per-platform reads and their fail-soft rules (`Unreadable`, zombies, the pid-listing growth loop, `hidepid`), the module docs; its `tests::live` cases, including the macOS `ps` oracle that reports `UNCHECKED` in the sandbox; `AGENTS.md`'s process-inspection rule |
+| `src-tauri/src/tunnels/exec.rs` | The one-shot runner every ssh/scp/probe call shares (`run_command_with`): group spawn, bounded group kill on timeout, drop guard, a leader's exit winning over a straggler that holds the pipes, a stdin EPIPE never replacing the exit classification; `src-tauri/AGENTS.md`'s "Killing a Child Process" section |
 | `docs/backend/pty.md` | Native process snapshot, the `ps` fallback and its removal plan |
 | `src-tauri/crates/tuic-test-support/{build.rs,src/identity_probe_main.rs}` | The identity probe tests install as a named foreground process (and as a local `ps` stand-in); its personalities, `tests/identity_probe.rs`, and the paragraph in `docs/guides/development-setup.md` → Testing |
 
