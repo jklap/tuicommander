@@ -2,7 +2,8 @@
 //!
 //! Each supported agent (Claude, Gemini, …) drives its busy/idle/awaiting state
 //! by running a small shell hook that invokes the `tuic-hook` sidecar, which
-//! emits `OSC 7770;state=…` to its controlling tty — Claude also drives
+//! delivers `OSC 7770;state=…` through TUIC's local socket (`POST /sessions/<id>/hook`,
+//! #2749-bee7), falling back to its controlling tty — Claude also drives
 //! `OSC 7770;toolfail=…` on failure-path hook events (`PostToolUseFailure`/
 //! `StopFailure`) to flag the turn-level command block's exit code (see
 //! `state.rs::turn_error_flags`), plus free-text metadata verbs
@@ -50,9 +51,106 @@
 /// fields alike.
 pub(crate) const SENTINEL: &str = "# tuic-managed-hook";
 
+/// The label Codex `/hooks` shows for a TUIC entry (its `statusMessage` field);
+/// without it Codex lists the entry as "Unnamed hook" (proved live, codex 0.166.0).
+pub(crate) const CODEX_HOOK_LABEL: &str = "TUICommander session";
+
 /// A single hook registration: `(event, matcher, command)`.
 /// `matcher == ""` means "all" (no tool-name filter).
 pub(crate) type HookEntry = (&'static str, &'static str, String);
+
+/// How a generated hook delivers its frames (#2632-97ef).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum HookTransport {
+    /// `sh` hooks: the side-channel socket post with the tty fallback.
+    Posix,
+    /// Native Windows, which has no `sh`, `ps` or Unix socket: the bundled
+    /// `tuic.exe agent-state` posts over the named pipe, with `CONOUT$` as the
+    /// in-band fallback. Holds the CLI path.
+    Cli(String),
+}
+
+impl HookTransport {
+    /// This host's transport; `None` when generated hooks cannot run here
+    /// (native Windows without a usable bundled CLI).
+    pub(crate) fn host() -> Option<Self> {
+        if !cfg!(windows) {
+            return Some(Self::Posix);
+        }
+        static CLI: std::sync::OnceLock<Option<HookTransport>> = std::sync::OnceLock::new();
+        CLI.get_or_init(|| {
+            let exe = std::env::current_exe().ok()?;
+            let cli = exe.parent()?.join("tuic.exe");
+            cli.is_file().then(|| Self::windows_cli(&cli)).flatten()
+        })
+        .clone()
+    }
+
+    /// The Windows transport for the CLI at `cli`, or `None` when its path
+    /// cannot be quoted the same way for `cmd`, `sh` and `bash`: inside double
+    /// quotes `cmd` expands `%` (and `!`), and `sh` expands `$` and backticks.
+    pub(crate) fn windows_cli(cli: &std::path::Path) -> Option<Self> {
+        let path = cli.to_str()?;
+        (!path.contains(['"', '%', '!', '$', '`'])).then(|| Self::Cli(path.to_owned()))
+    }
+
+    /// Generated hooks need a transport; an unsupported host falls back to the
+    /// POSIX shape, which nothing installs there.
+    fn host_or_posix() -> Self {
+        Self::host().unwrap_or(Self::Posix)
+    }
+}
+
+/// Whether generated agent hooks can run on this host.
+pub(crate) fn hooks_supported_on_host() -> bool {
+    HookTransport::host().is_some()
+}
+
+/// `"<cli>" agent-state <args> "# tuic-managed-hook"`: the quoted path keeps
+/// spaces and non-ASCII names intact in `cmd`, `sh` and `bash`; the quoted
+/// sentinel is the installer's ownership mark and an argument the CLI ignores.
+fn cli_command(cli: &str, args: &[&str]) -> String {
+    format!("\"{cli}\" agent-state {} \"{SENTINEL}\"", args.join(" "))
+}
+
+fn state_hook(transport: &HookTransport, state: &str) -> String {
+    match transport {
+        HookTransport::Posix => hook_command(state),
+        HookTransport::Cli(cli) => cli_command(cli, &["state", state]),
+    }
+}
+
+fn claude_hook(transport: &HookTransport, state: Option<&str>) -> String {
+    match transport {
+        HookTransport::Posix => claude_hook_command(state),
+        HookTransport::Cli(cli) => cli_command(cli, &[&["claude"][..], state.as_slice()].concat()),
+    }
+}
+
+/// The raw-stdin receipt a spec forwards besides its `wire` frames (#2749-bee7):
+/// the whole hook payload, base64, decoded on the Rust side for permission
+/// ownership (`claude-hook`), Grok lifecycle (`grok-hook`) and Codex tool ids
+/// (`codex-tool`). Receipt frames are sent ahead of every `wire` frame.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Receipt {
+    None,
+    Claude,
+    Grok,
+    CodexTool,
+}
+
+impl Receipt {
+    /// The `tuic-hook --receipt <kind>` argument.
+    #[cfg_attr(not(feature = "desktop"), allow(dead_code))]
+    const fn kind(self) -> Option<&'static str> {
+        match self {
+            Self::None => None,
+            Self::Claude => Some("claude"),
+            Self::Grok => Some("grok"),
+            Self::CodexTool => Some("codex-tool"),
+        }
+    }
+}
 
 /// One hook registration and its wire contract (see the module doc).
 struct HookSpec {
@@ -72,6 +170,8 @@ struct HookSpec {
     /// (`tuic-hook --codex-session`, or [`codex_identity_command`]). The
     /// frame's payload is dynamic, so it is not part of `wire`.
     codex_session: bool,
+    /// Raw-stdin receipt forwarded ahead of `wire` (see [`Receipt`]).
+    receipt: Receipt,
 }
 
 const fn spec(
@@ -86,6 +186,7 @@ const fn spec(
         args,
         wire,
         codex_session: false,
+        receipt: Receipt::None,
     }
 }
 
@@ -102,6 +203,25 @@ const fn codex_identity_spec(
         args,
         wire,
         codex_session: true,
+        receipt: Receipt::None,
+    }
+}
+
+/// A spec that also forwards a raw-stdin receipt (see [`Receipt`]).
+const fn receipt_spec(
+    event: &'static str,
+    matcher: &'static str,
+    args: &'static [&'static str],
+    wire: &'static [(&'static str, &'static str)],
+    receipt: Receipt,
+) -> HookSpec {
+    HookSpec {
+        event,
+        matcher,
+        args,
+        wire,
+        codex_session: false,
+        receipt,
     }
 }
 
@@ -110,6 +230,8 @@ const PROMPT: &[(&str, &str)] = &[("state", "prompt")];
 const AWAITING: &[(&str, &str)] = &[("state", "awaiting")];
 const IDLE: &[(&str, &str)] = &[("state", "idle")];
 const DERIVED: &[&str] = &[];
+
+const NO_WIRE: &[(&str, &str)] = &[];
 
 /// Claude hooks (tool-level). Array order matters: the broad `PreToolUse` busy
 /// entry precedes the `AskUserQuestion|ExitPlanMode` awaiting entry so awaiting
@@ -135,10 +257,16 @@ const DERIVED: &[&str] = &[];
 /// Claude Code's own generated payload, not user input. `StopFailure` emits
 /// `toolfail` before `idle`, because the idle transition reads-and-clears the
 /// turn's failure flag (`handle_tuic_state`).
+/// Receipts (main 2.1.0, #2749-bee7): every event main registers with the
+/// `claude-hook` receipt carries it here too — `UserPromptSubmit`,
+/// `PreToolUse`, `PermissionRequest`, `PostToolUse`, `PostToolUseFailure`,
+/// `Elicitation` and `ElicitationResult`. `Notification` keeps wip's
+/// all-notifications registration (classified by `notification_type`), which
+/// also covers main's `permission_prompt`-only entry.
 const CLAUDE_HOOKS: &[HookSpec] = &[
     spec("SessionStart", "", DERIVED, BUSY),
-    spec("UserPromptSubmit", "", DERIVED, PROMPT),
-    spec("PreToolUse", "", DERIVED, BUSY),
+    receipt_spec("UserPromptSubmit", "", DERIVED, PROMPT, Receipt::Claude),
+    receipt_spec("PreToolUse", "", DERIVED, BUSY, Receipt::Claude),
     // The bare `PreToolUse` event derives "busy" (the broad entry above);
     // "awaiting" is what this matcher means specifically — a matcher policy
     // that belongs here, not baked into `tuic-hook`. Its `tool_name` scrape
@@ -150,10 +278,20 @@ const CLAUDE_HOOKS: &[HookSpec] = &[
         AWAITING,
     ),
     spec("PostToolUse", "AskUserQuestion|ExitPlanMode", DERIVED, BUSY),
-    spec("Elicitation", "", DERIVED, AWAITING),
-    spec("ElicitationResult", "", DERIVED, BUSY),
-    spec("PostToolUseFailure", "", DERIVED, &[("toolfail", "1")]),
-    spec("Notification", "", DERIVED, AWAITING),
+    receipt_spec("PermissionRequest", "", DERIVED, NO_WIRE, Receipt::Claude),
+    // Receipt only, like main: a tool finishing says nothing the receipt does not,
+    // and a derived `busy` would override a permission wait it records.
+    receipt_spec("PostToolUse", "", &["--no-state"], NO_WIRE, Receipt::Claude),
+    receipt_spec("Elicitation", "", DERIVED, AWAITING, Receipt::Claude),
+    receipt_spec("ElicitationResult", "", DERIVED, BUSY, Receipt::Claude),
+    receipt_spec(
+        "PostToolUseFailure",
+        "",
+        DERIVED,
+        &[("toolfail", "1")],
+        Receipt::Claude,
+    ),
+    receipt_spec("Notification", "", DERIVED, AWAITING, Receipt::Claude),
     spec("Stop", "", DERIVED, IDLE),
     spec(
         "StopFailure",
@@ -174,17 +312,30 @@ const GEMINI_HOOKS: &[HookSpec] = &[
 ];
 
 /// Grok hooks (Claude-compatible JSON schema, written to our OWN file
-/// `~/.grok/hooks/tuic.json`). Event names verified against the in-app hooks doc
-/// (`~/.grok/docs/user-guide/10-hooks.md`). Lifecycle events (UserPromptSubmit,
-/// Stop, SessionEnd) reject a matcher, so all entries use an empty matcher (the
-/// own-file writer omits it). Grok has no clean "awaiting" event — approval
-/// prompts are covered by the existing OSC-0 title heuristic, which is not
-/// suppressed under instrumentation.
+/// `~/.grok/hooks/tuic.json`). Events recorded from Grok 1.0.70 (main 2.1.0):
+/// every one forwards the `grok-hook` receipt and nothing else — the lifecycle
+/// is derived on the Rust side from the native ids. Only permission
+/// notifications ask for human input; idle/task notifications are
+/// deliberately not registered. Lifecycle events reject a matcher, so the
+/// own-file writer omits it.
 const GROK_HOOKS: &[HookSpec] = &[
-    spec("UserPromptSubmit", "", &["--state", "prompt"], PROMPT),
-    spec("PreToolUse", "", &["--state", "busy"], BUSY),
-    spec("Stop", "", &["--state", "idle"], IDLE),
-    spec("SessionEnd", "", &["--state", "idle"], IDLE),
+    receipt_spec("SessionStart", "", DERIVED, NO_WIRE, Receipt::Grok),
+    receipt_spec("UserPromptSubmit", "", DERIVED, NO_WIRE, Receipt::Grok),
+    receipt_spec("PreToolUse", "", DERIVED, NO_WIRE, Receipt::Grok),
+    receipt_spec(
+        "Notification",
+        "permission_prompt",
+        DERIVED,
+        NO_WIRE,
+        Receipt::Grok,
+    ),
+    receipt_spec("PostToolUse", "", DERIVED, NO_WIRE, Receipt::Grok),
+    receipt_spec("PostToolUseFailure", "", DERIVED, NO_WIRE, Receipt::Grok),
+    receipt_spec("PermissionDenied", "", DERIVED, NO_WIRE, Receipt::Grok),
+    receipt_spec("Stop", "", DERIVED, NO_WIRE, Receipt::Grok),
+    receipt_spec("StopCancelled", "", DERIVED, NO_WIRE, Receipt::Grok),
+    receipt_spec("StopFailure", "", DERIVED, NO_WIRE, Receipt::Grok),
+    receipt_spec("SessionEnd", "", DERIVED, NO_WIRE, Receipt::Grok),
 ];
 
 /// Codex hooks (Claude-compatible JSON schema, merged into `~/.codex/hooks.json`,
@@ -197,6 +348,14 @@ const GROK_HOOKS: &[HookSpec] = &[
 const CODEX_HOOKS: &[HookSpec] = &[
     codex_identity_spec("SessionStart", &["--state", "busy"], BUSY),
     codex_identity_spec("UserPromptSubmit", &["--state", "prompt"], PROMPT),
+    // Native session/turn/tool ids, without JSON delimiters on the OSC wire
+    // (main 2.1.0; child roster #2635-8052, recorded with Codex 0.166.0).
+    receipt_spec("PreToolUse", "", DERIVED, NO_WIRE, Receipt::CodexTool),
+    receipt_spec("PostToolUse", "", DERIVED, NO_WIRE, Receipt::CodexTool),
+    receipt_spec("Interrupt", "", DERIVED, NO_WIRE, Receipt::CodexTool),
+    receipt_spec("SubagentStart", "", DERIVED, NO_WIRE, Receipt::CodexTool),
+    receipt_spec("SubagentStop", "", DERIVED, NO_WIRE, Receipt::CodexTool),
+    receipt_spec("SessionEnd", "", DERIVED, NO_WIRE, Receipt::CodexTool),
     spec("Stop", "", &["--state", "idle"], IDLE),
 ];
 
@@ -219,11 +378,13 @@ fn tuic_hook_binary_path() -> String {
 /// binary path is double-quoted because `<config_dir>` on macOS contains a
 /// literal space (`Application Support`).
 #[cfg(feature = "desktop")]
-fn hook_binary_command(codex_session: bool, args: &[&str]) -> String {
+fn hook_binary_command(codex_session: bool, receipt: Receipt, args: &[&str]) -> String {
     let path = tuic_hook_binary_path();
+    let receipt_args = receipt.kind().map(|kind| ["--receipt", kind]);
     let arg_str = codex_session
         .then_some("--codex-session")
         .into_iter()
+        .chain(receipt_args.into_iter().flatten())
         .chain(args.iter().copied())
         .collect::<Vec<_>>()
         .join(" ");
@@ -233,32 +394,154 @@ fn hook_binary_command(codex_session: bool, args: &[&str]) -> String {
 }
 
 /// Resolve the controlling tty into `$__t`, even when the caller's stdout is
-/// captured (hooks have no controlling tty of their own). `$TUIC_PTY_TTY` — the
-/// device TUIC stamps on every PTY child, which `tuic-hook` also reads first —
-/// wins; the parent's tty via `ps -o tty=` is only the fallback for an agent
-/// TUIC did not spawn (a sandboxed agent cannot exec the setuid `ps`).
-#[cfg(any(test, not(feature = "desktop")))]
-fn tty_resolve() -> &'static str {
-    r#"__t=${TUIC_PTY_TTY:-};[ -n "$__t" ]||{ __t=$(ps -o tty= -p "$PPID" 2>/dev/null|tr -d '[:space:]');case "$__t" in *[0-9]*)__t="/dev/${__t#/dev/}";;*)__t="/dev/tty";;esac;}"#
+/// captured (hooks have no controlling tty of their own).
+///
+/// The parent's LIVE tty (`ps -o tty= -p $PPID`) wins whenever it resolves:
+/// it is where the agent actually runs. `$TUIC_PTY_TTY` — the device TUIC
+/// stamps on every PTY child — is only the fallback, for when the live one
+/// cannot be read: a sandboxed agent that cannot exec the setuid `ps`, or a
+/// hook whose immediate parent is detached (Claude Code's hook shell). Trying
+/// the variable first would let any process that merely inherited it — a pane
+/// of a real tmux started inside a TUIC tab, a command that copies its
+/// parent's environment onto another pty — label that other tab's session.
+/// A TUIC tmux-shim pane is its own PTY and gets its own `$TUIC_PTY_TTY`, so
+/// either order resolves it; this one stays right for the inherited case too.
+pub(crate) fn tty_resolve() -> &'static str {
+    r#"__t=$(ps -o tty= -p "$PPID" 2>/dev/null|tr -d '[:space:]');case "$__t" in *[0-9]*)__t="/dev/${__t#/dev/}";;*)__t=${TUIC_PTY_TTY:-/dev/tty};;esac"#
+}
+
+/// Generate the guarded, self-contained shell command that emits
+/// `OSC 7770;state=<state>` through the side channel. `prompt` is busy plus the
+/// "user submitted a prompt here" mark; only the submit-prompt hooks use it. Inert outside TUIC, always
+/// exits 0, ends with the ownership sentinel.
+pub(crate) fn hook_command(state: &str) -> String {
+    hook_shell(
+        &format!(r"__f=$(printf '\033]7770;state={state}\033\\')"),
+        TTY_FRAMES,
+    )
+}
+
+/// Write the frames in `$__f` to the tty `$__t` (the fallback channel).
+pub(crate) const TTY_FRAMES: &str = r#"printf %s "$__f" > "$__t""#;
+
+/// Post the frames in `$__f` to `POST /sessions/$TUIC_SESSION/hook` on the
+/// local TUIC socket, so they never share the tty with the agent TUI
+/// (#2749-bee7). When no socket answers, `curl` is missing or TUIC refuses the
+/// post, run `fallback` with the controlling tty in `$__t`. A timeout (exit
+/// 28) does not fall back: TUIC may have processed the frames already.
+///
+/// Post only when the parent has a controlling tty. A headless agent that a
+/// TUIC agent starts from a tool call (`codex exec` from a Claude tab) inherits
+/// `TUIC_SESSION` and `TUIC_SOCKET` but has no tty; its hooks must stay inert,
+/// as they were on the tty path, or they close the parent tab's turn.
+pub(crate) fn post_frames(fallback: &str) -> String {
+    format!(
+        r#"{tty};__r=1;case "$__t" in /dev/tty);;*)[ -S "${{TUIC_SOCKET:-}}" ]&&{{ printf %s "$__f"|curl -sf -o /dev/null -m 5 -H 'Expect:' --unix-socket "$TUIC_SOCKET" --data-binary @- "http://tuic/sessions/$TUIC_SESSION/hook";__r=$?;}};;esac;[ $__r -eq 0 ]||[ $__r -eq 28 ]||{{ {fallback};}}"#,
+        tty = tty_resolve(),
+    )
+}
+
+/// A guarded hook: `build` sets `$__f` (it may read stdin), then the frames are
+/// posted. Inert outside TUIC, always exits 0, ends with the ownership sentinel.
+fn hook_shell(build: &str, fallback: &str) -> String {
+    format!(
+        r#"[ -n "${{TUIC_SESSION:-}}" ] && {{ {build};{post}; }} >/dev/null 2>&1 || true {SENTINEL}"#,
+        post = post_frames(fallback),
+    )
+}
+
+/// Preserve stdin metadata for permission ownership, optionally followed by the
+/// existing coarse signal. Questions and elicitation keep their current hooks.
+///
+/// The side channel carries the whole receipt in one frame
+/// `claude-hook=<tab>:<hook pid>:<base64>`, then an empty piece ends it; the
+/// hook pid keeps concurrent hooks apart. The reader keeps at most 1 MB of
+/// base64 for each receipt.
+///
+/// The tty fallback shares the tty with the agent redraw. `sh` printf writes in
+/// 1024-byte pieces and a redraw escape cut one large frame (#2747-636f), so
+/// each fallback frame carries at most 768 base64 bytes. One write is not
+/// atomic either: above the output high-water mark a macOS pty writer sleeps
+/// mid-write and another writer gets in, so a fallback receipt over 32 KB of
+/// base64 is not sent.
+#[cfg_attr(all(feature = "desktop", not(test)), allow(dead_code))]
+fn claude_hook_command(state: Option<&str>) -> String {
+    let coarse = state
+        .map(|state| format!("\\033]7770;state={state}\\033\\\\"))
+        .unwrap_or_default();
+    claude_receipt_command(&coarse)
+}
+
+/// The receipt frames of `claude_hook_command` followed by `coarse` (already
+/// `printf`-escaped frames, `toolfail` first), for specs that carry a wire.
+#[cfg_attr(all(feature = "desktop", not(test)), allow(dead_code))]
+fn claude_receipt_command(coarse: &str) -> String {
+    hook_shell(
+        &format!(
+            r#"__p=$(base64 | tr -d '\r\n');__f=$(printf '\033]7770;claude-hook=%s:%s:%s\033\\\033]7770;claude-hook=%s:%s:\033\\{coarse}' "$TUIC_SESSION" "$$" "$__p" "$TUIC_SESSION" "$$")"#
+        ),
+        &format!(
+            r#"[ ${{#__p}} -le 32768 ] && for __c in $(printf %s "$__p" | fold -w 768); do printf '\033]7770;claude-hook=%s:%s:%s\033\\' "$TUIC_SESSION" "$$" "$__c" >> "$__t"; done; printf '\033]7770;claude-hook=%s:%s:\033\\{coarse}' "$TUIC_SESSION" "$$" >> "$__t""#
+        ),
+    )
+}
+
+/// Carry native ids together so delayed cancellation and parallel tools cannot
+/// settle another request. Rust decodes only lifecycle metadata for consumers.
+#[cfg_attr(all(feature = "desktop", not(test)), allow(dead_code))]
+fn grok_hook_command() -> String {
+    hook_shell(
+        r#"__p=$(base64 | tr -d '\r\n');__f=$(printf '\033]7770;grok-hook=%s:%s\033\\' "$TUIC_SESSION" "$__p")"#,
+        TTY_FRAMES,
+    )
+}
+
+/// Codex native SessionStart/UserPromptSubmit stdin carries the exact thread id,
+/// rollout path and cwd (recorded with 0.162.1). Reuse the guarded OSC channel;
+/// older/untrusted hooks simply leave Chat unavailable.
+#[cfg_attr(all(feature = "desktop", not(test)), allow(dead_code))]
+fn codex_identity_command(state: &str) -> String {
+    hook_shell(
+        &format!(
+            r#"__p=$(base64 | tr -d '\r\n');__f=$(printf '\033]7770;codex-session=%s:%s\033\\\033]7770;state={state}\033\\' "$TUIC_SESSION" "$__p")"#
+        ),
+        TTY_FRAMES,
+    )
+}
+
+/// Preserve native session/turn/tool ids without putting JSON delimiters on the OSC wire.
+#[cfg_attr(all(feature = "desktop", not(test)), allow(dead_code))]
+fn codex_tool_command() -> String {
+    hook_shell(
+        r#"__p=$(base64 | tr -d '\r\n');__f=$(printf '\033]7770;codex-tool=%s:%s\033\\' "$TUIC_SESSION" "$__p")"#,
+        TTY_FRAMES,
+    )
 }
 
 /// The self-contained shell flavour of a spec (builds without the sidecar):
-/// emits each `wire` pair with `printf` to the controlling tty, resolved once.
-/// `toolfail` is always emitted first regardless of input order — the
-/// `state=idle` it may accompany reads-and-clears the turn's failure flag.
+/// the frames of its `wire` (`toolfail` first, because the `state=idle` it may
+/// accompany reads-and-clears the turn's failure flag), posted to the local
+/// socket with the tty as fallback.
 #[cfg(any(test, not(feature = "desktop")))]
 fn shell_hook_command(wire: &[(&str, &str)]) -> String {
+    hook_shell(
+        &format!("__f=$(printf '{}')", wire_frames(wire)),
+        TTY_FRAMES,
+    )
+}
+
+/// `wire` as `printf`-escaped OSC 7770 frames, `toolfail` before everything else.
+#[cfg(any(test, not(feature = "desktop")))]
+fn wire_frames(wire: &[(&str, &str)]) -> String {
+    use std::fmt::Write as _;
     let (toolfail, rest): (Vec<_>, Vec<_>) = wire.iter().partition(|(verb, _)| *verb == "toolfail");
-    let printfs: String = toolfail
+    toolfail
         .into_iter()
         .chain(rest)
-        .map(|(verb, payload)| format!(r#"printf '\033]7770;{verb}={payload}\033\\' > "$__t";"#))
-        .collect::<Vec<_>>()
-        .join(" ");
-    format!(
-        r#"[ -n "${{TUIC_SESSION:-}}" ] && {{ {tty}; {printfs} }} >/dev/null 2>&1 || true {SENTINEL}"#,
-        tty = tty_resolve(),
-    )
+        .fold(String::new(), |mut out, (verb, payload)| {
+            let _ = write!(out, r"\033]7770;{verb}={payload}\033\\");
+            out
+        })
 }
 
 /// `agent` scopes `tuic-hook`'s `hook_event_name` derivation lookup
@@ -276,7 +559,7 @@ fn spec_command(agent: &str, spec: &HookSpec) -> String {
             .into_iter()
             .chain(spec.args.iter().copied())
             .collect();
-        hook_binary_command(spec.codex_session, &args)
+        hook_binary_command(spec.codex_session, spec.receipt, &args)
     }
     #[cfg(not(feature = "desktop"))]
     {
@@ -284,18 +567,22 @@ fn spec_command(agent: &str, spec: &HookSpec) -> String {
     }
 }
 
-/// The shell flavour of a whole spec, including the Codex identity frame.
+/// The shell flavour of a whole spec: its receipt, then its frames.
 #[cfg(any(test, not(feature = "desktop")))]
 fn shell_spec_command(spec: &HookSpec) -> String {
-    if spec.codex_session {
-        let state = spec
-            .wire
-            .iter()
-            .find(|(verb, _)| *verb == "state")
-            .map_or("busy", |(_, payload)| *payload);
-        codex_identity_command(state)
-    } else {
-        shell_hook_command(spec.wire)
+    match spec.receipt {
+        Receipt::Claude => claude_receipt_command(&wire_frames(spec.wire)),
+        Receipt::Grok => grok_hook_command(),
+        Receipt::CodexTool => codex_tool_command(),
+        Receipt::None if spec.codex_session => {
+            let state = spec
+                .wire
+                .iter()
+                .find(|(verb, _)| *verb == "state")
+                .map_or("busy", |(_, payload)| *payload);
+            codex_identity_command(state)
+        }
+        Receipt::None => shell_hook_command(spec.wire),
     }
 }
 
@@ -306,38 +593,140 @@ fn map_of(agent: &str, specs: &[HookSpec]) -> Vec<HookEntry> {
         .collect()
 }
 
-/// Claude's hook map — see [`CLAUDE_HOOKS`].
+/// Claude's hook map for this host — see [`CLAUDE_HOOKS`].
 pub(crate) fn claude_hook_map() -> Vec<HookEntry> {
-    map_of("claude", CLAUDE_HOOKS)
+    claude_hook_map_on(&HookTransport::host_or_posix())
 }
 
-/// Gemini's hook map — see [`GEMINI_HOOKS`].
+/// The POSIX transport maps the specs; the Windows CLI transport keeps main's
+/// `tuic.exe agent-state` entries.
+///
+/// DEFERRED (2026-11-17) — the CLI transport has no `toolfail` verb, no
+/// metadata scrapes (`ccsession`/`cwd`/`transcript`/`tool`/`notify`) and
+/// `Notification` is registered for `permission_prompt` only. Add them to
+/// `tuic-cli agent-state` when a Windows host needs the hook-driven turn error
+/// flag or the Claude metadata.
+pub(crate) fn claude_hook_map_on(t: &HookTransport) -> Vec<HookEntry> {
+    match t {
+        HookTransport::Posix => map_of("claude", CLAUDE_HOOKS),
+        HookTransport::Cli(_) => vec![
+            ("UserPromptSubmit", "", claude_hook(t, Some("prompt"))),
+            ("PreToolUse", "", claude_hook(t, Some("busy"))),
+            (
+                "PreToolUse",
+                "AskUserQuestion|ExitPlanMode",
+                state_hook(t, "awaiting"),
+            ),
+            (
+                "PostToolUse",
+                "AskUserQuestion|ExitPlanMode",
+                state_hook(t, "busy"),
+            ),
+            ("PermissionRequest", "", claude_hook(t, None)),
+            ("Notification", "permission_prompt", claude_hook(t, None)),
+            ("PostToolUse", "", claude_hook(t, None)),
+            ("PostToolUseFailure", "", claude_hook(t, None)),
+            ("Elicitation", "", claude_hook(t, Some("awaiting"))),
+            ("ElicitationResult", "", claude_hook(t, Some("busy"))),
+            ("Stop", "", state_hook(t, "idle")),
+            ("StopFailure", "", state_hook(t, "idle")),
+            ("SessionEnd", "", state_hook(t, "idle")),
+        ],
+    }
+}
+
+/// Gemini's hook map for this host — see [`GEMINI_HOOKS`].
 pub(crate) fn gemini_hook_map() -> Vec<HookEntry> {
-    map_of("gemini", GEMINI_HOOKS)
+    gemini_hook_map_on(&HookTransport::host_or_posix())
 }
 
-/// Grok's hook map — see [`GROK_HOOKS`].
+pub(crate) fn gemini_hook_map_on(t: &HookTransport) -> Vec<HookEntry> {
+    match t {
+        HookTransport::Posix => map_of("gemini", GEMINI_HOOKS),
+        HookTransport::Cli(_) => vec![
+            ("BeforeAgent", "", state_hook(t, "prompt")),
+            ("BeforeTool", "", state_hook(t, "busy")),
+            ("AfterAgent", "", state_hook(t, "idle")),
+            ("Notification", "", state_hook(t, "awaiting")),
+            ("SessionEnd", "", state_hook(t, "idle")),
+        ],
+    }
+}
+
+/// Grok's hook map for this host — see [`GROK_HOOKS`].
 pub(crate) fn grok_hook_map() -> Vec<HookEntry> {
-    map_of("grok", GROK_HOOKS)
+    grok_hook_map_on(&HookTransport::host_or_posix())
 }
 
-/// Codex native SessionStart/UserPromptSubmit stdin carries the exact thread id,
-/// rollout path and cwd (recorded with 0.162.1); it is forwarded opaquely as
-/// `codex-session=<TUIC_SESSION>:<base64>` ahead of the state frame (the
-/// binary's `--codex-session`). Older/untrusted hooks simply leave Chat
-/// unavailable. This is the shell flavour of that frame, for builds without
-/// the sidecar.
-#[cfg(any(test, not(feature = "desktop")))]
-fn codex_identity_command(state: &str) -> String {
-    format!(
-        r#"[ -n "${{TUIC_SESSION:-}}" ] && {{ {tty}; __p=$(base64 | tr -d '\r\n'); printf '\033]7770;codex-session=%s:%s\033\\\033]7770;state={state}\033\\' "$TUIC_SESSION" "$__p" > "$__t"; }} >/dev/null 2>&1 || true {SENTINEL}"#,
-        tty = tty_resolve(),
-    )
+pub(crate) fn grok_hook_map_on(t: &HookTransport) -> Vec<HookEntry> {
+    match t {
+        HookTransport::Posix => map_of("grok", GROK_HOOKS),
+        HookTransport::Cli(cli) => {
+            let command = cli_command(cli, &["grok"]);
+            GROK_HOOKS
+                .iter()
+                .map(|s| (s.event, s.matcher, command.clone()))
+                .collect()
+        }
+    }
 }
 
-/// Codex's hook map — see [`CODEX_HOOKS`].
+/// Codex's hook map for this host — see [`CODEX_HOOKS`].
 pub(crate) fn codex_hook_map() -> Vec<HookEntry> {
-    map_of("codex", CODEX_HOOKS)
+    codex_hook_map_on(&HookTransport::host_or_posix())
+}
+
+pub(crate) fn codex_hook_map_on(t: &HookTransport) -> Vec<HookEntry> {
+    match t {
+        HookTransport::Posix => map_of("codex", CODEX_HOOKS),
+        HookTransport::Cli(cli) => {
+            let identity = |state: &str| cli_command(cli, &["codex-session", state]);
+            let tool = cli_command(cli, &["codex-tool"]);
+            vec![
+                ("SessionStart", "", identity("busy")),
+                ("UserPromptSubmit", "", identity("prompt")),
+                ("PreToolUse", "", tool.clone()),
+                ("PostToolUse", "", tool.clone()),
+                ("Interrupt", "", tool.clone()),
+                ("SubagentStart", "", tool.clone()),
+                ("SubagentStop", "", tool.clone()),
+                ("SessionEnd", "", tool),
+                ("Stop", "", state_hook(t, "idle")),
+            ]
+        }
+    }
+}
+
+/// The shell flavour of each agent's map — what a build without the sidecar
+/// (`tuic-remote`) installs. The channel/receipt tests execute these commands
+/// under `sh`, so they pin the shell transport itself; the sidecar's own output
+/// is pinned by `tests::golden_wire_output`.
+#[cfg(test)]
+fn shell_map_of(specs: &[HookSpec]) -> Vec<HookEntry> {
+    specs
+        .iter()
+        .map(|s| (s.event, s.matcher, shell_spec_command(s)))
+        .collect()
+}
+
+#[cfg(test)]
+pub(crate) fn shell_claude_hook_map() -> Vec<HookEntry> {
+    shell_map_of(CLAUDE_HOOKS)
+}
+
+#[cfg(test)]
+pub(crate) fn shell_gemini_hook_map() -> Vec<HookEntry> {
+    shell_map_of(GEMINI_HOOKS)
+}
+
+#[cfg(test)]
+pub(crate) fn shell_grok_hook_map() -> Vec<HookEntry> {
+    shell_map_of(GROK_HOOKS)
+}
+
+#[cfg(test)]
+pub(crate) fn shell_codex_hook_map() -> Vec<HookEntry> {
+    shell_map_of(CODEX_HOOKS)
 }
 
 #[cfg(test)]
@@ -400,6 +789,9 @@ mod tests {
                 "AskUserQuestion|ExitPlanMode",
                 &[("state", "busy")],
             ),
+            // Receipt-only (permission ownership is decoded from the receipt).
+            ("claude", "PermissionRequest", "", &[]),
+            ("claude", "PostToolUse", "", &[]),
             ("claude", "Elicitation", "", &[("state", "awaiting")]),
             ("claude", "ElicitationResult", "", &[("state", "busy")]),
             ("claude", "PostToolUseFailure", "", &[("toolfail", "1")]),
@@ -426,12 +818,26 @@ mod tests {
             ("gemini", "AfterAgent", "", &[("state", "idle")]),
             ("gemini", "Notification", "", &[("state", "awaiting")]),
             ("gemini", "SessionEnd", "", &[("state", "idle")]),
-            ("grok", "UserPromptSubmit", "", &[("state", "prompt")]),
-            ("grok", "PreToolUse", "", &[("state", "busy")]),
-            ("grok", "Stop", "", &[("state", "idle")]),
-            ("grok", "SessionEnd", "", &[("state", "idle")]),
+            // Grok is receipt-only: the lifecycle is derived from `grok-hook` on the Rust side.
+            ("grok", "SessionStart", "", &[]),
+            ("grok", "UserPromptSubmit", "", &[]),
+            ("grok", "PreToolUse", "", &[]),
+            ("grok", "Notification", "permission_prompt", &[]),
+            ("grok", "PostToolUse", "", &[]),
+            ("grok", "PostToolUseFailure", "", &[]),
+            ("grok", "PermissionDenied", "", &[]),
+            ("grok", "Stop", "", &[]),
+            ("grok", "StopCancelled", "", &[]),
+            ("grok", "StopFailure", "", &[]),
+            ("grok", "SessionEnd", "", &[]),
             ("codex", "SessionStart", "", &[("state", "busy")]),
             ("codex", "UserPromptSubmit", "", &[("state", "prompt")]),
+            ("codex", "PreToolUse", "", &[]),
+            ("codex", "PostToolUse", "", &[]),
+            ("codex", "Interrupt", "", &[]),
+            ("codex", "SubagentStart", "", &[]),
+            ("codex", "SubagentStop", "", &[]),
+            ("codex", "SessionEnd", "", &[]),
             ("codex", "Stop", "", &[("state", "idle")]),
         ];
         let actual: Vec<WireRow> = ALL_SPECS
@@ -483,10 +889,10 @@ mod tests {
     fn every_binary_command_scopes_derivation_to_its_agent() {
         for (agent, map) in all_maps() {
             for (event, matcher, cmd) in map {
-                // `--codex-session` (main's Codex identity frame) may precede it.
+                // `--codex-session` (Codex identity frame) and `--receipt <kind>` may
+                // precede it.
                 assert!(
-                    cmd.contains(&format!(r#""$B" --agent {agent}"#))
-                        || cmd.contains(&format!(r#""$B" --codex-session --agent {agent}"#)),
+                    cmd.contains(&format!(r#" --agent {agent}"#)) && cmd.contains(r#""$B" "#),
                     "{agent} ({event}, {matcher:?}) must pass --agent {agent}: {cmd}"
                 );
             }
@@ -538,7 +944,6 @@ mod tests {
         for (specs, event) in [
             (CLAUDE_HOOKS, "UserPromptSubmit"),
             (GEMINI_HOOKS, "BeforeAgent"),
-            (GROK_HOOKS, "UserPromptSubmit"),
             (CODEX_HOOKS, "UserPromptSubmit"),
         ] {
             assert_eq!(wire_of(specs, event, ""), [("state", "prompt")], "{event}");
@@ -587,16 +992,23 @@ mod tests {
     #[test]
     fn grok_map_uses_empty_matchers_only() {
         assert!(
-            GROK_HOOKS.iter().all(|s| s.matcher.is_empty()),
-            "grok lifecycle events reject a matcher — every entry must be empty"
+            GROK_HOOKS
+                .iter()
+                .all(|s| s.matcher.is_empty() || s.event == "Notification"),
+            "grok lifecycle events reject a matcher — only Notification may carry one"
         );
     }
 
     #[test]
     fn codex_map_has_no_session_end() {
+        // Codex has no SessionEnd state: the badge clears via Stop/idle. The event is
+        // registered only to forward the tool receipt.
         assert!(
-            !CODEX_HOOKS.iter().any(|s| s.event == "SessionEnd"),
-            "Codex has no SessionEnd — the badge clears via Stop/idle instead"
+            CODEX_HOOKS
+                .iter()
+                .filter(|s| s.event == "SessionEnd")
+                .all(|s| s.wire.is_empty() && s.receipt == Receipt::CodexTool),
+            "Codex SessionEnd must not drive any state"
         );
     }
 
@@ -606,12 +1018,13 @@ mod tests {
     fn non_claude_specs_pass_their_state_explicitly() {
         for (agent, specs) in &ALL_SPECS[1..] {
             for s in *specs {
-                let state = s
-                    .wire
-                    .iter()
-                    .find(|(v, _)| *v == "state")
-                    .map(|(_, p)| *p)
-                    .unwrap();
+                let Some(state) = s.wire.iter().find(|(v, _)| *v == "state").map(|(_, p)| *p)
+                else {
+                    // Receipt-only: the Rust side derives everything from the receipt.
+                    assert!(s.receipt != Receipt::None, "{agent} {}", s.event);
+                    assert!(s.args.is_empty(), "{agent} {}", s.event);
+                    continue;
+                };
                 assert_eq!(s.args, ["--state", state], "{agent} {}", s.event);
             }
         }
@@ -627,8 +1040,11 @@ mod tests {
                 assert!(cmd.starts_with(r#"[ -n "${TUIC_SESSION"#), "{cmd}");
                 assert!(cmd.contains(r#"ps -o tty= -p "$PPID""#), "{cmd}");
                 let pty_tty = cmd.find("TUIC_PTY_TTY").expect("reads TUIC_PTY_TTY");
-                let ps = cmd.find("ps -o tty=").expect("keeps the ps fallback");
-                assert!(pty_tty < ps, "TUIC_PTY_TTY is tried before ps: {cmd}");
+                let ps = cmd.find("ps -o tty=").expect("reads the live tty");
+                assert!(
+                    ps < pty_tty,
+                    "the live tty is tried before TUIC_PTY_TTY: {cmd}"
+                );
                 assert!(cmd.contains("|| true"), "{cmd}");
                 assert!(cmd.trim_end().ends_with(SENTINEL), "{cmd}");
                 for (verb, payload) in s.wire {
@@ -656,6 +1072,57 @@ mod tests {
                 cmd.matches("ps -o tty=").count(),
                 1,
                 "tty resolved once: {cmd}"
+            );
+        }
+    }
+
+    /// M3: run a real shell-flavour hook. A stand-in `ps` reports the live tty
+    /// (spelled `/dev/..<path>` so it can be a scratch file); the hook must
+    /// write there, not to an inherited `$TUIC_PTY_TTY` naming another tab.
+    /// When the live lookup yields nothing (`ps` unrunnable, or a detached
+    /// parent's `??`), the variable is used.
+    #[test]
+    #[cfg(unix)]
+    fn shell_hook_writes_to_the_live_tty_before_an_inherited_tuic_pty_tty() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let live = dir.path().join("live-tty7");
+        let inherited = dir.path().join("inherited-tty");
+        let cmd = shell_hook_command(&[("state", "idle")]);
+        let run = |ps_body: &str| {
+            std::fs::write(&live, "").unwrap();
+            std::fs::write(&inherited, "").unwrap();
+            let bin = tempfile::TempDir::new().unwrap();
+            let ps = bin.path().join("ps");
+            std::fs::write(&ps, format!("#!/bin/sh\n{ps_body}\n")).unwrap();
+            std::fs::set_permissions(&ps, std::os::unix::fs::PermissionsExt::from_mode(0o755))
+                .unwrap();
+            let status = std::process::Command::new("/bin/sh")
+                .arg("-c")
+                .arg(&cmd)
+                .env_clear()
+                .env("PATH", format!("{}:/usr/bin:/bin", bin.path().display()))
+                .env("TUIC_SESSION", "probe")
+                .env("TUIC_PTY_TTY", &inherited)
+                .status()
+                .unwrap();
+            assert!(status.success());
+            (
+                std::fs::read(&live).unwrap(),
+                std::fs::read(&inherited).unwrap(),
+            )
+        };
+        let idle = b"\x1b]7770;state=idle\x1b\\".to_vec();
+
+        let (to_live, to_inherited) = run(&format!("printf '%s\\n' '/dev/..{}'", live.display()));
+        assert_eq!(to_live, idle, "the live tty gets the OSC");
+        assert!(to_inherited.is_empty(), "the inherited tty is left alone");
+
+        for no_live_tty in ["exit 1", "printf '??\\n'"] {
+            let (to_live, to_inherited) = run(no_live_tty);
+            assert!(to_live.is_empty(), "{no_live_tty}");
+            assert_eq!(
+                to_inherited, idle,
+                "{no_live_tty}: falls back to TUIC_PTY_TTY"
             );
         }
     }
@@ -735,9 +1202,23 @@ mod tests {
         #[test]
         fn non_claude_commands_carry_their_state_flag() {
             assert!(cmd_of(&gemini_hook_map(), "BeforeAgent", "").contains("--state prompt"));
-            assert!(cmd_of(&grok_hook_map(), "UserPromptSubmit", "").contains("--state prompt"));
             assert!(cmd_of(&codex_hook_map(), "UserPromptSubmit", "").contains("--state prompt"));
             assert!(cmd_of(&codex_hook_map(), "SessionStart", "").contains("--state busy"));
+        }
+
+        /// Receipt-only specs carry no state: the Rust side derives it from the
+        /// forwarded payload, so the argv is just the receipt kind.
+        #[test]
+        fn receipt_specs_pass_their_receipt_kind() {
+            assert!(cmd_of(&grok_hook_map(), "UserPromptSubmit", "").contains("--receipt grok"));
+            assert!(cmd_of(&codex_hook_map(), "PreToolUse", "").contains("--receipt codex-tool"));
+            assert!(
+                cmd_of(&claude_hook_map(), "PermissionRequest", "").contains("--receipt claude")
+            );
+            assert!(
+                !cmd_of(&claude_hook_map(), "SessionStart", "").contains("--receipt"),
+                "an event with no receipt must not ask for one"
+            );
         }
 
         #[test]
@@ -844,6 +1325,17 @@ mod tests {
             path_override: Option<&str>,
             stdin: Option<&[u8]>,
         ) -> (i32, Vec<u8>) {
+            let (code, written) = run_raw(cmd, session, path_override, stdin);
+            (code, strip_receipt_frames(written))
+        }
+
+        /// [`run`] without removing the receipt frames.
+        fn run_raw(
+            cmd: &str,
+            session: bool,
+            path_override: Option<&str>,
+            stdin: Option<&[u8]>,
+        ) -> (i32, Vec<u8>) {
             let tty_file = NamedTempFile::new().expect("temp tty file");
             // Absolute path: `path_override` below can replace PATH entirely,
             // which must not also break locating the shell binary itself.
@@ -892,6 +1384,31 @@ mod tests {
             (out.status.code().unwrap_or(-1), written)
         }
 
+        /// The raw-stdin receipt frames (`claude-hook`, `grok-hook`, `codex-tool`)
+        /// a receipt spec sends ahead of its wire. They carry the hook's pid and
+        /// the whole payload, so the wire contract below is held against the rest
+        /// of the output, and the receipts have their own test.
+        fn strip_receipt_frames(bytes: Vec<u8>) -> Vec<u8> {
+            let text = String::from_utf8_lossy(&bytes).into_owned();
+            let mut out = String::new();
+            let mut rest = text.as_str();
+            while let Some(start) = rest.find("\u{1b}]7770;") {
+                out.push_str(&rest[..start]);
+                let frame = &rest[start..];
+                let end = frame.find("\u{1b}\\").map_or(frame.len(), |e| e + 2);
+                let one = &frame[..end];
+                let is_receipt = [";claude-hook=", ";grok-hook=", ";codex-tool="]
+                    .iter()
+                    .any(|verb| one.contains(verb));
+                if !is_receipt {
+                    out.push_str(one);
+                }
+                rest = &frame[end..];
+            }
+            out.push_str(rest);
+            out.into_bytes()
+        }
+
         fn osc(verb: &str, payload: &str) -> Vec<u8> {
             format!("\u{1b}]7770;{verb}={payload}\u{1b}\\").into_bytes()
         }
@@ -935,6 +1452,68 @@ mod tests {
                         String::from_utf8_lossy(&expected),
                         "{agent} ({event}, {matcher:?}) did not emit its wire contract"
                     );
+                }
+            }
+        }
+
+        /// A receipt spec sends the whole payload (base64) ahead of its wire, in
+        /// the frame shape each Rust consumer decodes; Claude's is closed by an
+        /// empty piece carrying the same owner (`<TUIC_SESSION>:<pid>`).
+        #[test]
+        fn receipt_specs_forward_the_payload_ahead_of_their_wire() {
+            use base64::Engine;
+            let _binary = install_binary();
+            for (agent, specs) in ALL_SPECS {
+                let map = match *agent {
+                    "claude" => claude_hook_map(),
+                    "gemini" => gemini_hook_map(),
+                    "grok" => grok_hook_map(),
+                    "codex" => codex_hook_map(),
+                    other => panic!("unhandled agent {other}"),
+                };
+                for (spec, (event, _, cmd)) in specs.iter().zip(map) {
+                    if spec.receipt == Receipt::None {
+                        continue;
+                    }
+                    let stdin = format!(r#"{{"hook_event_name":"{event}"}}"#);
+                    let encoded = base64::engine::general_purpose::STANDARD.encode(&stdin);
+                    let (_, written) = run_raw(&cmd, true, None, Some(stdin.as_bytes()));
+                    let text = String::from_utf8_lossy(&written).into_owned();
+                    let wire = spec
+                        .wire
+                        .iter()
+                        .fold(String::new(), |mut out, (verb, payload)| {
+                            use std::fmt::Write as _;
+                            let _ = write!(out, "\u{1b}]7770;{verb}={payload}\u{1b}\\");
+                            out
+                        });
+                    match spec.receipt {
+                        Receipt::Claude => {
+                            let first = "\u{1b}]7770;claude-hook=test-session:".to_string();
+                            assert!(text.starts_with(&first), "{agent} {event}: {text:?}");
+                            let body = &text[first.len()..];
+                            let (pid, rest) = body.split_once(':').expect("pid");
+                            assert!(pid.chars().all(|c| c.is_ascii_digit()), "{text:?}");
+                            let payload_frame = format!("{encoded}\u{1b}\\");
+                            assert!(
+                                rest.starts_with(&payload_frame),
+                                "{agent} {event}: {text:?}"
+                            );
+                            let closer = format!(
+                                "\u{1b}]7770;claude-hook=test-session:{pid}:\u{1b}\\{wire}"
+                            );
+                            assert_eq!(&rest[payload_frame.len()..], closer, "{agent} {event}");
+                        }
+                        Receipt::Grok => assert_eq!(
+                            text,
+                            format!("\u{1b}]7770;grok-hook=test-session:{encoded}\u{1b}\\{wire}")
+                        ),
+                        Receipt::CodexTool => assert_eq!(
+                            text,
+                            format!("\u{1b}]7770;codex-tool=test-session:{encoded}\u{1b}\\{wire}")
+                        ),
+                        Receipt::None => unreachable!(),
+                    }
                 }
             }
         }
@@ -1539,3 +2118,15 @@ mod tests {
 #[cfg(test)]
 #[path = "agent_hook_codex_tests.rs"]
 mod codex_tests;
+
+#[cfg(test)]
+#[path = "agent_hook_claude_tests.rs"]
+mod claude_tests;
+
+#[cfg(test)]
+#[path = "agent_hook_channel_tests.rs"]
+mod channel_tests;
+
+#[cfg(test)]
+#[path = "agent_hook_windows_tests.rs"]
+mod windows_tests;

@@ -341,14 +341,10 @@ async fn run_command_with(
     };
     let mut stdout_reader = drain(child.stdout.take());
     let mut stderr_reader = drain(child.stderr.take());
-    let abort_all = |writer: Option<tokio::task::JoinHandle<std::io::Result<()>>>,
-                     stdout: &tokio::task::JoinHandle<Vec<u8>>,
-                     stderr: &tokio::task::JoinHandle<Vec<u8>>| {
+    let abort_writer = |writer: Option<tokio::task::JoinHandle<std::io::Result<()>>>| {
         if let Some(writer) = writer {
             writer.abort();
         }
-        stdout.abort();
-        stderr.abort();
     };
 
     let status = match tokio::time::timeout_at(deadline, child.wait()).await {
@@ -357,43 +353,69 @@ async fn run_command_with(
         })?,
         Err(_) => {
             kill_one_shot(&mut child, &mut guard).await;
-            abort_all(writer, &stdout_reader, &stderr_reader);
+            abort_writer(writer);
+            stdout_reader.abort();
+            stderr_reader.abort();
             return Err(ExitReason::Timeout);
         }
     };
 
     // The pipes close once every process holding them is gone. A straggler
-    // the one-shot left behind can keep them open past the deadline; it is
-    // part of the group we started, so it is ended rather than waited on.
-    let drained = tokio::time::timeout_at(deadline, async {
-        let stdout = (&mut stdout_reader).await.unwrap_or_default();
-        let stderr = (&mut stderr_reader).await.unwrap_or_default();
-        (stdout, stderr)
+    // the one-shot left behind (a `ProxyCommand`, a backgrounded job) can keep
+    // them open past the deadline. The leader HAS exited, so its status is the
+    // outcome, not a timeout: the straggler is part of the group we started,
+    // so it is ended, and the output read so far is what the call returns.
+    let finished = tokio::time::timeout_at(deadline, async {
+        (&mut stdout_reader.handle).await.ok();
+        (&mut stderr_reader.handle).await.ok();
     })
-    .await;
-    let (stdout, stderr) = match drained {
-        Ok(output) => {
-            guard.disarm();
-            output
-        }
-        Err(_) => {
-            guard.kill_now();
-            abort_all(writer, &stdout_reader, &stderr_reader);
-            return Err(ExitReason::Timeout);
-        }
-    };
+    .await
+    .is_ok();
+    if finished {
+        guard.disarm();
+    } else {
+        tracing::debug!(
+            source = "tunnel_exec",
+            "one-shot exited but a process it started still held its pipes; ending its group"
+        );
+        guard.kill_now();
+        // Killing the group closes the pipes; give the readers a bounded
+        // moment to see EOF, then keep whatever they have.
+        let _ = tokio::time::timeout(KILL_GRACE, async {
+            (&mut stdout_reader.handle).await.ok();
+            (&mut stderr_reader.handle).await.ok();
+        })
+        .await;
+        stdout_reader.abort();
+        stderr_reader.abort();
+    }
+    let stdout = stdout_reader.take();
+    let stderr = stderr_reader.take();
 
     if let Some(writer) = writer {
         if stdin_end == StdinEnd::HoldOpen {
             // The child is gone; the held pipe has nothing left to do.
             writer.abort();
         } else {
-            writer
-                .await
-                .map_err(|error| ExitReason::Unknown(format!("stdin writer failed: {error}")))?
-                .map_err(|error| {
-                    ExitReason::Unknown(format!("failed to write ssh stdin: {error}"))
-                })?;
+            let written = tokio::time::timeout(KILL_GRACE, writer).await;
+            // A child that exits without reading all of its stdin (an auth
+            // failure, a remote command that ignores input) makes the write
+            // fail with EPIPE; its exit status still says what happened, and
+            // discarding it for a stdin error would turn "Permission denied"
+            // into an unclassifiable failure. Only a write error on an
+            // otherwise successful run is reported.
+            let failure = match written {
+                Ok(Ok(Ok(()))) => None,
+                Ok(Ok(Err(error))) if error.kind() == std::io::ErrorKind::BrokenPipe => None,
+                Ok(Ok(Err(error))) => Some(format!("failed to write ssh stdin: {error}")),
+                Ok(Err(error)) => Some(format!("stdin writer failed: {error}")),
+                Err(_) => Some("stdin writer did not finish".to_string()),
+            };
+            if let Some(failure) = failure
+                && status.success()
+            {
+                return Err(ExitReason::Unknown(failure));
+            }
         }
     }
 
@@ -404,19 +426,45 @@ async fn run_command_with(
     })
 }
 
+/// A child pipe being read to EOF on its own task. What it read so far stays
+/// readable after the task is aborted (a straggler holding the pipe).
+struct Drained {
+    handle: tokio::task::JoinHandle<()>,
+    buffer: std::sync::Arc<std::sync::Mutex<Vec<u8>>>,
+}
+
+impl Drained {
+    fn abort(&self) {
+        self.handle.abort();
+    }
+
+    fn take(&self) -> Vec<u8> {
+        std::mem::take(&mut *self.buffer.lock().unwrap_or_else(|e| e.into_inner()))
+    }
+}
+
 /// Read a child pipe to EOF on its own task, so the child can never block on
 /// a full pipe while we wait for it.
-fn drain<R>(pipe: Option<R>) -> tokio::task::JoinHandle<Vec<u8>>
+fn drain<R>(pipe: Option<R>) -> Drained
 where
     R: tokio::io::AsyncRead + Unpin + Send + 'static,
 {
-    tokio::spawn(async move {
-        let mut buffer = Vec::new();
-        if let Some(mut pipe) = pipe {
-            let _ = tokio::io::AsyncReadExt::read_to_end(&mut pipe, &mut buffer).await;
+    let buffer = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let sink = std::sync::Arc::clone(&buffer);
+    let handle = tokio::spawn(async move {
+        let Some(mut pipe) = pipe else { return };
+        let mut chunk = [0u8; 8192];
+        loop {
+            match tokio::io::AsyncReadExt::read(&mut pipe, &mut chunk).await {
+                Ok(0) | Err(_) => break,
+                Ok(read) => sink
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .extend_from_slice(&chunk[..read]),
+            }
         }
-        buffer
-    })
+    });
+    Drained { handle, buffer }
 }
 
 fn validate_remote_path(path: &str) -> Result<(), ExitReason> {
@@ -678,6 +726,155 @@ mod tests {
         task.abort();
         let _ = task.await;
         assert_process_gone(pid).await;
+    }
+
+    /// M4: the leader exits 0 but a grandchild it backgrounded keeps the
+    /// pipes open past the deadline. The leader's exit is the outcome — Ok,
+    /// with the output it wrote — not a Timeout; the straggler, part of the
+    /// group we started, is still killed.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_successful_one_shot_whose_grandchild_holds_the_pipes_returns_its_output() {
+        let marker = crate::test_support::test_temp_root().join("exec_straggler.grandchild.pid");
+        let _ = std::fs::remove_file(&marker);
+        let posix = format!(
+            "printf 'done-out'; printf 'done-err' >&2; sleep 60 & echo $! > '{}'; exit 0",
+            marker.display()
+        );
+        let ssh = fake_ssh_script("exec_straggler_holds_pipes", &posix, "exit /b 0");
+        let started = std::time::Instant::now();
+
+        let output = ssh_exec_with_binary(
+            &profile(),
+            "ignored-command",
+            None,
+            Duration::from_secs(2),
+            &ssh,
+        )
+        .await
+        .expect("the leader exited 0; a straggler is not a timeout");
+
+        assert_eq!(output.stdout, "done-out");
+        assert_eq!(output.stderr, "done-err");
+        assert_eq!(output.code, Some(0));
+        // Bounded: the deadline plus the kill grace, never the straggler's 60 s.
+        assert!(
+            started.elapsed() < Duration::from_secs(30),
+            "{:?}",
+            started.elapsed()
+        );
+        let pid = grandchild_pid(&marker).await;
+        assert_process_gone(pid).await;
+    }
+
+    /// The leader ignores SIGTERM: the timeout still ends it (SIGKILL to the
+    /// group after the grace), reports Timeout, and leaves nothing running.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_timed_out_one_shot_that_ignores_sigterm_is_killed() {
+        let marker = crate::test_support::test_temp_root().join("exec_ignores_term.leader.pid");
+        let _ = std::fs::remove_file(&marker);
+        let posix = format!(
+            "trap '' TERM; echo $$ > '{}'; while :; do sleep 1; done",
+            marker.display()
+        );
+        let ssh = fake_ssh_script("exec_ignores_sigterm", &posix, "exit /b 0");
+
+        let error = ssh_exec_with_binary(
+            &profile(),
+            "ignored-command",
+            None,
+            Duration::from_secs(2),
+            &ssh,
+        )
+        .await
+        .expect_err("a leader that never exits times out");
+
+        assert_eq!(error, ExitReason::Timeout);
+        let pid = grandchild_pid(&marker).await;
+        assert_process_gone(pid).await;
+    }
+
+    #[tokio::test]
+    async fn a_one_shot_that_cannot_spawn_reports_the_binary() {
+        let missing = crate::test_support::test_temp_root().join("no-such-ssh-binary");
+        let error = ssh_exec_with_binary(
+            &profile(),
+            "ignored-command",
+            None,
+            Duration::from_secs(5),
+            &missing,
+        )
+        .await
+        .expect_err("a missing binary cannot spawn");
+
+        match error {
+            ExitReason::Unknown(message) => {
+                assert!(message.starts_with("failed to spawn"), "{message}");
+                assert!(message.contains("no-such-ssh-binary"), "{message}");
+            }
+            other => panic!("expected a spawn failure, got {other:?}"),
+        }
+    }
+
+    /// Catches a stdin EPIPE replacing the exit classification: the child
+    /// fails authentication and exits without reading its input, so writing
+    /// a payload larger than a pipe buffer fails with EPIPE — the answer must
+    /// still be AuthFailed, not "failed to write ssh stdin".
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_stdin_epipe_keeps_the_exit_classification() {
+        let failure = fail_with_stderr_script("Permission denied (publickey).", 255);
+        let ssh = fake_ssh_script("exec_epipe_auth_failure", &failure, &failure);
+        let payload = vec![b'x'; 4 * 1024 * 1024];
+
+        let error = ssh_exec_with_binary(
+            &profile(),
+            "ignored-command",
+            Some(&payload),
+            Duration::from_secs(10),
+            &ssh,
+        )
+        .await
+        .expect_err("authentication fails");
+
+        assert_eq!(error, ExitReason::AuthFailed);
+    }
+
+    /// The daemon request path holds stdin open (stdio forwarding) and still
+    /// returns the daemon's answer once ssh exits; a forward that never ends
+    /// times out instead of hanging on the held pipe.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn the_daemon_request_returns_the_answer_and_times_out_a_mute_forward() {
+        let ssh_params = crate::ssh_connection::SshConnectionParams::new("example.com", "alice");
+        let answering = fake_ssh_script(
+            "daemon_request_answers",
+            "read request; printf 'HTTP/1.1 200 OK\\r\\n\\r\\n%s' \"$request\"; exit 0",
+            "exit /b 0",
+        );
+        let output = ssh_daemon_request_with_binary(
+            &ssh_params,
+            9877,
+            b"GET /health\n",
+            Duration::from_secs(10),
+            &answering,
+        )
+        .await
+        .expect("the forward answered");
+        assert!(output.stdout.ends_with("GET /health"), "{output:?}");
+
+        let mute = fake_ssh_script("daemon_request_mute", &sleep_script(), "exit /b 0");
+        let error = ssh_daemon_request_with_binary(
+            &ssh_params,
+            9877,
+            b"GET /health\n",
+            Duration::from_millis(500),
+            &mute,
+        )
+        .await
+        .expect_err("a forward that never ends times out");
+        assert_eq!(error, ExitReason::Timeout);
     }
 
     #[tokio::test]

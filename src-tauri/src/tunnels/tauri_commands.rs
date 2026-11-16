@@ -92,9 +92,12 @@ pub(crate) fn get_tunnel_status(
         .ok_or_else(|| "tunnel not found".to_string())
 }
 
+/// Same outcome as `GET /tunnels/ssh-hosts`: a missing `~/.ssh/config` is an
+/// empty list, one that cannot be read or parsed is an error (never a silent
+/// `[]` that reads as "you have no hosts"). The error names no path.
 #[tauri::command]
-pub(crate) fn list_ssh_config_hosts() -> Vec<String> {
-    super::commands::load_ssh_config_hosts().unwrap_or_default()
+pub(crate) fn list_ssh_config_hosts() -> Result<Vec<String>, String> {
+    super::commands::load_ssh_config_hosts()
 }
 
 #[tauri::command]
