@@ -4,11 +4,10 @@
 # Regenerate: pnpm vitest run src/__tests__/transport.test.ts -u
 acp-notice
 agent-edit-observed
-agent-wrap-prompt
-agent-wrap-prompt-resolved
 ai-chat-selection-changed
 automation-run-changed
 background-mode-changed
+boss-attention-changed
 chat-view-changed
 close-dialog
 close-html-tabs
@@ -41,6 +40,8 @@ panel-resync-request
 panel-window-closed
 plugin-changed
 progress-recorded
+provider-quota-binding-changed
+provider-quota-changed
 pty-capture-changed
 pty-clipboard-store
 pty-description-changed
@@ -48,6 +49,7 @@ pty-open-url
 pty-parsed
 reattach-terminal
 remote-connection-status
+remote-repo-changed
 repo-changed
 repositories-changed
 review-sessions-changed

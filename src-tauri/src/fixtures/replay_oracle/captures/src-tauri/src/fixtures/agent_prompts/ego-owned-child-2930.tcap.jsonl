@@ -115,6 +115,7 @@
 {"record":99,"state":{"shell":1,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":null,"choice_sig":null,"fullscreen":false}}
 {"record":100,"state":{"shell":1,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":null,"choice_sig":null,"fullscreen":false}}
 {"record":101,"event":{"type":"shell-state","state":"idle","agent_type":"ego"}}
+{"record":101,"event":{"type":"agent-block","action":"end","line":24,"on_alt_screen":false,"from_transcript_dump":false,"new_dump_generation":false,"_turn_epoch":0}}
 {"record":101,"event":{"type":"user-input","content":"","line":-1,"_turn_epoch":0}}
 {"record":101,"event":{"type":"turn-outcome","outcome":"completed","_turn_epoch":0}}
 {"record":101,"state":{"shell":2,"agent":"idle","awaiting":false,"question":null,"confident":false,"last_question":null,"choice_sig":null,"fullscreen":false}}
