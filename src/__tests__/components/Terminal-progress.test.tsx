@@ -110,11 +110,14 @@ async function openTerminalWithTab() {
 
 describe("OSC 9;4 progress in the tab bar", () => {
 	// Catches: state 3 mapped to value 0, so an indeterminate busy agent shows a zero-width bar.
-	it("renders an indeterminate report as a full-width bar", async () => {
+	// The indeterminate bar is the CSS-animated sweep (`data-kind="indeterminate"`, no inline
+	// transform — see TabViews.test.tsx), not a static full-width fill.
+	it("renders an indeterminate report as the animated indeterminate bar", async () => {
 		const { send, bar } = await openTerminalWithTab();
 		send(3, 0);
 		expect(bar()).not.toBeNull();
-		expect(bar()?.style.transform).toBe("scaleX(1)");
+		expect(bar()?.getAttribute("data-kind")).toBe("indeterminate");
+		expect(bar()?.style.transform).toBe("");
 	});
 
 	// Catches: an indeterminate marker that sticks after a valued report, or state 4 (paused) ignored.

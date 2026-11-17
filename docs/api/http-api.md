@@ -27,6 +27,12 @@ Native plans have a stored `revision`. `update_plan` takes `plan_id`, `expected_
 
 `POST /sessions/:id/queue` optionally accepts `expectedDraft`. It must match the tracked live composer and trim to `text`; the server clears that draft before using the existing ready-window queue. Preflight rejection writes nothing. A later error may have cleared the composer, so clients must report uncertainty and must not automatically retry this transfer.
 
+## Background command
+
+`POST /exec/background-command` `{ command, cwd?, env?, shell? }` is the HTTP twin of `run_background_command` (the smart-selection **Run Command** action). It requires loopback access or authentication, like `POST /exec/shell-script`, and runs `command` on the backend host in `shell` (the Settings → Shell choice; the default `$SHELL` when omitted or `null`), with that shell's login environment for zsh/bash/fish/ksh — a remote client therefore starts the process where the terminal lives. `command` is POSIX `sh` syntax executed by `/bin/sh -c`, in which matched text appears only as `${TUIC_…}` variable references; `env` supplies their values and accepts **only** `TUIC_M0`…`TUIC_M9`, `TUIC_D`, `TUIC_U` and `TUIC_H` (each ≤ 8 KiB, ≤ 32 KiB in total, no NUL), so a caller cannot set `PATH`, `LD_PRELOAD` or anything else. Its stdin, stdout and stderr are `/dev/null`, so nothing is captured and quitting the app does not affect a running command. It answers `200` with `{"status":"succeeded"}`, `{"status":"running"}` (still going after 5 s, left running) or `{"status":"failed","exit_code":N|null}` (127 = not found, 126 = not executable); a command that could not be started or a refused request (empty, containing NUL, over 16 KiB, a `cwd` that is not a directory, a disallowed `env` name) answers `500` with `{"error":"…"}`. Not supported on Windows.
+
+`POST /exec/shell-support` `{ shell? }` answers `{"shell":"zsh","supported":true}`: whether the shell a new terminal would run (`shell`, or the default `$SHELL` when omitted or `null`) is one Run Command's "In a new terminal" mode may type a line into — bash, zsh, ksh, dash or sh. Same access rule as above.
+
 ## Request authentication and browser boundary
 
 Every TCP request validates its Host and Origin before reaching a handler, including login, health and preflight requests. Unknown/missing/duplicate Host or foreign/opaque Origin returns 403. Allowed hosts are localhost, loopback/private IP literals, local interface IPs and the detected Tailscale FQDN. Allowed origins are the exact bundled WebView origins, Vite `http://127.0.0.1:1421`/`http://localhost:1421`, and the HTTP/HTTPS origin of the validated Host. Cross-site requests are rejected except for the explicit WebView/development origins.
@@ -772,7 +778,9 @@ the local IPC endpoint** (the `$TUIC_SOCKET` Unix socket, or the
 `\\.\pipe\tuicommander-mcp` named pipe on Windows), never on a TCP listener.
 `:tuic_session` is the hook's `$TUIC_SESSION`. The body must be only complete
 `ESC ] 7770 ; <verb>=<printable ASCII> ST|BEL` frames with the verbs `state`,
-`claude-hook`, `grok-hook`, `codex-session` or `codex-tool`. TUIC feeds them to
+`claude-hook`, `grok-hook`, `codex-session`, `codex-tool`, or one of the `tuic-hook` sidecar's own verbs
+(`toolfail`, `ccsession`, `cwd`, `transcript`, `cctitle`, `ccend`, `tool`, `notify`, `notifytype`,
+`bgtasks`, `bgtasksummary`). TUIC feeds them to
 the session's PTY reader as if it had read them from the tty, but they never
 reach the output ring, the WebSocket stream or the terminal grid. The answer
 comes after the frames are processed.
@@ -1838,10 +1846,6 @@ under `/repo/`.
 
 `GET /config/agents/{agent}/native-status-signals` returns `{ "enabled": boolean }`. `PUT` accepts the same boolean field for Claude or Codex and changes launch behavior for new sessions only. The existing `/hook-instrumentation` route remains the explicit global installer. Codex installation attempts exact native trust and preserves successful file installation if normal review remains necessary. Hook-state GET returns `{ "state": "reviewRequired" }` when canonical Codex files lack verified current native trust; `installed` requires CLI readback. Status reads never grant trust.
 
-`GET /config/agents/{agent}/wrap-user-function` returns `{ "value": boolean | null }` for claude/codex/goose — `null` means "ask when detected" (see AI Agents → "A user's own claude/codex/goose function"). `PUT` accepts the same tri-state `value` field and affects new zsh shells only; it never records consent to wrap a specific function by itself: `true` keeps an existing consented fingerprint only if the stored value was already `true`, otherwise the shell still asks before wrapping anything; `false`/`null` clear the fingerprint. A successful `PUT` (and the IPC `set_agent_wrap_user_function`) also lifts this app run's dismiss-snooze for that agent, so the next new shell can show the consent prompt again. Desktop-only like its siblings.
-
-`POST /agent-wrap-prompt/response` (body `{ "request_id": string, "agent_type": string, "decision": boolean | null }`) answers a pending prompt raised over SSE as `agent-wrap-prompt` (payload `{ request_id, agent_type }`). An explicit `true`/`false` is persisted together with the fingerprint of the exact function the shell reported; `decision: null` dismisses without persisting anything (asked again next app run). The resolution broadcasts as `agent-wrap-prompt-resolved` (`{ request_id, agent_type, decision }`) so every client dismisses the dialog; an unknown or already-answered `request_id` is a no-op (200), as is an answer to a prompt older than 10 minutes (it persists nothing); an `agent_type` other than `claude`/`codex`/`goose` is `400`, and only a failed save of a valid answer is `500`. Served by `shared_routes()` (a `tuic-remote` daemon raises and answers its own prompts) and, like `/mcp/confirm-response`, not behind `require_local_or_auth` — the server-generated UUID is the credential (see AGENTS.md → Accepted Security Decisions). Deliberately not built on `/mcp/confirm-response`'s shape, which cannot distinguish a dismiss from an explicit "No".
-
 ### No provider keyring routes
 
 `/config/provider-key*`, `/config/slot-test` and `/config/ollama-models` were
@@ -2496,7 +2500,7 @@ end-exclusive UTF-16 code-unit offsets within `line_text`. They can be passed
 directly to JavaScript `String.slice`, including when text before the match
 contains multibyte characters or non-BMP emoji.
 
-Sandboxed filesystem operations for the file manager panel. `/fs/read-external` (and `/fs/read-editor-external`) reads an absolute path. For **network (non-loopback) clients** it is gated to registered repository roots **plus** the user-configurable `additional_readable_dirs` list (`AppConfig`, default `["~/.claude/plans"]`) — not sandboxed to a single repo, but not arbitrary either; a loopback caller (the desktop user's own browser) is not gated. See `docs/backend/config.md` for the setting and `docs/backend/mcp-http.md`'s Security Model section for the gate's mechanics.
+Sandboxed filesystem operations for the file manager panel. `/fs/read-external` reads an arbitrary absolute path (not sandboxed to a repo); `/fs/read-editor-external` is its code-editor twin. For every authenticated caller the boundary is HTTP authentication plus the Host/Origin check.
 
 Markdown review coordinates use the text before the first unsent local save, not Git history. `baseline` may be null; the range response is null when it is absent, no lines differ, or disk no longer equals `expected`. Deletion-only hunks name a surviving adjacent line (line 1 for an empty file). IPC and HTTP share the blocking-pool implementation; read/diff errors let the UI retain the whole-file prompt. Coordinates describe the captured saved document at send time; subsequent edits can move them while an agent request waits in the idle queue.
 

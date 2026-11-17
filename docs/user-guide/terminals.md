@@ -429,7 +429,8 @@ Double-clicking a word tries to select something *useful*, not just characters b
 - **Double-click** — tries the smart-selection rules first, falling back to plain word selection if nothing matches
 - **Quadruple-click** (4 rapid clicks) — always tries smart selection, even if you've turned double-click's smart behavior off
 - **Option/Alt+double-click** — runs the matched item's default action directly (e.g. opening a URL) instead of just selecting it
-- **Right-click** a matched item for more actions (Copy, Open, Run Command, Ask AI, and others depending on what matched)
+- **Right-click** a matched item for more actions (Copy, Open, Send Text, Run Command, Ask AI, and others depending on what matched). Every rule that matches is listed as its own group, headed by the rule's name; if the text is also a link (a URL or an existing file), its Open / Copy link appear as a separate **Link** group. Built-in rules that only offer Copy are left out whenever something more specific applies
+- **Click** a link — if one of *your own* rules matches it and has a default action, that runs instead of the normal open; otherwise the link opens as usual
 
 Customize the rule list, or the plain word-boundary characters double-click falls back to, in Settings > Smart Selection. See [Settings — Smart Selection](settings.md#smart-selection) for every control.
 

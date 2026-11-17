@@ -27,7 +27,6 @@ pub mod agent_report;
 pub(crate) mod agent_session;
 pub(crate) mod agent_stage;
 pub(crate) mod agent_tool_readout;
-pub(crate) mod agent_wrap_prompt;
 pub(crate) mod ai_agent;
 pub(crate) mod api_retry;
 pub(crate) mod attachments;
@@ -169,10 +168,10 @@ mod native_keys;
 mod native_notification;
 #[cfg(feature = "desktop")]
 pub(crate) mod notification_sound;
-#[cfg(feature = "desktop")]
-pub(crate) mod release_install;
 pub(crate) mod osc_interleave;
 pub(crate) mod osc_title;
+#[cfg(feature = "desktop")]
+pub(crate) mod release_install;
 pub(crate) mod secrets;
 pub(crate) use tuic_terminal::output_parser;
 pub(crate) use tuic_terminal::output_watchers;
@@ -212,6 +211,9 @@ pub(crate) mod registry;
 pub(crate) mod relay_client;
 pub(crate) mod relay_tunnel;
 pub use relay_tunnel::service::{RelayPairOptions, relay_pair};
+// Not desktop-gated: the HTTP routes (`/exec/background-command`, `/exec/shell-support`) call it,
+// and a headless build serves them. Only its `tauri::command` attributes are desktop-only.
+pub(crate) mod background_command;
 #[allow(dead_code)] // Constructors used by remote binary and future tests
 pub(crate) mod remote_connection;
 pub(crate) mod remote_deploy;
@@ -224,7 +226,6 @@ pub(crate) mod repo_template;
 pub(crate) mod repo_watcher;
 pub(crate) mod script_env;
 pub(crate) mod scrollback_store;
-#[cfg(feature = "desktop")]
 pub(crate) mod selfsigned;
 pub(crate) mod session_review;
 pub(crate) mod session_review_watcher;
@@ -1012,31 +1013,6 @@ fn screenshot_response(state: State<'_, Arc<AppState>>, request_id: String, data
 #[tauri::command]
 fn mcp_confirm_response(state: State<'_, Arc<AppState>>, request_id: String, confirmed: bool) {
     crate::mcp_http::resolve_mcp_confirm(&state, &request_id, confirmed);
-}
-
-/// Answer a pending "wrap my shell function?" prompt. `decision` is
-/// `Some(true)`/`Some(false)` for an explicit answer, or `None` for a
-/// dismiss (Escape/overlay-click/close) — see `agent_wrap_prompt::resolve`'s
-/// doc comment for why this is a separate mechanism from `mcp_confirm_response`
-/// rather than reusing its bool-only shape.
-///
-/// Deliberately not gated behind `require_local_or_auth` on the HTTP side
-/// (`mcp_http::mod::agent_wrap_prompt_response_http`) — same accepted
-/// precedent as `mcp_confirm_response`/`resolve_mcp_confirm`: the
-/// server-generated `request_id` UUID is the effective credential, and
-/// `resolve` only acts when it exactly matches the one pending entry for
-/// that `agent_type`. Reviewed and confirmed 2026-09-25 (code review +
-/// security review) — not a gap, don't re-flag without a concrete new
-/// exploitation path (see `AGENTS.md`'s "Accepted Security Decisions").
-#[cfg(feature = "desktop")]
-#[tauri::command]
-fn agent_wrap_prompt_response(
-    state: State<'_, Arc<AppState>>,
-    request_id: String,
-    agent_type: String,
-    decision: Option<bool>,
-) -> Result<(), String> {
-    crate::agent_wrap_prompt::resolve(&state, &request_id, &agent_type, decision)
 }
 
 /// One IPv4 address found on a network interface.
@@ -3407,8 +3383,6 @@ pub fn run(mut context: tauri::Context<tauri::Wry>) {
             agent_hook_commands::get_agent_hook_state,
             agent_hook_commands::get_agent_native_status_signals,
             agent_hook_commands::set_agent_native_status_signals,
-            agent_hook_commands::get_agent_wrap_user_function,
-            agent_hook_commands::set_agent_wrap_user_function,
             agent_mcp::get_agent_mcp_status,
             agent_mcp::install_agent_mcp,
             agent_mcp::remove_agent_mcp,
@@ -3423,6 +3397,8 @@ pub fn run(mut context: tauri::Context<tauri::Wry>) {
             prompt::resolve_prompt_variables,
             smart_prompt::execute_headless_prompt,
             smart_prompt::execute_shell_script,
+            background_command::run_background_command,
+            background_command::run_command_shell_support,
             repo_watcher::start_repo_watcher,
             repo_watcher::stop_repo_watcher,
             repo_watcher::set_hot_repos,
@@ -3510,7 +3486,6 @@ pub fn run(mut context: tauri::Context<tauri::Wry>) {
             mcp_confirm_response,
             mcp_http::suspended_routes::suspended_session_action,
             mcp_http::suspended_routes::resume_session,
-            agent_wrap_prompt_response,
             app_logger::push_log,
             app_logger::get_logs,
             app_logger::clear_logs,

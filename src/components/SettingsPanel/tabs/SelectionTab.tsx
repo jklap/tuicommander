@@ -21,8 +21,11 @@ import type {
 	SmartSelectionActionKind,
 	SmartSelectionPrecision,
 	SmartSelectionRule,
+	SmartSelectionRunIn,
+	SmartSelectionSendReturn,
 	WordSelectionMode,
 } from "../../Terminal/smartSelectionTypes";
+import { canonicalAction } from "../../Terminal/smartSelectionTypes";
 import { Button } from "../../ui/Button";
 import { Input } from "../../ui/Input";
 import { Select } from "../../ui/Select";
@@ -46,9 +49,37 @@ const ACTION_KIND_OPTIONS: { value: SmartSelectionActionKind; label: string }[] 
 	{ value: "open_url", label: "Open URL" },
 	{ value: "open_file", label: "Open File" },
 	{ value: "send_text", label: "Send Text" },
-	{ value: "run_command", label: "Run Command" },
-	{ value: "run_command_new_terminal", label: "Run Command in New Terminal" },
+	// `run_background` is "Run Command": in the background or, per its "Run" option, in a new
+	// terminal. The id predates the second mode. There is no separate "Send Command": it was folded
+	// into Send Text's "Press Enter: When safe", and a rule saved with the older `run_command` kind
+	// is shown as exactly that (see `canonicalAction`).
+	{ value: "run_background", label: "Run Command" },
 	{ value: "ask_ai", label: "Ask AI" },
+];
+
+/** The older, separate form of "Run Command in a new terminal". An existing rule can still carry
+ *  it, so it is listed while an action has it (otherwise the select would show a blank), but it is
+ *  never offered for a new one: "Run Command" with "Run: In a new terminal" replaces it, and quotes
+ *  the matched text, which this older kind does not. */
+const LEGACY_NEW_TERMINAL_OPTION = {
+	value: "run_command_new_terminal" as SmartSelectionActionKind,
+	label: "Run Command in New Terminal (older form)",
+};
+
+function kindOptionsFor(kind: SmartSelectionActionKind) {
+	return kind === "run_command_new_terminal"
+		? [...ACTION_KIND_OPTIONS, LEGACY_NEW_TERMINAL_OPTION]
+		: ACTION_KIND_OPTIONS;
+}
+
+const SEND_RETURN_OPTIONS: { value: SmartSelectionSendReturn; label: string }[] = [
+	{ value: "never", label: "Never" },
+	{ value: "when_safe", label: "When safe" },
+];
+
+const RUN_IN_OPTIONS: { value: SmartSelectionRunIn; label: string }[] = [
+	{ value: "background", label: "In the background" },
+	{ value: "new_terminal", label: "In a new terminal" },
 ];
 
 function newRule(): SmartSelectionRule {
@@ -186,7 +217,9 @@ const RuleRow: Component<{
 												props.onUpdateAction(index, { kind: e.currentTarget.value as SmartSelectionActionKind })
 											}
 										>
-											<For each={ACTION_KIND_OPTIONS}>{(opt) => <option value={opt.value}>{opt.label}</option>}</For>
+											<For each={kindOptionsFor(action().kind)}>
+												{(opt) => <option value={opt.value}>{opt.label}</option>}
+											</For>
 										</Select>
 										<Input
 											data-setting-id="app.smart_selection_rules"
@@ -218,10 +251,77 @@ const RuleRow: Component<{
 										>
 											Remove
 										</Button>
+										{/* Spans, not labels: the settings search index only reads labels and headings. */}
+										<Show when={action().kind === "send_text"}>
+											<div class={s.actionOptions}>
+												<span>Press Enter</span>
+												<Select
+													data-setting-id="app.smart_selection_rules"
+													data-testid="smart-action-send-return"
+													aria-label="Press Enter"
+													value={action().sendReturn ?? "never"}
+													onChange={(e) =>
+														props.onUpdateAction(index, {
+															sendReturn: e.currentTarget.value === "when_safe" ? "when_safe" : undefined,
+														})
+													}
+												>
+													<For each={SEND_RETURN_OPTIONS}>
+														{(opt) => <option value={opt.value}>{opt.label}</option>}
+													</For>
+												</Select>
+												<span class={s.hintInline}>
+													“When safe”: always with an agent running; in a plain shell only if the text is plain
+													(letters, digits, spaces and _ . / : @ % + = , ~ -).
+												</span>
+											</div>
+										</Show>
+										<Show when={action().kind === "run_background"}>
+											<div class={s.actionOptions}>
+												<span>Run</span>
+												<Select
+													data-setting-id="app.smart_selection_rules"
+													data-testid="smart-action-run-in"
+													aria-label="Run"
+													value={action().runIn ?? "background"}
+													onChange={(e) =>
+														props.onUpdateAction(index, {
+															runIn: e.currentTarget.value === "new_terminal" ? "new_terminal" : undefined,
+														})
+													}
+												>
+													<For each={RUN_IN_OPTIONS}>{(opt) => <option value={opt.value}>{opt.label}</option>}</For>
+												</Select>
+											</div>
+										</Show>
 									</>
 								)}
 							</Index>
 						</div>
+					</Show>
+
+					{/* A <p>, not a <label>: the settings search index only reads labels and headings. */}
+					<Show when={props.rule.actions.some((a) => a.kind === "run_background")}>
+						<p class={s.hint} data-testid="smart-run-command-hint">
+							Run Command runs from the terminal's folder, as a <code>/bin/sh</code> command. In the background its
+							output is discarded — choose “In a new terminal” to watch it (that needs bash, zsh, ksh, dash or sh as
+							your shell, and a command line under 1000 bytes). With zsh, bash, fish or ksh as your shell it gets your
+							login environment, including your <code>PATH</code>; with another shell it gets the app's. It runs on this
+							computer, also for an SSH session. Matched text is handed to the command as data, however you quote{" "}
+							<code>\0</code>: it can never become part of the command itself. Don't put it inside <code>$(( ))</code>,{" "}
+							<code>[[ -eq ]]</code>, <code>eval</code> or <code>sh -c</code>, which read it as code. A match that
+							starts with “-” may be read by the tool as an option; put <code>--</code> before <code>\0</code> if that
+							matters. Send Text types into the terminal instead.
+						</p>
+					</Show>
+
+					{/* A <p>, not a <label>: the settings search index only reads labels and headings. */}
+					<Show when={props.rule.actions.some((a) => a.kind === "run_command_new_terminal")}>
+						<p class={s.hint} data-testid="smart-legacy-new-terminal-hint">
+							The older “Run Command in New Terminal” puts matched text straight into the command line and runs it as
+							soon as the terminal opens. Switch the action to Run Command with “In a new terminal”, which hands the
+							text to the command as data.
+						</p>
 					</Show>
 
 					<div style={{ display: "flex", gap: "8px" }}>
@@ -272,15 +372,25 @@ export const SelectionTab: Component = () => {
 	// export/import — share one resolve+map instead of redoing it per call;
 	// Solid recomputes only when `smartSelectionRules` itself changes.
 	const rules = createMemo((): SmartSelectionRule[] =>
-		resolveSmartSelectionRules(settingsStore.state.smartSelectionRules).map((r) =>
-			r.actions ? r : { ...r, actions: [] },
-		),
+		resolveSmartSelectionRules(settingsStore.state.smartSelectionRules).map((r) => {
+			if (!r.actions) return { ...r, actions: [] };
+			// A rule saved with the older `run_command` is shown — and, on the first edit, saved — as
+			// Send Text + "Press Enter: When safe" (same behaviour). Only such a rule gets a new
+			// object, so every other row keeps its reference and does not remount.
+			return r.actions.some((a) => a.kind === "run_command") ? { ...r, actions: r.actions.map(canonicalAction) } : r;
+		}),
 	);
 
 	const updateRule = (id: string, patch: Partial<SmartSelectionRule>) =>
 		settingsStore.setSmartSelectionRules(rules().map((r) => (r.id === id ? { ...r, ...patch } : r)));
 	const removeRule = (id: string) => settingsStore.setSmartSelectionRules(rules().filter((r) => r.id !== id));
-	const addRule = () => settingsStore.setSmartSelectionRules([...rules(), newRule()]);
+	// A rule you just added is one you are about to fill in, so open it rather than leaving it
+	// as a collapsed row to find and click.
+	const addRule = () => {
+		const rule = newRule();
+		settingsStore.setSmartSelectionRules([...rules(), rule]);
+		setExpandedIds((prev) => new Set(prev).add(rule.id));
+	};
 	const restoreDefaultRules = () => settingsStore.setSmartSelectionRules([]);
 
 	const updateAction = (ruleId: string, index: number, patch: Partial<SmartSelectionAction>) => {
@@ -291,7 +401,11 @@ export const SelectionTab: Component = () => {
 				// Only one action may be marked default — setting this one clears any other.
 				return patch.isDefault ? { ...a, isDefault: false } : a;
 			}
-			return { ...a, ...patch };
+			// Changing the kind drops the options of the old one: they mean nothing for the new
+			// kind, and a hidden leftover would still count as an edit and travel in exports.
+			const clearOptions =
+				patch.kind !== undefined && patch.kind !== a.kind ? { sendReturn: undefined, runIn: undefined } : {};
+			return { ...a, ...clearOptions, ...patch };
 		});
 		updateRule(ruleId, { actions });
 	};

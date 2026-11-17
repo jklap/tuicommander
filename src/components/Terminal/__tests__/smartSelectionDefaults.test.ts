@@ -1,8 +1,20 @@
 import { describe, expect, it } from "vitest";
-import { compileRules, findSmartMatch } from "../smartSelection";
+import { compileRules, findSmartMatches } from "../smartSelection";
 import { DEFAULT_SMART_SELECTION_RULES, resolveSmartSelectionRules } from "../smartSelectionDefaults";
+import { ruleContentHash } from "../smartSelectionReconcile";
 
 describe("DEFAULT_SMART_SELECTION_RULES", () => {
+	it("stamps every shipped rule with the hash of its own content, so a materialised copy keeps its baseline", () => {
+		for (const rule of DEFAULT_SMART_SELECTION_RULES) {
+			expect(rule.builtInHash, rule.id).toBe(ruleContentHash(rule));
+		}
+	});
+
+	it("the stamp does not feed back into the hash (it would never be stable otherwise)", () => {
+		const [first] = DEFAULT_SMART_SELECTION_RULES;
+		expect(ruleContentHash({ ...first, builtInHash: "anything" })).toBe(ruleContentHash(first));
+	});
+
 	it("has no duplicate ids", () => {
 		const ids = DEFAULT_SMART_SELECTION_RULES.map((r) => r.id);
 		expect(new Set(ids).size).toBe(ids.length);
@@ -57,7 +69,7 @@ describe("DEFAULT_SMART_SELECTION_RULES", () => {
 			// Match against just this rule (forced enabled) so a lower-precision
 			// rule elsewhere in the default set can't steal a longer overlapping
 			// match — this test is about the rule's own regex, not arbitration.
-			const match = findSmartMatch(line, offset, [{ ...rule, enabled: true }]);
+			const [match] = findSmartMatches(line, offset, [{ ...rule, enabled: true }]);
 			expect(match?.text).toBe(expected);
 		});
 	}

@@ -1440,14 +1440,6 @@ pub(crate) struct AppConfig {
     #[serde(default)]
     #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates custom launchers for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}, "x-collection-key" = "id"))]
     pub(crate) custom_launchers: Vec<CustomLauncher>,
-    /// Extra absolute directories the HTTP READ path may serve, on top of registered
-    /// repository roots. Global (not per-repo) — a plans/notes dir isn't owned by one repo.
-    /// Stored as typed (`~/.claude/plans`); expanded at comparison time in
-    /// `mcp_http::fs_routes`, never baked into an absolute string here.
-    /// READ ONLY — write/copy/move/transfer routes stay confined to registered repo roots.
-    #[serde(default = "default_additional_readable_dirs")]
-    #[schemars(extend("x-setting" = {"sensitivity":"private","apply":"live","effect":"Replaces the extra directories web and remote clients may read.","operations":["get","set"],"confirmationClass":"network_exposure"}))]
-    pub(crate) additional_readable_dirs: Vec<String>,
     /// Show GitLens-style inline git blame on the active line in the code editor.
     #[serde(default = "default_true")]
     #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates inline blame enabled for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
@@ -1542,7 +1534,7 @@ pub(crate) fn valid_custom_env_key(key: &str) -> bool {
 /// case-insensitively (Windows env names are case-insensitive):
 ///
 /// - `TUIC_*` — TUIC's own identity/integration env (`TUIC_SESSION`,
-///   `TUIC_CONFIG_DIR`, `TUIC_WRAP_USER_FN_*`, ...): overriding it rebinds a
+///   `TUIC_CONFIG_DIR`, ...): overriding it rebinds a
 ///   tab's identity or forges integration state.
 /// - `ZDOTDIR` — the zsh shell integration is injected through it; an
 ///   override silently kills OSC 133 (every tmux `materialize` then waits out
@@ -1616,12 +1608,6 @@ pub(crate) fn resolve_custom_pty_env() -> Vec<CustomEnvVarEntry> {
     load_app_config().custom_pty_env
 }
 
-/// Ships `~/.claude/plans` so clicking a plan-file link an agent printed
-/// (`output_parser.rs`'s `PLAN_RE`) works in browser/remote mode with no user action.
-fn default_additional_readable_dirs() -> Vec<String> {
-    vec!["~/.claude/plans".to_string()]
-}
-
 /// A user-defined launcher for the "Open in" menu. The executable is spawned
 /// with `args`, each of which may contain `{path}`/`{file}`/`{line}`/`{column}`
 /// placeholders (expanded in `agent::open_in_custom`). No icon field — custom
@@ -1664,6 +1650,12 @@ pub(crate) struct SmartSelectionRule {
     pub(crate) enabled: bool,
     #[serde(default)]
     pub(crate) actions: Vec<SmartSelectionAction>,
+    /// Only on a rule that started life as a shipped built-in: hash of the shipped
+    /// definition this saved copy was last reconciled against. The frontend compares it
+    /// with a hash of the rule's current content to tell an edited built-in from an
+    /// untouched one when a release changes the shipped rule. Opaque to Rust.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) built_in_hash: Option<String>,
 }
 
 /// One action a smart-selection rule offers. `parameter` may reference the
@@ -1672,8 +1664,11 @@ pub(crate) struct SmartSelectionRule {
 /// frontend before dispatch.
 #[derive(Serialize, Deserialize, Clone, Debug, schemars::JsonSchema)]
 pub(crate) struct SmartSelectionAction {
-    /// "copy" | "open_url" | "open_file" | "send_text" | "run_command" |
-    /// "run_command_new_terminal" | "ask_ai"
+    /// "copy" | "open_url" | "open_file" | "send_text" | "run_background" | "ask_ai", plus two
+    /// older spellings kept so saved rules keep working: `run_command` (now just `send_text` with
+    /// `send_return: "when_safe"`) and `run_command_new_terminal` (now `run_background` with
+    /// `run_in: "new_terminal"`, which also quotes the matched text). `run_background` is labelled
+    /// "Run Command" and, per `run_in`, runs in the background or in a new terminal.
     pub(crate) kind: String,
     pub(crate) title: String,
     #[serde(default)]
@@ -1681,6 +1676,15 @@ pub(crate) struct SmartSelectionAction {
     /// At most one action per rule may set this — it's what Option/Alt+double-click runs.
     #[serde(default)]
     pub(crate) is_default: bool,
+    /// `send_text` only: whether to press Enter after typing. `"never"` (the default, omitted
+    /// when unset) or `"when_safe"` (always with an agent in the foreground, in a plain shell only
+    /// if the text is made of letters, digits, spaces and `_ . / : @ % + = , ~ -`). Opaque to Rust.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) send_return: Option<String>,
+    /// `run_background` ("Run Command") only: where to run it. `"background"` (the default,
+    /// omitted when unset) or `"new_terminal"`. Opaque to Rust.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) run_in: Option<String>,
 }
 
 /// One user override of a registry entry's default color/icon/animation.
@@ -1937,7 +1941,6 @@ impl Default for AppConfig {
             index_memory_budget_mb: default_index_memory_budget_mb(),
             standby_timeout_minutes: default_standby_timeout(),
             custom_launchers: Vec::new(),
-            additional_readable_dirs: default_additional_readable_dirs(),
             inline_blame_enabled: true,
             custom_pty_env: Vec::new(),
             shell_prompt_marker_timeout_ms: default_shell_prompt_marker_timeout_ms(),
@@ -2893,24 +2896,6 @@ pub(crate) struct AgentSettings {
     #[serde(default)]
     #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"next_session","effect":"Disables all launch instructions for new sessions.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) launch_instructions_disabled: bool,
-    /// zsh only. What to do when the user's shell already defines its own
-    /// `claude`/`codex`/`goose` function, which otherwise silently skips
-    /// TUIC's launch-flag injection for that agent (see `shell_integration.rs`'s
-    /// module doc comment). `None` = ask when detected; `Some(true)` = wrap
-    /// the user's function and add TUIC's launch flag — ONLY for the function
-    /// whose fingerprint is `wrap_user_function_hash`; `Some(false)` = leave
-    /// the user's function alone (for that fingerprint, or for any function
-    /// when no fingerprint is recorded).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"next_session","effect":"Decides whether new zsh sessions wrap the user's own same-named agent function with TUIC's launch flags.","operations":["get","set"],"confirmationClass":"execution_authority"}))]
-    pub(crate) wrap_user_function: Option<bool>,
-    /// Fingerprint (`cksum` CRC-length of the function body, computed by the
-    /// zsh integration) of the user function `wrap_user_function` was decided
-    /// for. Recorded only from the consent prompt; a different or missing
-    /// fingerprint means a `Some(true)` is NOT applied (the user is asked).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"next_session","effect":"Fingerprint of the user function the wrap decision applies to; new zsh sessions wrap only a matching function.","operations":["get","set"],"confirmationClass":"execution_authority"}))]
-    pub(crate) wrap_user_function_hash: Option<String>,
 }
 
 impl Default for AgentSettings {
@@ -2936,8 +2921,6 @@ impl Default for AgentSettings {
             launch_instructions: None,
             launch_modules: HashMap::new(),
             launch_instructions_disabled: false,
-            wrap_user_function: None,
-            wrap_user_function_hash: None,
         }
     }
 }
@@ -7216,7 +7199,10 @@ mod tests {
                     title: "Show commit".to_string(),
                     parameter: "git show \\0".to_string(),
                     is_default: true,
+                    send_return: Some("when_safe".to_string()),
+                    run_in: Some("new_terminal".to_string()),
                 }],
+                built_in_hash: Some("abc123".to_string()),
             }],
             // All three default to true, so `false` is the only value that can
             // tell a real round trip from serde handing back the default.
@@ -7231,7 +7217,6 @@ mod tests {
             eager_resume_after_update: false,
             standby_timeout_minutes: 5,
             custom_launchers: Vec::new(),
-            additional_readable_dirs: vec!["/tmp/plans".to_string()],
             inline_blame_enabled: true,
             custom_pty_env: vec![CustomEnvVarEntry {
                 key: "FOO".to_string(),
@@ -7343,12 +7328,22 @@ mod tests {
         assert_eq!(loaded.smart_selection_rules[0].actions.len(), 1);
         assert!(loaded.smart_selection_rules[0].actions[0].is_default);
         assert_eq!(
-            loaded.smart_selection_rules[0].actions[0].kind,
-            "run_command"
+            loaded.smart_selection_rules[0].actions[0]
+                .send_return
+                .as_deref(),
+            Some("when_safe")
         );
         assert_eq!(
-            loaded.additional_readable_dirs,
-            vec!["/tmp/plans".to_string()]
+            loaded.smart_selection_rules[0].actions[0].run_in.as_deref(),
+            Some("new_terminal")
+        );
+        assert_eq!(
+            loaded.smart_selection_rules[0].built_in_hash.as_deref(),
+            Some("abc123")
+        );
+        assert_eq!(
+            loaded.smart_selection_rules[0].actions[0].kind,
+            "run_command"
         );
         assert_eq!(loaded.shell_prompt_marker_timeout_ms, 7_000);
         assert_eq!(
@@ -7602,11 +7597,6 @@ mod tests {
         assert_eq!(loaded.word_separators, " \"'`(){}[]<>|;:,.!?@#$%^&*~=+/\\");
         assert_eq!(loaded.word_selection_regex, "");
         assert!(loaded.smart_selection_rules.is_empty());
-        assert_eq!(
-            loaded.additional_readable_dirs,
-            vec!["~/.claude/plans".to_string()],
-            "a config.json predating this field must still ship the default readable dir"
-        );
         assert!(
             loaded.custom_pty_env.is_empty(),
             "a config.json predating this field must land on an empty Vec, not error"
@@ -7641,14 +7631,6 @@ mod tests {
              for any unrecognized value), not at the config-load boundary"
         );
         assert_eq!(loaded.unwrap().session_diff_auto_open, "sometimes");
-    }
-
-    #[test]
-    fn default_additional_readable_dirs_ships_the_claude_plans_dir() {
-        assert_eq!(
-            AppConfig::default().additional_readable_dirs,
-            vec!["~/.claude/plans".to_string()]
-        );
     }
 
     #[test]
@@ -7708,7 +7690,7 @@ mod tests {
         for key in [
             "TUIC_SESSION",
             "tuic_config_dir",
-            "TUIC_WRAP_USER_FN_CLAUDE",
+            "TUIC_CODEX_NOTIFY",
             "ZDOTDIR",
             "zdotdir",
             "LD_PRELOAD",
@@ -8007,27 +7989,6 @@ mod tests {
         assert!(
             merged.disabled_plugin_ids.is_empty(),
             "list must be cleared"
-        );
-    }
-
-    #[test]
-    fn merge_partial_clears_additional_readable_dirs() {
-        // The non-empty serde default must not resurrect an explicit clear: a
-        // caller sending `[]` means "no additional dirs," not "use the default."
-        let current = AppConfig {
-            additional_readable_dirs: vec!["/tmp/plans".to_string()],
-            ..AppConfig::default()
-        };
-
-        let merged = merge_partial_app_config(
-            &current,
-            serde_json::json!({ "additional_readable_dirs": [] }),
-        )
-        .expect("explicit clear must merge");
-
-        assert!(
-            merged.additional_readable_dirs.is_empty(),
-            "an explicit empty list must survive the merge, not fall back to the default"
         );
     }
 
@@ -9353,8 +9314,6 @@ mod tests {
                 ego_mode: None,
                 ego_sandbox: None,
                 progress_tracking: Some(false),
-                wrap_user_function: Some(true),
-                wrap_user_function_hash: Some("123-45".into()),
             },
         );
         let loaded: AgentsConfig = round_trip_in_dir(dir.path(), "agents.json", &agents);
@@ -9383,21 +9342,6 @@ mod tests {
         // not just that an absent field defaults back to `None`.
         assert_eq!(claude.hook_instrumentation, Some(true));
         assert_eq!(claude.native_status_signals, Some(false));
-        assert_eq!(claude.wrap_user_function, Some(true));
-        assert_eq!(claude.wrap_user_function_hash.as_deref(), Some("123-45"));
-    }
-
-    #[test]
-    fn agents_config_wrap_user_function_defaults_to_none_for_old_json() {
-        // Forward-compat, same shape as the sibling test for
-        // prefer_tuic_messaging/prefer_tuic_spawning: an agents.json written
-        // before this field existed must still deserialize, with the field
-        // defaulting to None (i.e. "ask when detected").
-        let old_json = r#"{"agents":{"claude":{"run_configs":[],"intent_tab_title":true}}}"#;
-        let loaded: AgentsConfig = serde_json::from_str(old_json).unwrap();
-        let claude = loaded.agents.get("claude").unwrap();
-        assert_eq!(claude.wrap_user_function, None);
-        assert_eq!(claude.wrap_user_function_hash, None);
     }
 
     #[test]

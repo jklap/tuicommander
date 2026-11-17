@@ -898,7 +898,6 @@ const API_PREFIXES: &[&str] = &[
     "accounts",
     "acp",
     "agent",
-    "agent-wrap-prompt",
     "agents",
     "ai",
     "api",
@@ -1740,14 +1739,6 @@ fn shared_routes() -> Router<Arc<AppState>> {
         // Answer a pending MCP confirmation (the browser/PWA half of the desktop
         // `mcp_confirm_response` command).
         .route("/mcp/confirm-response", post(mcp_confirm_response_http))
-        // Answer a pending "wrap my shell function?" prompt (the browser/PWA
-        // half of the desktop `agent_wrap_prompt_response` command). Shared, like
-        // the two above: a zsh session on a `tuic-remote` daemon raises the
-        // prompt on that daemon, and its answer must be accepted there.
-        .route(
-            "/agent-wrap-prompt/response",
-            post(agent_wrap_prompt_response_http),
-        )
         // ACP (ego). Shared, not desktop-only: driving ego from a phone is the
         // whole point of the client, and the binary it may launch comes from
         // this host's configuration rather than from any request.
@@ -1773,38 +1764,6 @@ async fn mcp_confirm_response_http(
 ) -> Json<serde_json::Value> {
     resolve_mcp_confirm(&state, &body.request_id, body.confirmed);
     Json(serde_json::json!({ "ok": true }))
-}
-
-/// Body of `POST /agent-wrap-prompt/response`.
-#[derive(serde::Deserialize)]
-struct AgentWrapPromptResponseBody {
-    request_id: String,
-    agent_type: String,
-    decision: Option<bool>,
-}
-
-async fn agent_wrap_prompt_response_http(
-    State(state): State<Arc<AppState>>,
-    Json(body): Json<AgentWrapPromptResponseBody>,
-) -> impl IntoResponse {
-    match crate::agent_wrap_prompt::resolve(
-        &state,
-        &body.request_id,
-        &body.agent_type,
-        body.decision,
-    ) {
-        Ok(()) => (StatusCode::OK, Json(serde_json::json!({ "ok": true }))),
-        // An agent outside the allow-list is the caller's mistake; only a
-        // failed save of a valid answer is a server error.
-        Err(e) if !crate::agent_wrap_prompt::is_wrappable_agent(&body.agent_type) => (
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({ "error": e })),
-        ),
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": e })),
-        ),
-    }
 }
 
 /// `GET /streamdock/devices` — the connected macropads' USB serial numbers
@@ -2216,6 +2175,14 @@ pub fn build_router(state: Arc<AppState>, remote_auth: bool, mcp_enabled: bool) 
             post(config_routes::execute_shell_script_http),
         )
         .route(
+            "/exec/background-command",
+            post(config_routes::run_background_command_http),
+        )
+        .route(
+            "/exec/shell-support",
+            post(config_routes::run_command_shell_support_http),
+        )
+        .route(
             "/audio/output-devices",
             get(config_routes::list_audio_output_devices_http),
         )
@@ -2268,11 +2235,6 @@ pub fn build_router(state: Arc<AppState>, remote_auth: bool, mcp_enabled: bool) 
             "/config/agents/{agent}/native-status-signals",
             get(config_routes::get_agent_native_status_signals)
                 .put(config_routes::put_agent_native_status_signals),
-        )
-        .route(
-            "/config/agents/{agent}/wrap-user-function",
-            get(config_routes::get_agent_wrap_user_function)
-                .put(config_routes::put_agent_wrap_user_function),
         )
         .route(
             "/config/remote-connections",
@@ -3719,23 +3681,6 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::FORBIDDEN);
-    }
-
-    /// Batch 36 review: an agent outside the allow-list is a bad request,
-    /// not a server error.
-    #[tokio::test]
-    async fn agent_wrap_prompt_response_rejects_an_unknown_agent_with_400() {
-        let response = agent_wrap_prompt_response_http(
-            State(test_state()),
-            Json(AgentWrapPromptResponseBody {
-                request_id: "00000000-0000-4000-8000-000000000000".into(),
-                agent_type: "not-an-agent".into(),
-                decision: Some(true),
-            }),
-        )
-        .await
-        .into_response();
-        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     }
 
     /// Catches CertDomains being mistaken for a successfully loaded TLS listener.

@@ -676,47 +676,6 @@ pub(super) async fn put_agent_native_status_signals(
     }
 }
 
-/// `value` is tri-state — `null` (not yet decided, TUIC will ask) /
-/// `true` (wrap) / `false` (leave alone) — see
-/// `AgentSettings::wrap_user_function`'s doc comment.
-pub(super) async fn get_agent_wrap_user_function(Path(agent): Path<String>) -> impl IntoResponse {
-    Json(serde_json::json!({
-        "value": crate::agent_hook_commands::get_agent_wrap_user_function(agent),
-    }))
-}
-
-pub(super) async fn put_agent_wrap_user_function(
-    State(state): State<Arc<AppState>>,
-    ConnectInfo(addr): ConnectInfo<SocketAddr>,
-    auth: Option<Extension<Authenticated>>,
-    Path(agent): Path<String>,
-    Json(body): Json<serde_json::Value>,
-) -> impl IntoResponse {
-    if let Err(resp) = require_local_or_auth(&addr, auth.is_some()) {
-        return resp;
-    }
-    let value: Option<bool> = match serde_json::from_value(
-        body.get("value")
-            .cloned()
-            .unwrap_or(serde_json::Value::Null),
-    ) {
-        Ok(v) => v,
-        Err(_) => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({"error": "value must be true, false, or null"})),
-            );
-        }
-    };
-    match crate::agent_hook_commands::apply_agent_wrap_user_function(&state, agent, value) {
-        Ok(()) => (StatusCode::OK, Json(serde_json::json!({"ok": true}))),
-        Err(e) => (
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({"error": e})),
-        ),
-    }
-}
-
 // --- MCP Status ---
 
 pub(super) async fn get_mcp_status_http(State(state): State<Arc<AppState>>) -> impl IntoResponse {
@@ -1239,6 +1198,39 @@ pub(super) async fn execute_shell_script_http(
     )
 }
 
+pub(super) async fn run_background_command_http(
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    auth: Option<Extension<Authenticated>>,
+    Json(body): Json<RunBackgroundCommandRequest>,
+) -> axum::response::Response {
+    if let Err(resp) = require_local_or_auth(&addr, auth.is_some()) {
+        return resp.into_response();
+    }
+    json_result(
+        crate::background_command::run_background_command(
+            body.command,
+            body.cwd,
+            body.env,
+            body.shell,
+        )
+        .await,
+    )
+}
+
+pub(super) async fn run_command_shell_support_http(
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    auth: Option<Extension<Authenticated>>,
+    Json(body): Json<RunCommandShellSupportRequest>,
+) -> axum::response::Response {
+    if let Err(resp) = require_local_or_auth(&addr, auth.is_some()) {
+        return resp.into_response();
+    }
+    Json(crate::background_command::run_command_shell_support(
+        body.shell,
+    ))
+    .into_response()
+}
+
 pub(super) async fn list_audio_output_devices_http() -> impl IntoResponse {
     // `notification_sound` is desktop-only; a headless remote daemon has no audio
     // output context, so it reports an empty device list.
@@ -1367,6 +1359,166 @@ mod tests {
             .await
             .into_response();
         assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+    }
+
+    // `run_background_command_http` starts a process in the user's shell, so its guard is the
+    // whole safety story for a remote caller. Without the guard the handler would run the command
+    // to completion before returning, so a marker file existing afterwards proves the guard failed.
+
+    fn background_request(
+        command: &str,
+        cwd: Option<&std::path::Path>,
+    ) -> Json<RunBackgroundCommandRequest> {
+        Json(RunBackgroundCommandRequest {
+            command: command.to_string(),
+            cwd: cwd.map(|dir| dir.to_str().unwrap().to_string()),
+            env: None,
+            shell: None,
+        })
+    }
+
+    #[tokio::test]
+    async fn run_background_command_rejects_an_unauthenticated_remote_caller_and_starts_nothing() {
+        let dir = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let marker = dir.path().join("ran");
+        let command = format!("touch '{}'", marker.display());
+
+        let resp = run_background_command_http(
+            ConnectInfo(lan()),
+            None,
+            background_request(&command, Some(dir.path())),
+        )
+        .await;
+
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+        assert!(
+            !marker.exists(),
+            "a rejected request must not run the command"
+        );
+    }
+
+    #[tokio::test]
+    async fn run_background_command_lets_loopback_and_authenticated_callers_through_to_validation()
+    {
+        // An empty command is refused by validation (a 500 with the reason) — which also proves the
+        // guard let the caller reach it, without needing a real shell to start.
+        for (addr, auth) in [(loopback(), None), (lan(), authed())] {
+            let resp = run_background_command_http(
+                ConnectInfo(addr),
+                auth,
+                background_request("  ", None),
+            )
+            .await;
+            assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
+            let body = axum::body::to_bytes(resp.into_body(), 4096).await.unwrap();
+            let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+            assert!(json["error"].as_str().unwrap().contains("empty"), "{json}");
+        }
+    }
+
+    #[tokio::test]
+    async fn run_background_command_refuses_an_environment_variable_outside_the_fixed_set() {
+        // A caller must not be able to use `env` to set PATH, LD_PRELOAD, BASH_ENV, ... The
+        // refusal happens in validation, so nothing is started.
+        let dir = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let marker = dir.path().join("ran");
+        for name in [
+            "PATH",
+            "LD_PRELOAD",
+            "BASH_ENV",
+            "ZDOTDIR",
+            "TUIC_RUN_COMMAND",
+            "TUIC_M10",
+        ] {
+            let request = Json(RunBackgroundCommandRequest {
+                command: format!("touch '{}'", marker.display()),
+                cwd: Some(dir.path().to_str().unwrap().to_string()),
+                env: Some([(name.to_string(), "x".to_string())].into()),
+                shell: None,
+            });
+            let resp = run_background_command_http(ConnectInfo(loopback()), None, request).await;
+            assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR, "{name}");
+            let body = axum::body::to_bytes(resp.into_body(), 4096).await.unwrap();
+            let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+            assert!(
+                json["error"].as_str().unwrap().contains("not allowed"),
+                "{name}: {json}"
+            );
+        }
+        assert!(
+            !marker.exists(),
+            "a refused request must not run the command"
+        );
+    }
+
+    #[tokio::test]
+    async fn run_command_shell_support_is_gated_and_answers_for_the_shell_it_is_given() {
+        let ask = |shell: &str| {
+            Json(RunCommandShellSupportRequest {
+                shell: Some(shell.to_string()),
+            })
+        };
+        let denied =
+            run_command_shell_support_http(ConnectInfo(lan()), None, ask("/bin/zsh")).await;
+        assert_eq!(denied.status(), StatusCode::FORBIDDEN);
+
+        let ok =
+            run_command_shell_support_http(ConnectInfo(loopback()), None, ask("/bin/zsh")).await;
+        assert_eq!(ok.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(ok.into_body(), 4096).await.unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json, serde_json::json!({"shell": "zsh", "supported": true}));
+
+        let fish =
+            run_command_shell_support_http(ConnectInfo(lan()), authed(), ask("/usr/bin/fish"))
+                .await;
+        let body = axum::body::to_bytes(fish.into_body(), 4096).await.unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(
+            json,
+            serde_json::json!({"shell": "fish", "supported": false})
+        );
+    }
+
+    #[test]
+    fn run_background_command_request_reads_env_and_treats_it_as_optional() {
+        let with_env: RunBackgroundCommandRequest = serde_json::from_str(
+            r#"{"command":"imark \"${TUIC_M0}\"","cwd":null,"env":{"TUIC_M0":"a b"}}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            with_env.env.unwrap().get("TUIC_M0").map(String::as_str),
+            Some("a b")
+        );
+        let null_env: RunBackgroundCommandRequest =
+            serde_json::from_str(r#"{"command":"x","env":null}"#).unwrap();
+        assert!(null_env.env.is_none());
+        let no_env: RunBackgroundCommandRequest =
+            serde_json::from_str(r#"{"command":"x"}"#).unwrap();
+        assert!(no_env.env.is_none());
+    }
+
+    #[test]
+    fn run_background_command_request_reads_the_shape_the_frontend_sends() {
+        let with_cwd: RunBackgroundCommandRequest =
+            serde_json::from_str(r#"{"command":"imark 'a.md'","cwd":"/work"}"#).unwrap();
+        assert_eq!(with_cwd.command, "imark 'a.md'");
+        assert_eq!(with_cwd.cwd.as_deref(), Some("/work"));
+        // The frontend sends `null` for a terminal with no known folder; older callers omit it.
+        let null_cwd: RunBackgroundCommandRequest =
+            serde_json::from_str(r#"{"command":"x","cwd":null}"#).unwrap();
+        assert_eq!(null_cwd.cwd, None);
+        let no_cwd: RunBackgroundCommandRequest =
+            serde_json::from_str(r#"{"command":"x"}"#).unwrap();
+        assert_eq!(no_cwd.cwd, None);
+        // The Settings → Shell choice: a path, `null` ("the default") or absent (an older caller).
+        let with_shell: RunBackgroundCommandRequest =
+            serde_json::from_str(r#"{"command":"x","shell":"/bin/zsh"}"#).unwrap();
+        assert_eq!(with_shell.shell.as_deref(), Some("/bin/zsh"));
+        let null_shell: RunBackgroundCommandRequest =
+            serde_json::from_str(r#"{"command":"x","shell":null}"#).unwrap();
+        assert_eq!(null_shell.shell, None);
+        assert_eq!(no_cwd.shell, None);
     }
 
     /// Deleting over HTTP must take the LIVE connection down, not just the record.

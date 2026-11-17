@@ -140,32 +140,36 @@ export async function sendCommand(
 	await writeFn("\r");
 }
 
-/** Shell metacharacters that enable command chaining, substitution, redirection,
- *  or embedded newlines (Enter). A suggestion chip (OSC 7770 `suggest=`) can be
- *  emitted by ANY terminal output, including an untrusted file or log the user
- *  merely displayed. When a chip's text contains one of these, the caller should
- *  withhold auto-Enter (`sendCommand(..., submit=false)`) so a click can never
- *  silently execute a chained/redirected command — the user reviews it first.
- *  Plain-prose suggestions ("Run tests", "Fix the bug") contain none of these
- *  and keep the one-click behaviour. This is content-based, NOT a provenance
- *  gate, so legitimate shell-integration suggestions still work. */
-const SHELL_METACHARACTERS = /[;&|`$<>\n\r]/;
+/** True when `text` is made only of characters that NO common interactive shell gives a meaning to:
+ *  letters and digits (any script), space, and `_ . / : @ % + = , ~ -`. This is an ALLOWlist on
+ *  purpose. The earlier denylist (`; & | \` $ < >` and newlines) let through text a shell still
+ *  executes: in zsh `/(e:'cmd':)` is a glob qualifier that runs code, in fish `x(cmd)` is a command
+ *  substitution, and neither contains a denied character. Every other shell has its own such
+ *  syntax (parentheses, braces, brackets, `*`, `?`, `!`, `#`, quotes, backslash), so the safe rule
+ *  is to name what is inert rather than chase what is not.
+ *
+ *  A suggestion chip (OSC 7770 `suggest=`) or a smart-selection match can come from ANY terminal
+ *  output, including an untrusted file or log the user merely displayed. When the text is not inert,
+ *  the caller withholds auto-Enter (`sendCommand(..., submit=false)`) so a click can never silently
+ *  execute it — the user reviews it first. Ordinary commands (`git show abc123`, `cargo test --lib
+ *  foo`, a path) are inert and keep the one-click behaviour. This is content-based, NOT a
+ *  provenance gate, so legitimate shell-integration suggestions still work. */
+const INERT_SHELL_TEXT = /^[\p{L}\p{N} _./:@%+=,~-]*$/u;
 
-export function containsShellMetacharacters(text: string): boolean {
-	return SHELL_METACHARACTERS.test(text);
+export function isInertShellText(text: string): boolean {
+	return INERT_SHELL_TEXT.test(text);
 }
 
-/** Decide whether a clicked suggestion chip (OSC 7770 `suggest=`) should
+/** Decide whether a clicked suggestion chip (OSC 7770 `suggest=`) or smart-selection text should
  *  auto-submit (send the trailing Enter) or just type the text for review.
  *
- *  The shell-injection guard only applies to SHELLS: in a shell, newlines and
- *  metacharacters (`;&|`, `<>`, `$\``) chain/redirect commands, so an untrusted
- *  chip must not silently execute. For an AGENT (codex, claude, …) a chip is
- *  plain prompt text — nothing is dangerous, and a multi-line prompt MUST submit
- *  (withholding Enter leaves it dangling; Codex then treats a manual Enter as a
- *  newline, not submit). So: agent → always submit; shell → gate on metachars. */
+ *  The shell-injection guard only applies to SHELLS: a shell gives many characters a meaning
+ *  (see `isInertShellText`), so untrusted text must not silently execute. For an AGENT (codex,
+ *  claude, …) the text is plain prompt text — nothing is dangerous, and a multi-line prompt MUST
+ *  submit (withholding Enter leaves it dangling; Codex then treats a manual Enter as a newline, not
+ *  submit). So: agent → always submit; shell → submit only inert text. */
 export function shouldAutoSubmitSuggestion(agentType: string | null | undefined, text: string): boolean {
-	return agentType ? true : !containsShellMetacharacters(text);
+	return agentType ? true : isInertShellText(text);
 }
 
 /** Send a single raw character/escape sequence to a PTY running a TUI dialog

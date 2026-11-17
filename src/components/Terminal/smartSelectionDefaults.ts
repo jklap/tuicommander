@@ -1,4 +1,10 @@
+import { ruleContentHash } from "./smartSelectionReconcile";
 import type { SmartSelectionRule } from "./smartSelectionTypes";
+
+/** A shipped rule stamped with the hash of its own content (see `DEFAULT_SMART_SELECTION_RULES`). */
+function withShippedBaselines(rules: SmartSelectionRule[]): SmartSelectionRule[] {
+	return rules.map((rule) => ({ ...rule, builtInHash: ruleContentHash(rule) }));
+}
 
 /**
  * Default smart-selection rules: iTerm2's built-in set (translated verbatim
@@ -18,8 +24,15 @@ import type { SmartSelectionRule } from "./smartSelectionTypes";
  * is what the engine falls back to in that case — see
  * `resolveSmartSelectionRules` — so this is the ONLY place the default set
  * is defined.
+ *
+ * Every rule here carries `builtInHash`: the hash of its own shipped content. Anything that
+ * materialises the defaults into the user's saved config (the first edit in Settings, an import,
+ * "Restore") therefore saves each copy WITH the baseline of the version it was copied from, which
+ * is what lets `reconcileBuiltInRules` tell "unedited" from "edited" after a later release. Without
+ * it a copy saved under release N and reconciled for the first time under N+1 would be stamped with
+ * N+1's hash and look edited, so the release's change would never reach that user.
  */
-export const DEFAULT_SMART_SELECTION_RULES: SmartSelectionRule[] = [
+export const DEFAULT_SMART_SELECTION_RULES: SmartSelectionRule[] = withShippedBaselines([
 	{
 		id: "iterm-word",
 		name: "Word bounded by whitespace",
@@ -129,7 +142,13 @@ export const DEFAULT_SMART_SELECTION_RULES: SmartSelectionRule[] = [
 		precision: "high",
 		enabled: true,
 		actions: [
-			{ kind: "run_command", title: "Show commit", parameter: "git show \\0", isDefault: true },
+			{
+				kind: "send_text",
+				title: "Show commit",
+				parameter: "git show \\0",
+				isDefault: true,
+				sendReturn: "when_safe",
+			},
 			{ kind: "copy", title: "Copy SHA", parameter: "\\0", isDefault: false },
 		],
 	},
@@ -203,7 +222,7 @@ export const DEFAULT_SMART_SELECTION_RULES: SmartSelectionRule[] = [
 		enabled: false,
 		actions: [{ kind: "copy", title: "Copy", parameter: "\\0", isDefault: false }],
 	},
-];
+]);
 
 /** Rules to actually match against: user-defined rules if any exist,
  *  otherwise the shipped defaults. An empty `smart_selection_rules` in

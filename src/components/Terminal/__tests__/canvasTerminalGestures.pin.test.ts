@@ -398,8 +398,11 @@ describe("CanvasTerminal mouse gestures — pinned behavior (Phase 0)", () => {
 			const point = cellPoint(6, 0); // inside "https"
 			fireEvent.contextMenu(mounted.canvas, point);
 
-			await waitFor(() => expect(within(mounted.container).getByText("Open")).toBeTruthy());
-			expect(within(mounted.container).getByText("Copy link")).toBeTruthy();
+			// The URL is also an "HTTP URL" rule match, whose group has its own "Open" —
+			// so assert on the link group's unique "Copy link" and the "Link" header.
+			await waitFor(() => expect(within(mounted.container).getByText("Copy link")).toBeTruthy());
+			expect(within(mounted.container).getByText("Link")).toBeTruthy();
+			expect(within(mounted.container).getAllByText("Open").length).toBeGreaterThan(0);
 			await mounted.dispose();
 		});
 

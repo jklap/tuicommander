@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const {
+	mockApplyBuiltInRules,
 	mockDeepLink,
 	mockGetVersion,
 	mockInitApp,
@@ -12,13 +13,14 @@ const {
 	mockSettings,
 	mockUpdaterCheck,
 } = vi.hoisted(() => ({
+	mockApplyBuiltInRules: vi.fn(),
 	mockDeepLink: vi.fn(),
 	mockGetVersion: vi.fn(),
 	mockInitApp: vi.fn(),
 	mockInvoke: vi.fn(),
 	mockIsMacOS: { value: true },
 	mockIsTauri: { value: true },
-	mockLogger: { debug: vi.fn(), error: vi.fn() },
+	mockLogger: { debug: vi.fn(), error: vi.fn(), warn: vi.fn() },
 	mockRegistryFetch: vi.fn(),
 	mockSettings: {
 		state: { autoUpdateEnabled: true, autoUpdatePluginsEnabled: true },
@@ -53,6 +55,7 @@ const { mockDictation } = vi.hoisted(() => ({
 }));
 vi.mock("../../stores/dictation", () => ({ dictationStore: mockDictation }));
 vi.mock("../../stores/userActivity", () => ({ userActivityStore: { startListening: vi.fn() } }));
+vi.mock("../../utils/smartSelectionBuiltInUpdate", () => ({ applyBuiltInRuleUpdates: mockApplyBuiltInRules }));
 
 import { type AppBootstrapOptions, runAppBootstrap } from "../../hooks/useAppBootstrap";
 
@@ -99,6 +102,8 @@ describe("runAppBootstrap", () => {
 		mockIsMacOS.value = true;
 		mockLogger.debug.mockClear();
 		mockLogger.error.mockClear();
+		mockLogger.warn.mockClear();
+		mockApplyBuiltInRules.mockReset();
 		mockRegistryFetch.mockReset().mockResolvedValue(undefined);
 		mockUpdaterCheck.mockReset().mockResolvedValue(undefined);
 		mockSettings.state.autoUpdateEnabled = true;
@@ -246,6 +251,49 @@ describe("runAppBootstrap", () => {
 		expect(document.getElementById("splash")).toBeNull();
 		expect(options.restoreDetachedPanels).toHaveBeenCalledOnce();
 		expect(mockDeepLink).toHaveBeenCalledOnce();
+	});
+
+	describe("updating the saved smart-selection rules for this release", () => {
+		it("runs once, after application initialization, with the settings opener the toast's link uses", async () => {
+			const order: string[] = [];
+			mockInitApp.mockImplementation(async () => {
+				order.push("init");
+			});
+			mockApplyBuiltInRules.mockImplementation(() => {
+				order.push("update");
+			});
+			const options = makeOptions();
+
+			await runAppBootstrap(options);
+
+			expect(order).toEqual(["init", "update"]);
+			expect(mockApplyBuiltInRules).toHaveBeenCalledExactlyOnceWith(options.openSettings);
+		});
+
+		it("does not run when initialization failed (the settings store may not be loaded)", async () => {
+			mockInitApp.mockRejectedValue(new Error("boom"));
+
+			await runAppBootstrap(makeOptions());
+
+			expect(mockApplyBuiltInRules).not.toHaveBeenCalled();
+		});
+
+		it("can never abort startup: a failure is logged and the rest of bootstrap still runs", async () => {
+			mockApplyBuiltInRules.mockImplementation(() => {
+				throw new Error("config shape surprise");
+			});
+			const options = makeOptions();
+
+			await expect(runAppBootstrap(options)).resolves.toBeUndefined();
+
+			expect(mockLogger.warn).toHaveBeenCalledWith(
+				"app",
+				"Updating built-in smart-selection rules failed",
+				expect.any(Error),
+			);
+			expect(options.restoreDetachedPanels).toHaveBeenCalledOnce();
+			expect(mockDeepLink).toHaveBeenCalledOnce();
+		});
 	});
 
 	it("skips native-only version and CLI checks in browser mode", async () => {

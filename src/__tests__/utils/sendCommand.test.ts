@@ -3,7 +3,7 @@ import claudeLongInput from "../../../src-tauri/src/fixtures/agent_prompts/claud
 import { resetPlatformCache } from "../../platform";
 import {
 	AGENT_ENTER_GAP_MS,
-	containsShellMetacharacters,
+	isInertShellText,
 	sendCommand,
 	shouldAutoSubmitSuggestion,
 	UNVERIFIED_ENTER_GAP_MS,
@@ -213,16 +213,55 @@ describe("sendCommand", () => {
 	});
 });
 
-describe("containsShellMetacharacters", () => {
-	it("flags command chaining, substitution, and redirection", () => {
-		for (const s of ["a; b", "a | b", "a && b", "$(whoami)", "`id`", "echo > f", "cat < f", "a\nb"]) {
-			expect(containsShellMetacharacters(s)).toBe(true);
+describe("isInertShellText", () => {
+	it("accepts ordinary commands, paths and prose made of inert characters", () => {
+		for (const s of [
+			"git show a1b2c3d",
+			"cargo test --lib foo::bar",
+			"npm run build",
+			"src/components/Terminal/CanvasTerminal.tsx",
+			"~/notes/today.md",
+			"key=value,other=2",
+			"user@host:path/to",
+			"Fix the bug",
+			"Refactor auth module",
+			"déployer le résumé 日本語 42",
+			"",
+		]) {
+			expect(isInertShellText(s), JSON.stringify(s)).toBe(true);
 		}
 	});
 
-	it("does not flag plain suggestion prose", () => {
-		for (const s of ["Fix the bug", "Run tests", "Deploy", "Refactor auth module"]) {
-			expect(containsShellMetacharacters(s)).toBe(false);
+	it("rejects chaining, substitution and redirection (what the old denylist caught)", () => {
+		for (const s of ["a; b", "a | b", "a && b", "$(whoami)", "`id`", "echo > f", "cat < f", "a\nb", "a\rb"]) {
+			expect(isInertShellText(s), JSON.stringify(s)).toBe(false);
+		}
+	});
+
+	// The reason this is an allowlist. Each of these contains NONE of `; & | ` $ < >` or a newline —
+	// so the old denylist approved them — yet a real shell executes them (verified in zsh and fish).
+	it("rejects shell syntax the old denylist missed: zsh glob qualifiers, fish substitution, process substitution", () => {
+		const oldDenylist = /[;&|`$<>\n\r]/;
+		for (const s of [
+			"git show /(e:'touch M':)", // zsh: glob qualifier runs code
+			"echo x(touch M)", // fish: command substitution
+			"cat =(touch M)", // zsh: =() substitution
+			"echo {a,b}", // brace expansion
+			"ls *", // glob
+			"ls ?", // glob
+			"ls [a-z]", // glob class
+			"echo !!", // history expansion
+			"echo # comment", // comment
+			"echo 'quoted'", // quotes
+			'echo "quoted"',
+			"echo back\\slash", // escapes
+			"echo\ttab", // tab triggers completion
+			"echo \u001b[200~paste", // ESC / bracketed paste
+			"echo (grouped)",
+			"a\u2028b", // unicode line separator
+		]) {
+			expect(oldDenylist.test(s), `${JSON.stringify(s)} passed the old denylist`).toBe(false);
+			expect(isInertShellText(s), JSON.stringify(s)).toBe(false);
 		}
 	});
 });
@@ -235,17 +274,17 @@ describe("shouldAutoSubmitSuggestion", () => {
 		}
 	});
 
-	it("withholds submit on a shell for metachar-bearing or multi-line text", () => {
+	it("withholds submit on a shell for non-inert or multi-line text", () => {
 		for (const agentType of [null, undefined]) {
-			for (const s of ["a; b", "a | b", "$(whoami)", "echo > f", "line one\nline two"]) {
+			for (const s of ["a; b", "a | b", "$(whoami)", "echo > f", "line one\nline two", "echo x(touch M)", "ls *"]) {
 				expect(shouldAutoSubmitSuggestion(agentType, s)).toBe(false);
 			}
 		}
 	});
 
-	it("submits on a shell for plain single-line prose", () => {
+	it("submits on a shell for plain single-line prose and ordinary commands", () => {
 		for (const agentType of [null, undefined]) {
-			for (const s of ["Run tests", "Deploy", "Fix the bug"]) {
+			for (const s of ["Run tests", "Deploy", "Fix the bug", "git status", "cargo test --lib foo"]) {
 				expect(shouldAutoSubmitSuggestion(agentType, s)).toBe(true);
 			}
 		}
