@@ -22,6 +22,7 @@ import { uiStore } from "../stores/ui";
 import { updaterStore } from "../stores/updater";
 import { userActivityStore } from "../stores/userActivity";
 import { isTauri } from "../transport";
+import { applyBuiltInRuleUpdates } from "../utils/smartSelectionBuiltInUpdate";
 import { type AppInitDeps, initApp } from "./useAppInit";
 import { startAutoFetch } from "./useAutoFetch";
 
@@ -176,7 +177,7 @@ export async function runAppBootstrap(options: AppBootstrapOptions): Promise<voi
 		...initOptions
 	} = options;
 
-	await initApp({
+	const initialized = await initApp({
 		...initOptions,
 		registerRepo: openRepoPath,
 		stores: {
@@ -199,11 +200,27 @@ export async function runAppBootstrap(options: AppBootstrapOptions): Promise<voi
 			startUserActivityListening: userActivityStore.startListening,
 		},
 		applyPlatformClass,
-	}).catch((error) => {
-		appLogger.error("app", "Fatal initialization error", error);
-		options.setStatusInfo("Error: App failed to initialize — check error log");
-		document.getElementById("splash")?.remove();
-	});
+	}).then(
+		() => true,
+		(error) => {
+			appLogger.error("app", "Fatal initialization error", error);
+			options.setStatusInfo("Error: App failed to initialize — check error log");
+			document.getElementById("splash")?.remove();
+			return false;
+		},
+	);
+
+	// Bring the user's saved smart-selection rules up to date with this release. Deliberately AFTER
+	// init rather than inside the awaited hydrate step: it is optional housekeeping, so a failure
+	// here must never be able to abort startup, and its toast should appear when the UI is up, not
+	// while the splash is still showing and the 15 s toast could expire unseen.
+	if (initialized) {
+		try {
+			applyBuiltInRuleUpdates(openSettings);
+		} catch (error) {
+			appLogger.warn("app", "Updating built-in smart-selection rules failed", error);
+		}
+	}
 
 	resumeAgentTabsAfterUpdate().catch((error) => appLogger.warn("app", "Resuming agents after update failed", error));
 	detectAgents().catch((error) => appLogger.debug("app", "Agent detection failed", error));

@@ -62,6 +62,7 @@ import {
 	setSessionConnectionLookup,
 	setTransportLogger,
 } from "../transportRuntime";
+import { shVar } from "./helpers/shellVar";
 
 // Catches: browser/remote start work using a different input shape or an absent endpoint.
 it("maps_start_work_prompt_input_without_reshaping", () => {
@@ -1475,29 +1476,6 @@ describe("transport", () => {
 			expect(result.body).toEqual({ enabled: true });
 		});
 
-		it("maps agent_wrap_prompt_response to POST /agent-wrap-prompt/response with snake_case body", () => {
-			const result = mapCommandToHttp("agent_wrap_prompt_response", {
-				requestId: "r-1",
-				agentType: "claude",
-				decision: null,
-			});
-			expect(result.method).toBe("POST");
-			expect(result.path).toBe("/agent-wrap-prompt/response");
-			expect(result.body).toEqual({ request_id: "r-1", agent_type: "claude", decision: null });
-		});
-
-		it("maps the wrap-user-function setting with exact GET/PUT parity", () => {
-			const get = mapCommandToHttp("get_agent_wrap_user_function", { agentType: "codex" });
-			expect(get.method).toBe("GET");
-			expect(get.path).toBe("/config/agents/codex/wrap-user-function");
-			expect(get.transform?.({ value: false })).toBe(false);
-			expect(get.transform?.({ value: null })).toBeNull();
-			const set = mapCommandToHttp("set_agent_wrap_user_function", { agentType: "codex", value: true });
-			expect(set.method).toBe("PUT");
-			expect(set.path).toBe("/config/agents/codex/wrap-user-function");
-			expect(set.body).toEqual({ value: true });
-		});
-
 		it("maps native status signal commands with exact GET/PUT parity", () => {
 			const get = mapCommandToHttp("get_agent_native_status_signals", { agentType: "claude" });
 			expect(get.method).toBe("GET");
@@ -2398,6 +2376,33 @@ describe("transport", () => {
 			expect(sh.method).toBe("POST");
 			expect(sh.path).toBe("/exec/shell-script");
 			expect(sh.body).toEqual({ scriptContent: "echo hi", timeoutMs: 5000, repoPath: "/r" });
+			const bg = mapCommandToHttp("run_background_command", {
+				command: `imark "${shVar("TUIC_M0")}"`,
+				cwd: "/r",
+				env: { TUIC_M0: "a b" },
+				shell: "/bin/zsh",
+			});
+			expect(bg.method).toBe("POST");
+			expect(bg.path).toBe("/exec/background-command");
+			expect(bg.body).toEqual({
+				command: `imark "${shVar("TUIC_M0")}"`,
+				cwd: "/r",
+				env: { TUIC_M0: "a b" },
+				shell: "/bin/zsh",
+			});
+			// A terminal with no known folder sends null, which the backend reads as "home"; a command
+			// with no placeholders has no values to send.
+			expect(mapCommandToHttp("run_background_command", { command: "x", cwd: null }).body).toEqual({
+				command: "x",
+				cwd: null,
+				env: undefined,
+			});
+			const support = mapCommandToHttp("run_command_shell_support", { shell: "/bin/zsh" });
+			expect(support.method).toBe("POST");
+			expect(support.path).toBe("/exec/shell-support");
+			expect(support.body).toEqual({ shell: "/bin/zsh" });
+			// No configured shell means "the default": null, not undefined, so the body keeps the key.
+			expect(mapCommandToHttp("run_command_shell_support", {}).body).toEqual({ shell: null });
 			expect(mapCommandToHttp("list_audio_output_devices", {}).path).toBe("/audio/output-devices");
 			const disc = mapCommandToHttp("discover_agent_session", {
 				agentType: "claude",
@@ -3411,6 +3416,11 @@ describe("transport", () => {
 			// (`dictation-download-progress` is NOT here: it has a real AppEvent arm.)
 			"dictation-backend-info",
 			"dictation-partial",
+			// Remote-machine repository refresh (remoteRepositorySync.ts) — produced only
+			// by `remote_mirror.rs`'s `republish` for a connected remote machine and
+			// delivered to the desktop window through the RemoteMirrored forwarding
+			// allowlist (`WINDOW_MIRRORABLE_EVENTS`), never from a local AppEvent arm.
+			"remote-repo-changed",
 			// Background-mode window snapshot (background_mode_desktop.rs) — an
 			// imperative `emit_to("main")` asking the desktop window to snapshot its
 			// tabs before it is hidden; a browser tab has no window to hide, and an

@@ -16,6 +16,8 @@ import { fireEvent, render, waitFor } from "@solidjs/testing-library";
 import { afterEach, describe, expect, it } from "vitest";
 import "../../mocks/tauri";
 import { SelectionTab } from "../../../components/SettingsPanel/tabs/SelectionTab";
+import { DEFAULT_SMART_SELECTION_RULES } from "../../../components/Terminal/smartSelectionDefaults";
+import { ruleContentHash } from "../../../components/Terminal/smartSelectionReconcile";
 import { settingsStore } from "../../../stores/settings";
 
 function expandRule(container: HTMLElement, index = 0) {
@@ -148,5 +150,73 @@ describe("SelectionTab against the real settingsStore (reactivity regression)", 
 		await waitFor(() => expect(settingsStore.state.smartSelectionRules[0].name).toBe("Renamed rule"));
 
 		expect(document.activeElement).toBe(nameInput);
+	});
+
+	it("Add rule opens the new rule's editor, ready to fill in", async () => {
+		settingsStore.setSmartSelectionRules([
+			{ id: "r1", name: "Existing", regex: "a", precision: "normal", enabled: true, actions: [] },
+		]);
+		const { container, getByText, getByPlaceholderText } = render(() => <SelectionTab />);
+		// Nothing is expanded yet: the editor's Pattern field only renders inside an open row.
+		expect(container.querySelectorAll('input[placeholder="Regular expression"]').length).toBe(0);
+
+		fireEvent.click(getByText("Add rule"));
+
+		await waitFor(() => expect(settingsStore.state.smartSelectionRules).toHaveLength(2));
+		const added = settingsStore.state.smartSelectionRules[1];
+		expect(added.name).toBe("New rule");
+		// Exactly one editor is open, and it is the new rule's (its pattern starts empty).
+		const patterns = container.querySelectorAll('input[placeholder="Regular expression"]');
+		expect(patterns.length).toBe(1);
+		expect((getByPlaceholderText("Regular expression") as HTMLInputElement).value).toBe("");
+		expect((container.querySelector('input[placeholder="Name"]') as HTMLInputElement).value).toBe("New rule");
+	});
+
+	it("Add rule leaves a rule you already had open open", async () => {
+		settingsStore.setSmartSelectionRules([
+			{ id: "r1", name: "Existing", regex: "a", precision: "normal", enabled: true, actions: [] },
+		]);
+		const { container, getByText } = render(() => <SelectionTab />);
+		expandRule(container, 0);
+		expect(container.querySelectorAll('input[placeholder="Regular expression"]').length).toBe(1);
+
+		fireEvent.click(getByText("Add rule"));
+
+		await waitFor(() => expect(settingsStore.state.smartSelectionRules).toHaveLength(2));
+		expect(container.querySelectorAll('input[placeholder="Regular expression"]').length).toBe(2);
+	});
+
+	it("adding rules from the stored-empty (built-in defaults) state opens only the new one, not every default", async () => {
+		settingsStore.setSmartSelectionRules([]);
+		const { container, getByText } = render(() => <SelectionTab />);
+
+		fireEvent.click(getByText("Add rule"));
+
+		await waitFor(() => expect(settingsStore.state.smartSelectionRules.length).toBeGreaterThan(1));
+		expect(container.querySelectorAll('input[placeholder="Regular expression"]').length).toBe(1);
+	});
+
+	it("saving the defaults by editing one rule keeps every rule's baseline: untouched ones match it, the edited one still points at the shipped version", async () => {
+		settingsStore.setSmartSelectionRules([]);
+		const { container } = render(() => <SelectionTab />);
+		expandRule(container, 0);
+
+		const nameInput = container.querySelector('input[placeholder="Name"]') as HTMLInputElement;
+		fireEvent.input(nameInput, { target: { value: "My word rule" } });
+		await waitFor(() =>
+			expect(settingsStore.state.smartSelectionRules.length).toBe(DEFAULT_SMART_SELECTION_RULES.length),
+		);
+
+		const saved = settingsStore.state.smartSelectionRules;
+		const [shippedFirst] = DEFAULT_SMART_SELECTION_RULES;
+		// Edited: content moved on, baseline did not — that is exactly what marks it as edited later.
+		expect(saved[0].name).toBe("My word rule");
+		expect(saved[0].builtInHash).toBe(ruleContentHash(shippedFirst));
+		expect(ruleContentHash(saved[0])).not.toBe(saved[0].builtInHash);
+		// Untouched: the baseline equals the hash of the saved content.
+		for (const rule of saved.slice(1)) {
+			expect(rule.builtInHash, rule.id).toBeDefined();
+			expect(ruleContentHash(rule), rule.id).toBe(rule.builtInHash);
+		}
 	});
 });

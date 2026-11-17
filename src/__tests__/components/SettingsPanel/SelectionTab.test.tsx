@@ -487,4 +487,257 @@ describe("SelectionTab", () => {
 		const persisted = mockSetSmartSelectionRules.mock.calls[0][0] as { actions: { parameter: string }[] }[];
 		expect(persisted[0].actions[0].parameter).toBe("\\1");
 	});
+
+	describe("action kinds: Send Text vs Run Command", () => {
+		const ruleWith = (kind: string, extra: Record<string, unknown> = {}) => ({
+			id: "r1",
+			name: "Custom",
+			regex: "x",
+			precision: "normal",
+			enabled: true,
+			actions: [{ kind, title: "Do it", parameter: "\\0", isDefault: false, ...extra }],
+		});
+		const kindSelect = (container: HTMLElement) =>
+			container.querySelector('[data-testid="smart-action-kind"]') as HTMLSelectElement;
+		const optionLabels = (select: HTMLSelectElement) =>
+			Object.fromEntries(Array.from(select.options).map((o) => [o.value, o.textContent]));
+
+		it("offers Send Text and Run Command, and no separate 'Send Command' (folded into Send Text)", () => {
+			mockState = { ...mockState, smartSelectionRules: [ruleWith("copy")] };
+			const { container } = render(() => <SelectionTab />);
+			expandRule(container, 0);
+
+			const labels = optionLabels(kindSelect(container));
+			expect(labels).toMatchObject({ send_text: "Send Text", run_background: "Run Command" });
+			expect(Object.keys(labels)).not.toContain("run_command");
+			expect(Object.values(labels)).not.toContain("Send Command");
+		});
+
+		it("no longer offers 'Run Command in New Terminal' as a separate kind — it is Run Command's 'In a new terminal'", () => {
+			mockState = { ...mockState, smartSelectionRules: [ruleWith("copy")] };
+			const { container } = render(() => <SelectionTab />);
+			expandRule(container, 0);
+			expect(Object.keys(optionLabels(kindSelect(container)))).not.toContain("run_command_new_terminal");
+		});
+
+		it("still shows a rule saved with the older kind, under its own name, so the select is never blank", () => {
+			mockState = { ...mockState, smartSelectionRules: [ruleWith("run_command_new_terminal")] };
+			const { container } = render(() => <SelectionTab />);
+			expandRule(container, 0);
+
+			const select = kindSelect(container);
+			expect(select.value).toBe("run_command_new_terminal");
+			expect(select.selectedOptions[0].textContent).toBe("Run Command in New Terminal (older form)");
+		});
+
+		it("shows a rule saved with the older run_command as Send Text with Press Enter: When safe (same behaviour)", () => {
+			mockState = { ...mockState, smartSelectionRules: [ruleWith("run_command")] };
+			const { container } = render(() => <SelectionTab />);
+			expandRule(container, 0);
+
+			const select = kindSelect(container);
+			expect(select.value).toBe("send_text");
+			expect(select.selectedOptions[0].textContent).toBe("Send Text");
+			const pressEnter = container.querySelector('[data-testid="smart-action-send-return"]') as HTMLSelectElement;
+			expect(pressEnter.value).toBe("when_safe");
+		});
+
+		it("the first edit saves that rule in the new spelling, leaving the behaviour as it was", () => {
+			mockState = { ...mockState, smartSelectionRules: [ruleWith("run_command")] };
+			const { container, getByDisplayValue } = render(() => <SelectionTab />);
+			expandRule(container, 0);
+
+			fireEvent.input(getByDisplayValue("Do it"), { target: { value: "Renamed" } });
+
+			const saved = (mockSetSmartSelectionRules.mock.calls.at(-1)![0] as { actions: Record<string, unknown>[] }[])[0]
+				.actions[0];
+			expect(saved).toMatchObject({ kind: "send_text", sendReturn: "when_safe", title: "Renamed" });
+		});
+
+		it("does not rewrite anything just by being opened (the older spelling stays on disk until an edit)", () => {
+			mockState = { ...mockState, smartSelectionRules: [ruleWith("run_command")] };
+			const { container } = render(() => <SelectionTab />);
+			expandRule(container, 0);
+			expect(mockSetSmartSelectionRules).not.toHaveBeenCalled();
+		});
+
+		it("choosing Run Command stores the run_background kind", () => {
+			mockState = { ...mockState, smartSelectionRules: [ruleWith("copy")] };
+			const { container } = render(() => <SelectionTab />);
+			expandRule(container, 0);
+
+			fireEvent.change(kindSelect(container), { target: { value: "run_background" } });
+
+			const persisted = mockSetSmartSelectionRules.mock.calls[0][0] as { actions: { kind: string }[] }[];
+			expect(persisted[0].actions[0].kind).toBe("run_background");
+		});
+
+		it("explains the quoting and the environment, but only on a rule that has a Run Command action", () => {
+			mockState = { ...mockState, smartSelectionRules: [ruleWith("run_background")] };
+			const { container, unmount } = render(() => <SelectionTab />);
+			expandRule(container, 0);
+			const hint = container.querySelector('[data-testid="smart-run-command-hint"]');
+			expect(hint?.textContent).toContain("as data");
+			expect(hint?.textContent).toContain("login environment");
+			expect(hint?.textContent).toContain("SSH");
+			expect(hint?.textContent).toContain("/bin/sh");
+			// Quoting the placeholder is now safe, so the old "don't quote it" advice must be gone.
+			expect(hint?.textContent).not.toContain("not imark");
+			// The two things that DO make a shell read a value as code are called out.
+			expect(hint?.textContent).toContain("eval");
+			expect(hint?.textContent).toContain("bash, zsh, ksh, dash or sh");
+			expect(hint?.textContent).toContain("1000 bytes");
+			// Names the other kind, so the two are not confused.
+			expect(hint?.textContent).toContain("Send Text");
+			unmount();
+
+			mockState = { ...mockState, smartSelectionRules: [ruleWith("send_text")] };
+			const { container: other } = render(() => <SelectionTab />);
+			expandRule(other, 0);
+			expect(other.querySelector('[data-testid="smart-run-command-hint"]')).toBeNull();
+		});
+	});
+
+	describe("hints that warn about unsafe choices", () => {
+		const open = (kind: string) => {
+			mockState = {
+				...mockState,
+				smartSelectionRules: [
+					{
+						id: "r1",
+						name: "Custom",
+						regex: "x",
+						precision: "normal",
+						enabled: true,
+						actions: [{ kind, title: "Do it", parameter: "\\0", isDefault: false }],
+					},
+				],
+			};
+			const { container } = render(() => <SelectionTab />);
+			expandRule(container, 0);
+			return container;
+		};
+
+		it("Run Command's hint warns that a match starting with '-' can be read as an option, and suggests --", () => {
+			const hint = open("run_background").querySelector('[data-testid="smart-run-command-hint"]');
+			expect(hint?.textContent).toContain("starts with");
+			expect(hint?.textContent).toContain("option");
+			expect(hint?.textContent).toContain("--");
+		});
+
+		it("the older new-terminal kind warns that it does not quote matched text, and only that kind does", () => {
+			const legacy = open("run_command_new_terminal").querySelector('[data-testid="smart-legacy-new-terminal-hint"]');
+			expect(legacy?.textContent).toContain("straight into the command line");
+			expect(legacy?.textContent).toContain("In a new terminal");
+			for (const kind of ["copy", "send_text", "run_background"]) {
+				expect(open(kind).querySelector('[data-testid="smart-legacy-new-terminal-hint"]'), kind).toBeNull();
+			}
+		});
+
+		it("Press Enter explains what 'When safe' means in plain terms (no 'shell operators' hand-waving)", () => {
+			const text = open("send_text").textContent ?? "";
+			expect(text).toContain("When safe");
+			expect(text).toContain("letters, digits, spaces");
+			expect(text).not.toContain("no shell operators");
+		});
+	});
+
+	describe("per-action options", () => {
+		const rule = (kind: string, extra: Record<string, unknown> = {}) => ({
+			id: "r1",
+			name: "Custom",
+			regex: "x",
+			precision: "normal",
+			enabled: true,
+			actions: [{ kind, title: "Do it", parameter: "\\0", isDefault: false, ...extra }],
+		});
+		const open = (kind: string, extra: Record<string, unknown> = {}) => {
+			mockState = { ...mockState, smartSelectionRules: [rule(kind, extra)] };
+			const { container } = render(() => <SelectionTab />);
+			expandRule(container, 0);
+			return container;
+		};
+		const sendReturn = (c: HTMLElement) =>
+			c.querySelector('[data-testid="smart-action-send-return"]') as HTMLSelectElement | null;
+		const runIn = (c: HTMLElement) =>
+			c.querySelector('[data-testid="smart-action-run-in"]') as HTMLSelectElement | null;
+		const persistedAction = () =>
+			(mockSetSmartSelectionRules.mock.calls.at(-1)![0] as { actions: Record<string, unknown>[] }[])[0].actions[0];
+
+		it("Send Text offers 'Press Enter: Never / When safe', defaulting to Never", () => {
+			const c = open("send_text");
+			const select = sendReturn(c)!;
+			expect(Array.from(select.options).map((o) => [o.value, o.textContent])).toEqual([
+				["never", "Never"],
+				["when_safe", "When safe"],
+			]);
+			expect(select.value).toBe("never");
+			expect(runIn(c)).toBeNull();
+		});
+
+		it("Run Command offers 'Run: In the background / In a new terminal', defaulting to the background", () => {
+			const c = open("run_background");
+			const select = runIn(c)!;
+			expect(Array.from(select.options).map((o) => [o.value, o.textContent])).toEqual([
+				["background", "In the background"],
+				["new_terminal", "In a new terminal"],
+			]);
+			expect(select.value).toBe("background");
+			expect(sendReturn(c)).toBeNull();
+		});
+
+		it("no other kind shows an option row", () => {
+			for (const kind of ["copy", "open_url", "open_file", "ask_ai"]) {
+				const c = open(kind);
+				expect(sendReturn(c), kind).toBeNull();
+				expect(runIn(c), kind).toBeNull();
+				c.remove();
+			}
+		});
+
+		it("shows the saved value", () => {
+			expect(sendReturn(open("send_text", { sendReturn: "when_safe" }))!.value).toBe("when_safe");
+			expect(runIn(open("run_background", { runIn: "new_terminal" }))!.value).toBe("new_terminal");
+		});
+
+		it("choosing a non-default value stores it; choosing the default again stores nothing", () => {
+			const c = open("send_text");
+			fireEvent.change(sendReturn(c)!, { target: { value: "when_safe" } });
+			expect(persistedAction().sendReturn).toBe("when_safe");
+
+			const c2 = open("send_text", { sendReturn: "when_safe" });
+			fireEvent.change(sendReturn(c2)!, { target: { value: "never" } });
+			expect(persistedAction().sendReturn).toBeUndefined();
+
+			const c3 = open("run_background");
+			fireEvent.change(runIn(c3)!, { target: { value: "new_terminal" } });
+			expect(persistedAction().runIn).toBe("new_terminal");
+
+			const c4 = open("run_background", { runIn: "new_terminal" });
+			fireEvent.change(runIn(c4)!, { target: { value: "background" } });
+			expect(persistedAction().runIn).toBeUndefined();
+		});
+
+		it("changing the kind drops the old kind's option instead of leaving a hidden one behind", () => {
+			const c = open("send_text", { sendReturn: "when_safe" });
+			fireEvent.change(c.querySelector('[data-testid="smart-action-kind"]') as HTMLSelectElement, {
+				target: { value: "copy" },
+			});
+			const action = persistedAction();
+			expect(action.kind).toBe("copy");
+			expect(action.sendReturn).toBeUndefined();
+			expect(action.runIn).toBeUndefined();
+		});
+
+		it("re-selecting the same kind keeps its option", () => {
+			const c = open("run_background", { runIn: "new_terminal" });
+			fireEvent.change(c.querySelector('[data-testid="smart-action-kind"]') as HTMLSelectElement, {
+				target: { value: "run_background" },
+			});
+			// An unchanged kind is not a kind change: nothing is cleared. (`persistedAction` throws if
+			// nothing was saved at all, so this cannot pass by the handler simply not running.)
+			expect(mockSetSmartSelectionRules).toHaveBeenCalled();
+			expect(persistedAction().runIn).toBe("new_terminal");
+		});
+	});
 });

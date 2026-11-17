@@ -70,7 +70,7 @@ export interface MousedownSelectionResult extends MousedownSelectionAnchors {
  *
  * This is the FALLBACK decision for "double" and "quad": the mousedown
  * handler tries smart-selection matching first for those two click kinds
- * (see `findSmartMatch` in `smartSelection.ts`) and only calls this when no
+ * (see `findSmartMatches` in `smartSelection.ts`) and only calls this when no
  * rule matched. "quad" falls back to the same whole-line selection as
  * "triple" rather than a distinct 4th selection mode.
  */

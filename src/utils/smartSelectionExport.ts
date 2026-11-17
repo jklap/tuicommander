@@ -5,7 +5,7 @@ import type {
 	SmartSelectionActionKind,
 	SmartSelectionRule,
 } from "../components/Terminal/smartSelectionTypes";
-import { ruleFromWire } from "../components/Terminal/smartSelectionTypes";
+import { canonicalAction, ruleFromWire } from "../components/Terminal/smartSelectionTypes";
 import { isValidRegex } from "./isValidRegex";
 import type { ExportScope } from "./promptExport";
 
@@ -13,8 +13,25 @@ import type { ExportScope } from "./promptExport";
  *  Smart Selection rules export (e.g. a Smart Prompts export with the same `.json` extension). */
 export const RULES_EXPORT_KIND = "tuicommander-smart-selection-rules";
 
-/** Bump when the export shape changes in a way older versions of this app can't read. */
-export const RULES_EXPORT_SCHEMA_VERSION = 1;
+/** The newest export format this build can READ. A file with a higher `schemaVersion` is refused.
+ *  Bump it when the export shape changes in a way older versions of this app can't read. */
+export const RULES_EXPORT_SCHEMA_VERSION = 2;
+
+/** The format of an export that uses nothing added since the first release. Such a file stays
+ *  version 1, so an older build can still import it. */
+export const RULES_EXPORT_BASE_SCHEMA_VERSION = 1;
+
+/** Version 2 added the `run_background` ("Run Command") kind and the per-action `sendReturn` /
+ *  `runIn` options. An older build handed such a file would not refuse it: it would quietly turn the
+ *  kind into Copy and drop the options. Labelling it version 2 makes that build say "exported by a
+ *  newer version" instead. */
+function needsSchemaVersion2(rules: readonly SmartSelectionRule[]): boolean {
+	return rules.some((rule) =>
+		(rule.actions ?? []).some(
+			(a) => a.kind === "run_background" || a.sendReturn !== undefined || a.runIn !== undefined,
+		),
+	);
+}
 
 export interface RulesExportFile {
 	kind: typeof RULES_EXPORT_KIND;
@@ -56,13 +73,18 @@ const RULE_COMPARED_FIELDS = ["name", "regex", "precision", "enabled"] as const 
  *  `config.json`, or a rule that predates the field) compares equal to `isDefault: false`. */
 function actionsEqual(a: readonly SmartSelectionAction[] = [], b: readonly SmartSelectionAction[] = []): boolean {
 	if (a.length !== b.length) return false;
-	return a.every((x, i) => {
-		const y = b[i];
+	return a.every((raw, i) => {
+		// `run_command` and `send_text` + when_safe are the same action (see `canonicalAction`).
+		const x = canonicalAction(raw);
+		const y = canonicalAction(b[i]);
 		return (
 			x.kind === y.kind &&
 			x.title === y.title &&
 			x.parameter === y.parameter &&
-			Boolean(x.isDefault) === Boolean(y.isDefault)
+			Boolean(x.isDefault) === Boolean(y.isDefault) &&
+			// An absent option IS its default, so compare through the default.
+			(x.sendReturn ?? "never") === (y.sendReturn ?? "never") &&
+			(x.runIn ?? "background") === (y.runIn ?? "background")
 		);
 	});
 }
@@ -98,9 +120,9 @@ export function selectRulesForExport(
 	}
 }
 
-/** Build the exportable envelope for a set of rules. Unlike `SavedPrompt`, `SmartSelectionRule`
- *  carries no machine-local bookkeeping (no `createdAt`/`updatedAt`/`lastUsed`), so there is
- *  nothing to strip before export. */
+/** Build the exportable envelope for a set of rules. The one piece of machine-local bookkeeping a
+ *  rule carries, `builtInHash` (which shipped version this copy was reconciled against), is
+ *  stripped: it means nothing on another machine, and the import side never reads it either. */
 export function buildRulesExportFile(
 	rules: SmartSelectionRule[],
 	scope: ExportScope,
@@ -108,12 +130,18 @@ export function buildRulesExportFile(
 ): RulesExportFile {
 	return {
 		kind: RULES_EXPORT_KIND,
-		schemaVersion: RULES_EXPORT_SCHEMA_VERSION,
+		// Only as new as the rules need, so a plain export stays importable by an older build.
+		schemaVersion: needsSchemaVersion2(rules) ? RULES_EXPORT_SCHEMA_VERSION : RULES_EXPORT_BASE_SCHEMA_VERSION,
 		exportedAt: Date.now(),
 		appVersion,
 		scope,
-		rules,
+		rules: rules.map(({ builtInHash: _builtInHash, ...rule }) => rule),
 	};
+}
+
+/** A field from untrusted JSON that should be a string, else `undefined`. */
+function stringField(value: unknown): string | undefined {
+	return typeof value === "string" ? value : undefined;
 }
 
 /** Read a field from untrusted JSON that should be a boolean. A real `true`/`false` is used as
@@ -220,6 +248,10 @@ export function parseRulesExportFile(text: string): ParsedRuleImport {
 				title: typeof a?.title === "string" ? a.title : "",
 				parameter: typeof a?.parameter === "string" ? a.parameter : "",
 				is_default: isDefault.value,
+				// Either spelling, like `is_default`; `actionFromWire` keeps only a recognised
+				// non-default value, so anything else becomes the default.
+				send_return: stringField(a?.send_return ?? a?.sendReturn),
+				run_in: stringField(a?.run_in ?? a?.runIn),
 			};
 		});
 
@@ -290,10 +322,12 @@ export function classifyRuleImport(
 
 /** Action kinds that either run a shell command or write into a live PTY — the smart-selection
  *  analogue of a Smart Prompt's `shell`/`api` execution mode. `send_text` is included because at
- *  a shell prompt it's one Enter keystroke from executing. */
+ *  a shell prompt it's one Enter keystroke from executing. `run_background` is the most direct of
+ *  them: it runs a command in the user's own shell and environment with nothing to review first. */
 const RISKY_ACTION_KINDS: ReadonlySet<SmartSelectionActionKind> = new Set([
 	"run_command",
 	"run_command_new_terminal",
+	"run_background",
 	"send_text",
 ]);
 

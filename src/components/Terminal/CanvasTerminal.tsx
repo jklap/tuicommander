@@ -138,9 +138,15 @@ import { kittySequenceForKey } from "./kittyKeyboard";
 import { filePathRegex, fileUrlRegex, matchWebUrls } from "./linkProvider";
 import { buildScrollbarMarksHtml, scrollbarMarksKey, shouldShowScrollbar } from "./scrollbarMarks";
 import { trackClickOffset } from "./scrollbarThumb";
-import { findSmartMatch, SMART_SELECTION_RADIUS, type SmartMatch } from "./smartSelection";
-import { runSmartSelectionAction, type SmartSelectionActionDeps } from "./smartSelectionActions";
+import { findSmartMatches, SMART_SELECTION_RADIUS, type SmartMatch } from "./smartSelection";
+import {
+	type BackgroundCommandOutcome,
+	backgroundFailureMessage,
+	runSmartSelectionAction,
+	type SmartSelectionActionDeps,
+} from "./smartSelectionActions";
 import { resolveSmartSelectionRules } from "./smartSelectionDefaults";
+import { pickLinkClickRule, selectMenuMatches, typesIntoTerminal } from "./smartSelectionMenu";
 import type { SmartSelectionAction as SmartSelectionActionType } from "./smartSelectionTypes";
 import {
 	ANSWER_MARKER_RE,
@@ -381,11 +387,15 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 	type LinkTarget = { path: string; line?: number; col?: number };
 	const linkMenu = createContextMenu();
 	const [linkMenuTarget, setLinkMenuTarget] = createSignal<LinkTarget | null>(null);
-	/** Smart-selection rule match under the last right-click, if any — its
-	 *  actions are merged into the same link-menu popup (see the JSX below
-	 *  and the "contextmenu" listener). Cleared whenever the menu closes so a
-	 *  stale rule's actions can't linger into an unrelated right-click. */
-	const [smartMenuMatch, setSmartMenuMatch] = createSignal<ResolvedSmartMatch | null>(null);
+	/** Every smart-selection rule match under the last right-click (best
+	 *  first) — each rule's actions are merged into the same link-menu popup
+	 *  as its own labelled group (see the JSX below and the "contextmenu"
+	 *  listener). Cleared whenever the menu closes so a stale rule's actions
+	 *  can't linger into an unrelated right-click. */
+	const [smartMenuMatches, setSmartMenuMatches] = createSignal<ResolvedSmartMatch[]>([]);
+	/** What the menu actually lists and underlines: built-in Copy-only groups are
+	 *  dropped once anything more specific (another rule, or the link) is on offer. */
+	const visibleSmartMenuMatches = () => selectMenuMatches(smartMenuMatches(), linkMenuTarget() !== null);
 
 	const openLink = (link: LinkTarget) => {
 		if (link.path.startsWith("http://") || link.path.startsWith("https://")) {
@@ -470,6 +480,52 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 					shellFamily,
 					submit,
 					props.sessionId,
+				);
+			},
+			runBackground: async (command, cwd, env) => {
+				try {
+					const outcome = (await invokeRef?.("run_background_command", {
+						command,
+						cwd: cwd || null,
+						// A command with no placeholders has nothing to pass.
+						env: Object.keys(env).length > 0 ? env : undefined,
+						// The same shell a new terminal gets; null means the default.
+						shell: settingsStore.state.shell ?? null,
+					})) as BackgroundCommandOutcome | undefined;
+					const problem = outcome ? backgroundFailureMessage(outcome) : null;
+					if (problem) toastsStore.add("Command failed", problem, "warn");
+				} catch (error) {
+					toastsStore.add("Couldn't run command", error instanceof Error ? error.message : String(error), "warn");
+				}
+			},
+			newTerminalShell: async () => {
+				try {
+					// The backend alone knows `$SHELL`, so a null setting ("use the default") is answered there.
+					const answer = (await invokeRef?.("run_command_shell_support", {
+						shell: settingsStore.state.shell ?? null,
+					})) as { shell: string; supported: boolean } | undefined;
+					if (answer && typeof answer.supported === "boolean") return answer;
+				} catch (error) {
+					appLogger.warn("terminal", "Could not check the shell for Run Command", { error });
+				}
+				// No answer means no assurance: refuse rather than type into a shell we know nothing about.
+				return { shell: "your shell", supported: false };
+			},
+			onUnsupportedNewTerminalShell: (shell) => {
+				toastsStore.add(
+					"Can't run in a new terminal",
+					`Run Command types its command line into the new terminal, which isn't safe to do for ${shell}. ` +
+						"Choose “In the background” for this rule, or use bash, zsh, ksh, dash or sh as your shell.",
+					"warn",
+				);
+			},
+			onNewTerminalRefused: (reason) => {
+				toastsStore.add(
+					"Can't run in a new terminal",
+					reason === "control_bytes"
+						? "The text this rule uses contains a control character, which a terminal's line editor would act on instead of typing. Choose “In the background” for this rule."
+						: "The command line is too long to type into a new terminal reliably. Choose “In the background” for this rule, or shorten the command.",
+					"warn",
 				);
 			},
 			runInNewTerminal: async (text) => {
@@ -1134,8 +1190,8 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 		// menu — same visual as the Ctrl/Cmd-hover underline above (independent of
 		// `visuals.solid`/modifier state), so opening the menu confirms which text
 		// its actions will operate on.
-		if (smartMenuMatch()) {
-			for (const span of smartMenuMatchSpans()) {
+		for (const match of visibleSmartMenuMatches()) {
+			for (const span of smartMenuMatchSpans(match)) {
 				if (span.row >= 0 && span.row < maxRow) {
 					const x = span.colStart * m.cellWidth;
 					const w = (span.colEnd - span.colStart) * m.cellWidth;
@@ -1149,16 +1205,14 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 		}
 	}
 
-	/** Converts `smartMenuMatch()`'s start/end coords into per-viewport-row
+	/** Converts a match's start/end coords into per-viewport-row
 	 *  underline spans, the same shape `hoveredLink.spans` uses — mirrors
 	 *  `paintSelection`'s row iteration/multi-row handling for a match that
 	 *  spans a soft-wrap boundary. The coords are eviction-stable selection rows
 	 *  (`trySmartMatch` is fed `viewportRowToAbs`), so they map back through
 	 *  `selectionAbsRowToViewport` and index `rowCache` directly, exactly like
 	 *  `paintSelection`. */
-	function smartMenuMatchSpans(): { row: number; colStart: number; colEnd: number }[] {
-		const match = smartMenuMatch();
-		if (!match) return [];
+	function smartMenuMatchSpans(match: ResolvedSmartMatch): { row: number; colStart: number; colEnd: number }[] {
 		const absStartRow = Math.min(match.startCoord.row, match.endCoord.row);
 		const absEndRow = Math.max(match.startCoord.row, match.endCoord.row);
 		const startFirst = match.startCoord.row <= match.endCoord.row;
@@ -3734,16 +3788,23 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 		 *  no master on/off switch; "Double-click performs" only controls
 		 *  what double-click itself does, not quad-click or the context menu. */
 		function trySmartMatch(absRow: number, col: number): ResolvedSmartMatch | null {
+			return trySmartMatches(absRow, col)[0] ?? null;
+		}
+
+		/** Every rule matching at the click position, best first — what the
+		 *  right-click menu lists. Gestures (double/quad-click, Alt+double-click)
+		 *  use only the winner via `trySmartMatch`. */
+		function trySmartMatches(absRow: number, col: number): ResolvedSmartMatch[] {
 			const win = buildSmartSelectionWindow(absRow, col, SMART_SELECTION_RADIUS, getRowByAbs);
-			if (win.targetOffset < 0) return null;
+			if (win.targetOffset < 0) return [];
 			const rules = resolveSmartSelectionRules(settingsStore.state.smartSelectionRules);
-			const match = findSmartMatch(win.text, win.targetOffset, rules);
-			if (!match) return null;
-			// Map the match's text-offset span back to grid coordinates via the
+			// Map each match's text-offset span back to grid coordinates via the
 			// window's per-character coordinate map.
-			const startCoord = win.coords[match.startOffset];
-			const endCoord = win.coords[match.endOffset - 1];
-			return { ...match, startCoord, endCoord };
+			return findSmartMatches(win.text, win.targetOffset, rules).map((match) => ({
+				...match,
+				startCoord: win.coords[match.startOffset],
+				endCoord: win.coords[match.endOffset - 1],
+			}));
 		}
 
 		bindings.listen(canvasRef, "mousedown", (e: MouseEvent) => {
@@ -3952,8 +4013,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 			);
 			selection.start = extended.start;
 			selection.end = extended.end;
-			const mRepaint = metrics();
-			if (currentFrame && mRepaint) paintFrame(currentFrame, mRepaint);
+			scheduleRepaint();
 		};
 
 		// Always remember the position so the modifier-held effect can resolve it
@@ -4158,6 +4218,44 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 				}
 				return;
 			}
+			// A rule of the user's that matches the link wins over the built-in open:
+			// run its default action. With no such rule, fall back to the link open.
+			const absRow = viewportRowToAbs(at.row);
+			// Not with Alt held: a real Alt+double-click delivers a click BEFORE its second
+			// mousedown, and the Alt+double-click gesture (mousedown handler) already runs the
+			// default action, so doing it here too would run it twice.
+			const matches = absRow !== null && !e.altKey ? trySmartMatches(absRow, at.col) : [];
+			const agentRunning = terminalsStore.getAgentTypeForSession(props.sessionId) !== null;
+			const rule = pickLinkClickRule(matches, { agentRunning });
+			// A rule that types is only safe to run from one click when the shell itself is at the
+			// prompt. The agent check above only sees a DETECTED agent; vim, a REPL, ssh, a pager and an
+			// agent that has only just started would take the text as input, so ask the backend.
+			if (rule && !agentRunning && typesIntoTerminal(rule.action)) {
+				const sessionId = props.sessionId;
+				void (async () => {
+					let shellAtPrompt = false;
+					try {
+						// The foreground process's name when it is not a shell, else null.
+						shellAtPrompt = (await invokeRef?.("has_foreground_process", { sessionId })) === null;
+					} catch (error) {
+						// Unknown is treated as busy: typing into the wrong program is the worse mistake.
+						appLogger.debug("terminal", "link click: could not tell what runs in the foreground", { error });
+					}
+					const chosen = shellAtPrompt ? rule : pickLinkClickRule(matches, { agentRunning: true });
+					if (chosen) runSmartAction(chosen.action, chosen.match);
+					else void openLinkAt(at.row, at.col);
+				})();
+				return;
+			}
+			if (rule) {
+				appLogger.debug("terminal", "link click: running smart-selection rule", {
+					row: at.row,
+					col: at.col,
+					rule: rule.match.rule.id,
+				});
+				runSmartAction(rule.action, rule.match);
+				return;
+			}
 			void openLinkAt(at.row, at.col);
 		});
 
@@ -4172,14 +4270,17 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 			const pos = canvasToGrid(metrics, canvasRef, e);
 			const onLink = pressSpanAt(pos.row, pos.col) !== undefined;
 			const absRow = viewportRowToAbs(pos.row);
-			const smartMatch = absRow !== null ? trySmartMatch(absRow, pos.col) : null;
-			const hasSmartActions = smartMatch !== null && smartMatch.rule.actions.length > 0;
+			// A rule with no actions has nothing to offer, so it gets no group.
+			const smartMatches = (absRow !== null ? trySmartMatches(absRow, pos.col) : []).filter(
+				(match) => match.rule.actions.length > 0,
+			);
+			const hasSmartActions = smartMatches.length > 0;
 			if (!onLink && !hasSmartActions) return;
 			e.preventDefault();
 			// Stop the App-level terminal context menu (#terminal-panes onContextMenu)
 			// from also opening and covering our menu.
 			e.stopPropagation();
-			setSmartMenuMatch(hasSmartActions ? smartMatch : null);
+			setSmartMenuMatches(smartMatches);
 			// Clear any stale target from a previous right-click so a smart-only menu
 			// can't also show a leftover Open/Copy-link pair.
 			setLinkMenuTarget(null);
@@ -4966,16 +5067,16 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 			</div>
 			<ContextMenu
 				items={[
-					// Link detection takes priority when both apply to the same
-					// click (e.g. a URL is both a detected link AND matches the
-					// built-in iterm-http-url rule) — its Open/Copy-link pair
-					// already covers that span, so showing the rule's own
-					// Open/Copy actions too would just duplicate the label.
-					...(() => {
-						const match = smartMenuMatch();
-						if (!match || linkMenuTarget()) return [];
+					// A menu is a choice, not a gesture: list EVERY smart-selection
+					// rule that matches the click (best first), each as its own
+					// group — a header naming the rule, then its actions — with a
+					// divider between groups. A detected link doesn't hide them (an
+					// existing file path is both a link and a rule match); it gets
+					// its own "Link" group below. Precision only ranks the groups.
+					...visibleSmartMenuMatches().flatMap((match, index) => {
 						const ruleName = match.rule.name.trim();
 						return [
+							...(index > 0 ? [{ label: "", separator: true, action: () => {} }] : []),
 							// Non-actionable header naming which rule matched, so the
 							// actions below aren't a mystery list. Skipped for a
 							// user-added rule left with a blank (or whitespace-only) name.
@@ -4985,7 +5086,13 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 								action: () => runSmartAction(action, match),
 							})),
 						];
-					})(),
+					}),
+					...(linkMenuTarget() && visibleSmartMenuMatches().length > 0
+						? [
+								{ label: "", separator: true, action: () => {} },
+								{ label: "Link", header: true, action: () => {} },
+							]
+						: []),
 					...(linkMenuTarget()
 						? [
 								{
@@ -5037,7 +5144,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 				visible={linkMenu.visible()}
 				onClose={() => {
 					linkMenu.close();
-					setSmartMenuMatch(null);
+					setSmartMenuMatches([]);
 					const m = metrics();
 					if (currentFrame && m) repaintOverlay(currentFrame, m);
 				}}

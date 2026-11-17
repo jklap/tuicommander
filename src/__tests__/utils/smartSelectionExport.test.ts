@@ -7,6 +7,7 @@ import {
 	isRuleModified,
 	mergeImportedRules,
 	parseRulesExportFile,
+	RULES_EXPORT_BASE_SCHEMA_VERSION,
 	RULES_EXPORT_KIND,
 	RULES_EXPORT_SCHEMA_VERSION,
 	ruleRunsCode,
@@ -116,7 +117,8 @@ describe("buildRulesExportFile", () => {
 		const file = buildRulesExportFile([rule], "all", "1.2.3");
 
 		expect(file.kind).toBe(RULES_EXPORT_KIND);
-		expect(file.schemaVersion).toBe(RULES_EXPORT_SCHEMA_VERSION);
+		// Nothing added since the first release: stays importable by an older build.
+		expect(file.schemaVersion).toBe(RULES_EXPORT_BASE_SCHEMA_VERSION);
 		expect(file.scope).toBe("all");
 		expect(file.appVersion).toBe("1.2.3");
 		expect(file.rules).toEqual([rule]);
@@ -332,7 +334,7 @@ describe("classifyRuleImport", () => {
 		expect(result.find((c) => c.rule.id === "my-custom")?.status).toBe("new");
 	});
 
-	it.each(["run_command", "run_command_new_terminal", "send_text"] as const)(
+	it.each(["run_command", "run_command_new_terminal", "run_background", "send_text"] as const)(
 		"flags a rule with a %s action as needing review",
 		(kind) => {
 			const result = classifyRuleImport(
@@ -405,5 +407,135 @@ describe("mergeImportedRules", () => {
 		const { merged } = mergeImportedRules(defaults, [makeRule({ id: "d5", name: "D5 edited" })]);
 		expect(merged).toHaveLength(19);
 		expect(merged[5].name).toBe("D5 edited");
+	});
+});
+
+describe("export schema version", () => {
+	const version = (rules: SmartSelectionRule[]) => buildRulesExportFile(rules, "all").schemaVersion;
+
+	it("is the base version when nothing newer is used, so an older build can still read it", () => {
+		expect(RULES_EXPORT_BASE_SCHEMA_VERSION).toBe(1);
+		expect(version([makeRule(), makeRule({ id: "x", actions: [makeAction({ kind: "send_text" })] })])).toBe(1);
+		expect(version([makeRule({ actions: [makeAction({ kind: "run_command" })] })])).toBe(1);
+		expect(version([])).toBe(1);
+	});
+
+	it("is 2 as soon as any action uses the Run Command kind or a per-action option", () => {
+		expect(RULES_EXPORT_SCHEMA_VERSION).toBe(2);
+		expect(version([makeRule({ actions: [makeAction({ kind: "run_background" })] })])).toBe(2);
+		expect(version([makeRule({ actions: [makeAction({ kind: "send_text", sendReturn: "when_safe" })] })])).toBe(2);
+		expect(version([makeRule({ actions: [makeAction({ kind: "run_background", runIn: "new_terminal" })] })])).toBe(2);
+		// One such rule among plain ones is enough.
+		expect(version([makeRule(), makeRule({ id: "y", actions: [makeAction({ sendReturn: "when_safe" })] })])).toBe(2);
+	});
+
+	it("this build reads both versions and refuses a newer one with the 'newer version' message", () => {
+		const file = (schemaVersion: number) => JSON.stringify({ kind: RULES_EXPORT_KIND, schemaVersion, rules: [] });
+		expect(parseRulesExportFile(file(1)).error).toBeUndefined();
+		expect(parseRulesExportFile(file(2)).error).toBeUndefined();
+		expect(parseRulesExportFile(file(3)).error).toContain("newer version");
+	});
+
+	it("a version-2 export round-trips back through this build", () => {
+		const rule = makeRule({ actions: [makeAction({ kind: "run_background", runIn: "new_terminal" })] });
+		const back = parseRulesExportFile(JSON.stringify(buildRulesExportFile([rule], "all")));
+		expect(back.error).toBeUndefined();
+		expect(back.rules[0].actions[0]).toMatchObject({ kind: "run_background", runIn: "new_terminal" });
+	});
+});
+
+describe("per-action options in export and import", () => {
+	const importText = (action: Record<string, unknown>) =>
+		JSON.stringify({
+			kind: RULES_EXPORT_KIND,
+			schemaVersion: RULES_EXPORT_SCHEMA_VERSION,
+			rules: [
+				{
+					id: "sel-opt",
+					name: "Opt",
+					regex: "x",
+					precision: "normal",
+					enabled: true,
+					actions: [{ kind: "send_text", title: "t", parameter: "p", ...action }],
+				},
+			],
+		});
+
+	it("import reads either spelling and keeps only a recognised non-default value", () => {
+		const camel = parseRulesExportFile(importText({ sendReturn: "when_safe", runIn: "new_terminal" }));
+		expect(camel.rules[0].actions[0]).toMatchObject({ sendReturn: "when_safe", runIn: "new_terminal" });
+		const snake = parseRulesExportFile(importText({ send_return: "when_safe", run_in: "new_terminal" }));
+		expect(snake.rules[0].actions[0]).toMatchObject({ sendReturn: "when_safe", runIn: "new_terminal" });
+		for (const junk of [{ sendReturn: "always" }, { sendReturn: 3 }, { runIn: "elsewhere" }, { sendReturn: "never" }]) {
+			const action = parseRulesExportFile(importText(junk)).rules[0].actions[0];
+			expect("sendReturn" in action).toBe(false);
+			expect("runIn" in action).toBe(false);
+		}
+	});
+
+	it("export carries the options so a round trip keeps them", () => {
+		const rule = makeRule({ actions: [makeAction({ kind: "send_text", sendReturn: "when_safe" })] });
+		const file = buildRulesExportFile([rule], "all");
+		const back = parseRulesExportFile(JSON.stringify(file));
+		expect(back.rules[0].actions[0].sendReturn).toBe("when_safe");
+	});
+
+	it("the older run_command and Send Text + when safe are the same action, so neither counts as a change", () => {
+		const older = makeRule({ actions: [makeAction({ kind: "run_command" })] });
+		const current = makeRule({ actions: [makeAction({ kind: "send_text", sendReturn: "when_safe" })] });
+		expect(differsFromDefaultRule(older, current)).toBe(false);
+		expect(differsFromDefaultRule(current, older)).toBe(false);
+		// Send Text that does not press Enter is different.
+		expect(differsFromDefaultRule(makeRule({ actions: [makeAction({ kind: "send_text" })] }), older)).toBe(true);
+	});
+
+	it("an option makes a built-in count as modified, and an explicit default does not", () => {
+		const def = makeRule({ actions: [makeAction({ kind: "send_text" })] });
+		expect(
+			differsFromDefaultRule(makeRule({ actions: [makeAction({ kind: "send_text", sendReturn: "when_safe" })] }), def),
+		).toBe(true);
+		expect(
+			differsFromDefaultRule(makeRule({ actions: [makeAction({ kind: "send_text", sendReturn: "never" })] }), def),
+		).toBe(false);
+		const runDef = makeRule({ actions: [makeAction({ kind: "run_background" })] });
+		expect(
+			differsFromDefaultRule(
+				makeRule({ actions: [makeAction({ kind: "run_background", runIn: "new_terminal" })] }),
+				runDef,
+			),
+		).toBe(true);
+		expect(
+			differsFromDefaultRule(
+				makeRule({ actions: [makeAction({ kind: "run_background", runIn: "background" })] }),
+				runDef,
+			),
+		).toBe(false);
+	});
+});
+
+describe("builtInHash is machine-local bookkeeping", () => {
+	it("is stripped from an export, whatever the scope, without touching the caller's rules", () => {
+		const stamped = makeRule({ builtInHash: "0d5c4df7" });
+		const file = buildRulesExportFile([stamped, makeRule({ id: "sel-x" })], "all");
+		expect(file.rules.every((r) => !("builtInHash" in r))).toBe(true);
+		expect(JSON.stringify(file)).not.toContain("0d5c4df7");
+		expect(stamped.builtInHash).toBe("0d5c4df7");
+	});
+
+	it("is not read from an imported file (an import cannot claim a baseline)", () => {
+		const text = JSON.stringify({
+			kind: RULES_EXPORT_KIND,
+			schemaVersion: RULES_EXPORT_SCHEMA_VERSION,
+			rules: [{ ...makeRule({ id: "sel-imp", name: "Imported" }), builtInHash: "deadbeef", built_in_hash: "deadbeef" }],
+		});
+		const parsed = parseRulesExportFile(text);
+		expect(parsed.error).toBeUndefined();
+		expect(parsed.rules).toHaveLength(1);
+		expect("builtInHash" in parsed.rules[0]).toBe(false);
+	});
+
+	it("does not make a rule look modified (it is not a scalar the comparison reads)", () => {
+		const defaults = new Map([["iterm-word", makeRule()]]);
+		expect(isRuleModified(makeRule({ builtInHash: "0d5c4df7" }), defaults)).toBe(false);
 	});
 });

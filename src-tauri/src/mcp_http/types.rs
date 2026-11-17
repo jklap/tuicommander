@@ -198,13 +198,16 @@ pub(super) struct OutputQuery {
 #[derive(Deserialize)]
 pub(super) struct PathQuery {
     pub path: String,
-    /// `"staged"` or absent/unstaged — only consumed by `repo_diff`. Other
-    /// `PathQuery` handlers ignore it. See `FileQuery::scope` for the
-    /// per-file equivalent.
-    #[serde(default)]
+}
+
+/// Repo path plus the optional diff scope (`staged`, `head`, a commit hash,
+/// `base:<ref>`, `base-uncommitted:<ref>` or `range:<from>..<to>`)
+/// that the IPC diff commands take, so both transports reach the same diff.
+#[derive(Deserialize)]
+pub(super) struct DiffScopeQuery {
+    pub path: String,
     pub scope: Option<String>,
-    /// Whitespace/case diff options — only consumed by `repo_diff`. See
-    /// `FileQuery`'s identical fields for the per-file equivalent.
+    /// Whitespace/case diff options, the same four booleans `PathQuery` takes.
     #[serde(default, rename = "ignoreLeadingWs")]
     pub ignore_leading_ws: bool,
     #[serde(default, rename = "ignoreTrailingWs")]
@@ -215,7 +218,7 @@ pub(super) struct PathQuery {
     pub ignore_case: bool,
 }
 
-impl PathQuery {
+impl DiffScopeQuery {
     pub fn diff_options(&self) -> crate::diff_options::DiffOptions {
         crate::diff_options::DiffOptions {
             ignore_leading_ws: self.ignore_leading_ws,
@@ -224,15 +227,6 @@ impl PathQuery {
             ignore_case: self.ignore_case,
         }
     }
-}
-
-/// Repo path plus the optional diff scope (`staged`, `head`, a commit hash,
-/// `base:<ref>`, `base-uncommitted:<ref>` or `range:<from>..<to>`)
-/// that the IPC diff commands take, so both transports reach the same diff.
-#[derive(Deserialize)]
-pub(super) struct DiffScopeQuery {
-    pub path: String,
-    pub scope: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -969,6 +963,25 @@ pub(super) struct DeleteNoteAssetsRequest {
 pub(super) struct DeleteNoteAssetsBatchRequest {
     #[serde(rename = "noteIds")]
     pub note_ids: Vec<String>,
+}
+
+#[derive(Deserialize)]
+pub(super) struct RunBackgroundCommandRequest {
+    pub command: String,
+    #[serde(default)]
+    pub cwd: Option<String>,
+    /// Values for the variable references in `command`; only the fixed `TUIC_*` names are accepted.
+    #[serde(default)]
+    pub env: Option<std::collections::HashMap<String, String>>,
+    /// The Settings → Shell choice; absent or null means the default shell (`$SHELL`).
+    #[serde(default)]
+    pub shell: Option<String>,
+}
+
+#[derive(Deserialize)]
+pub(super) struct RunCommandShellSupportRequest {
+    #[serde(default)]
+    pub shell: Option<String>,
 }
 
 #[derive(Deserialize)]
