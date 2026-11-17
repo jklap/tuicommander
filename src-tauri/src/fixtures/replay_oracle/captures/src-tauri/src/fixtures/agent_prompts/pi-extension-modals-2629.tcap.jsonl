@@ -3,6 +3,7 @@
 {"record":1,"state":{"shell":0,"agent":"starting","awaiting":false,"question":null,"confident":false,"last_question":null,"choice_sig":null,"fullscreen":false}}
 {"record":3,"state":{"shell":0,"agent":"starting","awaiting":false,"question":null,"confident":false,"last_question":null,"choice_sig":null,"fullscreen":false}}
 {"record":4,"event":{"type":"shell-state","state":"idle","agent_type":"pi"}}
+{"record":4,"event":{"type":"agent-block","action":"end","line":0,"on_alt_screen":false,"from_transcript_dump":false,"new_dump_generation":false,"_turn_epoch":0}}
 {"record":4,"event":{"type":"user-input","content":"","line":-1,"_turn_epoch":0}}
 {"record":4,"state":{"shell":2,"agent":"idle","awaiting":false,"question":null,"confident":false,"last_question":null,"choice_sig":null,"fullscreen":false}}
 {"record":6,"event":{"type":"shell-state","state":"busy","agent_type":"pi"}}
@@ -34,6 +35,7 @@
 {"record":29,"state":{"shell":1,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":"","choice_sig":null,"fullscreen":false}}
 {"record":30,"state":{"shell":1,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":"","choice_sig":null,"fullscreen":false}}
 {"record":31,"event":{"type":"shell-state","state":"idle","agent_type":"pi"}}
+{"record":31,"event":{"type":"agent-block","action":"end","line":20,"on_alt_screen":false,"from_transcript_dump":false,"new_dump_generation":false,"_turn_epoch":2}}
 {"record":31,"event":{"type":"user-input","content":"","line":-1,"_turn_epoch":2}}
 {"record":31,"state":{"shell":2,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":"","choice_sig":null,"fullscreen":false}}
 {"record":33,"event":{"type":"shell-state","state":"busy","agent_type":"pi"}}
@@ -57,6 +59,7 @@
 {"record":49,"state":{"shell":1,"agent":"awaiting_input","awaiting":true,"question":"","confident":true,"last_question":"","choice_sig":null,"fullscreen":false}}
 {"record":50,"event":{"type":"protocol-question-cleared"}}
 {"record":50,"event":{"type":"shell-state","state":"idle","agent_type":"pi"}}
+{"record":50,"event":{"type":"agent-block","action":"end","line":26,"on_alt_screen":false,"from_transcript_dump":false,"new_dump_generation":false,"_turn_epoch":3}}
 {"record":50,"event":{"type":"user-input","content":"","line":-1,"_turn_epoch":3}}
 {"record":50,"state":{"shell":2,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":"","choice_sig":null,"fullscreen":false}}
 {"record":52,"event":{"type":"shell-state","state":"busy","agent_type":"pi"}}
@@ -76,6 +79,7 @@
 {"record":63,"state":{"shell":1,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":"","choice_sig":null,"fullscreen":false}}
 {"record":64,"state":{"shell":1,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":"","choice_sig":null,"fullscreen":false}}
 {"record":65,"event":{"type":"shell-state","state":"idle","agent_type":"pi"}}
+{"record":65,"event":{"type":"agent-block","action":"end","line":26,"on_alt_screen":false,"from_transcript_dump":false,"new_dump_generation":false,"_turn_epoch":5}}
 {"record":65,"event":{"type":"user-input","content":"","line":-1,"_turn_epoch":5}}
 {"record":65,"state":{"shell":2,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":"","choice_sig":null,"fullscreen":false}}
 {"record":67,"event":{"type":"shell-state","state":"busy","agent_type":"pi"}}
@@ -95,6 +99,7 @@
 {"record":79,"state":{"shell":1,"agent":"awaiting_input","awaiting":true,"question":"","confident":true,"last_question":"","choice_sig":null,"fullscreen":false}}
 {"record":80,"event":{"type":"protocol-question-cleared"}}
 {"record":80,"event":{"type":"shell-state","state":"idle","agent_type":"pi"}}
+{"record":80,"event":{"type":"agent-block","action":"end","line":26,"on_alt_screen":false,"from_transcript_dump":false,"new_dump_generation":false,"_turn_epoch":6}}
 {"record":80,"event":{"type":"user-input","content":"","line":-1,"_turn_epoch":6}}
 {"record":80,"state":{"shell":2,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":"","choice_sig":null,"fullscreen":false}}
 {"record":82,"event":{"type":"shell-state","state":"busy","agent_type":"pi"}}
@@ -113,6 +118,7 @@
 {"record":92,"state":{"shell":1,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":"","choice_sig":null,"fullscreen":false}}
 {"record":93,"state":{"shell":1,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":"","choice_sig":null,"fullscreen":false}}
 {"record":94,"event":{"type":"shell-state","state":"idle","agent_type":"pi"}}
+{"record":94,"event":{"type":"agent-block","action":"end","line":26,"on_alt_screen":false,"from_transcript_dump":false,"new_dump_generation":false,"_turn_epoch":8}}
 {"record":94,"event":{"type":"user-input","content":"","line":-1,"_turn_epoch":8}}
 {"record":94,"state":{"shell":2,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":"","choice_sig":null,"fullscreen":false}}
 {"record":96,"event":{"type":"shell-state","state":"busy","agent_type":"pi"}}
@@ -131,6 +137,7 @@
 {"record":107,"state":{"shell":1,"agent":"awaiting_input","awaiting":true,"question":"","confident":true,"last_question":"","choice_sig":null,"fullscreen":false}}
 {"record":108,"event":{"type":"protocol-question-cleared"}}
 {"record":108,"event":{"type":"shell-state","state":"idle","agent_type":"pi"}}
+{"record":108,"event":{"type":"agent-block","action":"end","line":26,"on_alt_screen":false,"from_transcript_dump":false,"new_dump_generation":false,"_turn_epoch":9}}
 {"record":108,"event":{"type":"user-input","content":"","line":-1,"_turn_epoch":9}}
 {"record":108,"state":{"shell":2,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":"","choice_sig":null,"fullscreen":false}}
 {"record":110,"event":{"type":"shell-state","state":"busy","agent_type":"pi"}}
@@ -155,6 +162,7 @@
 {"record":126,"state":{"shell":1,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":"","choice_sig":null,"fullscreen":false}}
 {"record":127,"state":{"shell":1,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":"","choice_sig":null,"fullscreen":false}}
 {"record":128,"event":{"type":"shell-state","state":"idle","agent_type":"pi"}}
+{"record":128,"event":{"type":"agent-block","action":"end","line":26,"on_alt_screen":false,"from_transcript_dump":false,"new_dump_generation":false,"_turn_epoch":11}}
 {"record":128,"event":{"type":"user-input","content":"","line":-1,"_turn_epoch":11}}
 {"record":128,"state":{"shell":2,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":"","choice_sig":null,"fullscreen":false}}
 {"record":130,"event":{"type":"shell-state","state":"busy","agent_type":"pi"}}
@@ -179,6 +187,7 @@
 {"record":147,"state":{"shell":1,"agent":"awaiting_input","awaiting":true,"question":"","confident":true,"last_question":"","choice_sig":null,"fullscreen":false}}
 {"record":148,"event":{"type":"protocol-question-cleared"}}
 {"record":148,"event":{"type":"shell-state","state":"idle","agent_type":"pi"}}
+{"record":148,"event":{"type":"agent-block","action":"end","line":26,"on_alt_screen":false,"from_transcript_dump":false,"new_dump_generation":false,"_turn_epoch":12}}
 {"record":148,"event":{"type":"user-input","content":"","line":-1,"_turn_epoch":12}}
 {"record":148,"state":{"shell":2,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":"","choice_sig":null,"fullscreen":false}}
 {"record":150,"event":{"type":"shell-state","state":"busy","agent_type":"pi"}}
@@ -196,6 +205,7 @@
 {"record":159,"state":{"shell":1,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":"","choice_sig":null,"fullscreen":false}}
 {"record":160,"state":{"shell":1,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":"","choice_sig":null,"fullscreen":false}}
 {"record":161,"event":{"type":"shell-state","state":"idle","agent_type":"pi"}}
+{"record":161,"event":{"type":"agent-block","action":"end","line":26,"on_alt_screen":false,"from_transcript_dump":false,"new_dump_generation":false,"_turn_epoch":14}}
 {"record":161,"event":{"type":"user-input","content":"","line":-1,"_turn_epoch":14}}
 {"record":161,"state":{"shell":2,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":"","choice_sig":null,"fullscreen":false}}
 {"record":163,"event":{"type":"shell-state","state":"busy","agent_type":"pi"}}
@@ -213,6 +223,7 @@
 {"record":173,"state":{"shell":1,"agent":"awaiting_input","awaiting":true,"question":"","confident":true,"last_question":"","choice_sig":null,"fullscreen":false}}
 {"record":174,"event":{"type":"protocol-question-cleared"}}
 {"record":174,"event":{"type":"shell-state","state":"idle","agent_type":"pi"}}
+{"record":174,"event":{"type":"agent-block","action":"end","line":26,"on_alt_screen":false,"from_transcript_dump":false,"new_dump_generation":false,"_turn_epoch":15}}
 {"record":174,"event":{"type":"user-input","content":"","line":-1,"_turn_epoch":15}}
 {"record":174,"state":{"shell":2,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":"","choice_sig":null,"fullscreen":false}}
 {"record":176,"event":{"type":"shell-state","state":"busy","agent_type":"pi"}}
@@ -222,6 +233,7 @@
 {"record":177,"state":{"shell":1,"agent":"awaiting_input","awaiting":true,"question":"","confident":true,"last_question":"","choice_sig":null,"fullscreen":false}}
 {"record":178,"event":{"type":"protocol-question-cleared"}}
 {"record":178,"event":{"type":"shell-state","state":"idle","agent_type":"pi"}}
+{"record":178,"event":{"type":"agent-block","action":"end","line":26,"on_alt_screen":false,"from_transcript_dump":false,"new_dump_generation":false,"_turn_epoch":16}}
 {"record":178,"event":{"type":"user-input","content":"","line":-1,"_turn_epoch":16}}
 {"record":178,"state":{"shell":2,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":"","choice_sig":null,"fullscreen":false}}
 {"record":180,"event":{"type":"shell-state","state":"busy","agent_type":"pi"}}
@@ -229,6 +241,7 @@
 {"record":180,"state":{"shell":1,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":"","choice_sig":null,"fullscreen":false}}
 {"record":181,"state":{"shell":1,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":"","choice_sig":null,"fullscreen":false}}
 {"record":182,"event":{"type":"shell-state","state":"idle","agent_type":"pi"}}
+{"record":182,"event":{"type":"agent-block","action":"end","line":26,"on_alt_screen":false,"from_transcript_dump":false,"new_dump_generation":false,"_turn_epoch":17}}
 {"record":182,"event":{"type":"user-input","content":"","line":-1,"_turn_epoch":17}}
 {"record":182,"state":{"shell":2,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":"","choice_sig":null,"fullscreen":false}}
 {"record":183,"state":{"shell":2,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":"","choice_sig":null,"fullscreen":false}}
