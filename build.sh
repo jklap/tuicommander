@@ -72,8 +72,8 @@ if [ -n "$BUILD" ]; then
     # TODO: make sure tuic is actually pointing to the running version?
     RUNNING_VER=$(tuic --version 2> /dev/null | awk '{print $2}')
     # 1.7.7-nightly.20260930.2c3bda965-dirty
-    if [[ "$RUNNING_VER" =~ nightly\.([0-9]{4})([0-9]{2})([0-9]{2})\.([a-z0-9]{9})(-dirty)? ]]; then
-        HASH_OLDER="${BASH_REMATCH[4]}"
+    if [[ "$RUNNING_VER" =~ nightly\.([0-9]{4})([0-9]{2})([0-9]{2})\.t([0-9]{2})([0-9]{2})\.([a-z0-9]{9})(-dirty)? ]]; then
+        HASH_OLDER="${BASH_REMATCH[6]}"
     else
         echo -e "${BOLD_RED}Could not parse nightly version from '${RUNNING_VER}', skipping changes display${OFF}"
     fi
@@ -83,7 +83,7 @@ if [ -n "$BUILD" ]; then
     RAW_VERSION=$(jq -r '.version' "src-tauri/tauri.conf.json")
     VERSION="${RAW_VERSION%%-nightly*}"
     #NIGHTLY="${VERSION}-nightly.$(date '+%Y%m%d').t$(date '+%H%M')c"
-    NIGHTLY="${VERSION}-nightly.$(date '+%Y%m%d').${HASH}${DIRTY}"
+    NIGHTLY="${VERSION}-nightly.$(date '+%Y%m%d').t$(date '+%H%M').${HASH}${DIRTY}"
     echo -e "${GREEN}Nightly version: ${NIGHTLY} (from ${RAW_VERSION})${OFF}"
 
     # Snapshot the files we patch, before (orig) and after (patched), so we can
