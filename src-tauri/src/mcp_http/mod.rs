@@ -1151,6 +1151,10 @@ fn shared_routes() -> Router<Arc<AppState>> {
         )
         .route("/attachments/upload", post(crate::attachments::upload_http))
         .route(
+            "/attachments/trust",
+            get(crate::attachments::trust::trust_status_http),
+        )
+        .route(
             "/sessions/{id}/queue",
             get(session::list_queued_commands)
                 .post(session::enqueue_command)
@@ -12212,6 +12216,34 @@ mod tests {
         let path = std::path::Path::new(reply["path"].as_str().unwrap());
         assert!(path.starts_with(state.data_dir.join("attachments/pty-upload-session")));
         assert_eq!(std::fs::read(path).unwrap(), b"attachment bytes");
+    }
+
+    // Catches: the trust-status route drifts from the IPC command's `{ root, profiles }`
+    // shape, or reports a root other than the one session uploads are written under.
+    #[tokio::test]
+    async fn attachment_trust_route_reports_root_and_profiles_shape() {
+        let state = test_state();
+        let response = build_router(state.clone(), false, true)
+            .oneshot(
+                Request::get("/attachments/trust")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(response.into_body(), 65536)
+            .await
+            .unwrap();
+        let reply: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        let root = std::fs::canonicalize(state.data_dir.join("attachments")).unwrap();
+        assert_eq!(reply["root"].as_str().unwrap(), root.to_str().unwrap());
+        // Which profiles exist depends on the machine; each must carry the full shape.
+        for profile in reply["profiles"].as_array().unwrap() {
+            assert!(profile["config_file"].is_string());
+            assert!(profile["trusted"].is_boolean());
+            assert!(profile.get("config_dir").is_some());
+        }
     }
 
     // Catches: session close retains fresh uploads under the obsolete day-count policy.

@@ -1739,6 +1739,28 @@ fn startup_mcp_config_specs(
     specs
 }
 
+/// The `.claude.json` of every Claude profile TUIC may launch: the default
+/// (`~/.claude.json`), `~/.claude-private`, `CLAUDE_CONFIG_DIR` and the roots in the
+/// agents config. Each entry pairs the file with its `CLAUDE_CONFIG_DIR` (`None` for
+/// the default profile, which needs no override). Reuses the MCP migration's profile
+/// discovery so the two lists cannot drift.
+pub(crate) fn claude_profile_configs(
+    agents: &crate::config::AgentsConfig,
+    claude_config_dir: Option<&str>,
+) -> Vec<(Option<PathBuf>, PathBuf)> {
+    let default_file = home().join(".claude.json");
+    startup_mcp_config_specs(agents, claude_config_dir)
+        .into_iter()
+        .filter(|(agent, _)| *agent == "claude")
+        .map(|(_, spec)| {
+            let dir = (spec.config_path != default_file)
+                .then(|| spec.config_path.parent().map(PathBuf::from))
+                .flatten();
+            (dir, spec.config_path)
+        })
+        .collect()
+}
+
 /// Ensure MCP bridge config is installed and up-to-date in all supported agent configs.
 /// Called on every app launch. Installs missing entries and updates stale paths.
 ///

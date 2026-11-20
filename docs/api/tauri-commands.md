@@ -514,6 +514,7 @@ The live registry exposes status via SSE events (`upstream_status_changed`). Val
 | Command | Args | Returns | Description |
 |---------|------|---------|-------------|
 | `get_agent_mcp_status` | `agent` | `AgentMcpStatus` | Check MCP config for an agent |
+| `get_attachment_trust_status` | -- | `{ root, profiles: [{ config_dir, config_file, trusted }] }` | Read-only: does each Claude profile trust the attachments folder? HTTP: `GET /attachments/trust` |
 | `install_agent_mcp` | `agent` | `String` | Install TUICommander MCP entry |
 | `remove_agent_mcp` | `agent` | `String` | Remove TUICommander MCP entry |
 | `get_agent_config_path` | `agent` | `String` | Get agent's MCP config file path |

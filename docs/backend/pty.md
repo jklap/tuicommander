@@ -265,7 +265,7 @@ repainting its unchanged anchor does not close it as replaced prose.
 
 For a managed Claude child with workspace trust acceptance enabled, the rendered screen is also checked for its exact startup safety question, both choices, and **No, exit** selected above **Yes, I trust this folder**, as recorded in the Claude startup capture. Only then does the reader send Down followed by Enter under the PTY writer lock, once for that session. Other dialogs and user-opened terminals are never answered by this path; session cleanup removes an unused allowance.
 
-The same per-session policy (`managed_first_run`) covers every managed child: an `agent spawn` child and a workflow-launched agent use one spawn path. A managed Claude child also answers the external `CLAUDE.md` imports dialog with its default **No, disable external imports** (Enter), once. A first-run dialog that TUIC does not answer (its `Enter to confirm · Esc to cancel` footer is the last row, and it is not a known dialog with its default selection, or trust acceptance is off) sets `awaiting_input` with the dialog text. The parent receives the usual `awaiting_input` notice with that text, and a workflow run shows its awaiting-input incident. Recorded in `claude-first-run-3017.tcap` (Claude Code 2.1.322).
+The same per-session policy (`managed_first_run`) covers every managed child: an `agent spawn` child and a workflow-launched agent use one spawn path. A managed Claude child also answers the external `CLAUDE.md` imports dialog with its default **No, disable external imports** (Enter), once. With workspace-trust acceptance on it also answers Claude's **Adding a new directory** question (Down then Enter, from the default **No, exit** above **Yes, add it**), once, but only when the path in the dialog is exactly this session's own attachment directory (`attachments/pty-<session id>`, compared with whitespace removed because the path wraps and may contain spaces, against both the lexical and canonical data-directory spelling). The question for any other directory stays an unanswered wait. Recorded in `claude-add-dir-trust.tcap` (Claude Code 2.1.328). A first-run dialog that TUIC does not answer (its `Enter to confirm · Esc to cancel` footer is the last row, and it is not a known dialog with its default selection, or trust acceptance is off) sets `awaiting_input` with the dialog text. The parent receives the usual `awaiting_input` notice with that text, and a workflow run shows its awaiting-input incident. Recorded in `claude-first-run-3017.tcap` (Claude Code 2.1.322).
 
 **Cursor-up clamping** — there is no reader-thread-level clamp on `ESC[nA` (cursor up) / `ESC[nF` (cursor previous line) sequences; a `clamp_cursor_up()` function used to fill that role but no longer exists. Cursor bounds are enforced by the terminal grid itself (`alacritty_terminal`'s `Term::move_up`/`move_up_and_cr`, driven from `terminal_grid.rs`), which clamps to the screen's top line.
 
@@ -1762,6 +1762,17 @@ kill and exit boundaries. `AppState::new` sweeps session directories only when t
 owner PID is provably dead. Live, reused and unknown PIDs are preserved across
 concurrent instances. The owner marker sits outside the granted directory. No cleanup visits a repository directory. Resumed tabs use
 new runtime PTY ids, so their read grants point to fresh storage.
+
+Claude asks to trust each new `--add-dir` folder, once per session. `attachments::trust` (`get_attachment_trust_status`,
+`GET /attachments/trust`) reads each Claude profile's `.claude.json` (profile discovery shared with the MCP migration,
+`agent_mcp::claude_profile_configs`) and reports whether the canonical attachments root or an ancestor has
+`projects[<path>].hasTrustDialogAccepted == true`. It is read-only by design: TUIC never writes Claude's trust store, and
+a user-opened terminal is never answered, and a managed child (`agent spawn`, workflow) is answered by `managed_first_run`
+only for its own session directory (see the first-run paragraph above). Trusting the parent silences the prompt without
+widening access; the read grant stays the per-session `--add-dir` (a sibling `pty-*` folder is still unreadable). A managed
+child gets its own new folder, so a parent's grant or trust never covers it; the parent's trust only means the child never
+sees the question. With trust acceptance off, or for any other directory, the child stops at the dialog and reports
+`awaiting_input`.
 
 Suggest choices are published once when the agent is ready, including while background descendants keep the shell busy. The completion lifecycle event still waits for an idle shell and settled background work; publishing choices does not release that gate.
 

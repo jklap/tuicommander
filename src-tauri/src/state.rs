@@ -155,6 +155,9 @@ pub(crate) struct ManagedFirstRun {
     pub(crate) answer_trust: bool,
     pub(crate) trust_answered: bool,
     pub(crate) imports_answered: bool,
+    /// Claude's "Adding a new directory" trust question for this session's own
+    /// attachment directory (`--add-dir`), answered at most once.
+    pub(crate) attachment_answered: bool,
 }
 
 /// A spawned child's initial prompt that has not reached its composer yet.

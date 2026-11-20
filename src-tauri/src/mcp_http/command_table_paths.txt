@@ -72,6 +72,7 @@
 /api/plugins/x/register
 /api/plugins/x/settings
 /api/plugins/x/unregister
+/attachments/trust
 /audio/output-devices
 /automations/action
 /circleci/token

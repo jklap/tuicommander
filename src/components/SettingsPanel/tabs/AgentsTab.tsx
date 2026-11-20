@@ -45,6 +45,11 @@ import { settingsStore } from "../../../stores/settings";
 import { type ConfigDefaults, settingsExpertStore } from "../../../stores/settingsExpert";
 import { isTauri, rpc } from "../../../transport";
 import { onClickKeyDown } from "../../../utils/a11y";
+import {
+	type AttachmentTrustStatus,
+	getAttachmentTrustStatus,
+	openAttachmentTrustTerminal,
+} from "../../../utils/attachmentTrust";
 import { buildEnvFromEntries, findDuplicateEnvKeys } from "../../../utils/envVars";
 import {
 	type ArgConflict,
@@ -851,6 +856,70 @@ const EnvFlagsSection: Component<{ agentType: AgentType }> = (props) => {
 	);
 };
 
+/**
+ * Claude asks to trust the per-session `--add-dir` uploads folder every time. This shows
+ * whether each Claude profile already trusts its parent (read-only detection; TUIC never
+ * writes the trust) and offers a terminal where the user answers Claude's own prompt once.
+ */
+const ClaudeAttachmentTrust: Component = () => {
+	const machine = useMachine();
+	const [status, setStatus] = createSignal<AttachmentTrustStatus | null>(null);
+
+	const refresh = async () => {
+		try {
+			setStatus(await getAttachmentTrustStatus());
+		} catch (err) {
+			appLogger.warn("config", "Could not read Claude's trust of the attachments folder", err);
+			setStatus(null);
+		}
+	};
+	onMount(() => {
+		if (!machine()) void refresh();
+	});
+
+	return (
+		<Show when={!machine() && status() && status()!.profiles.length > 0}>
+			<div class={a.expandedSection}>
+				<div class={a.expandedLabel}>Attachments folder</div>
+				<For each={status()!.profiles}>
+					{(profile) => (
+						<div class={a.actionsRow}>
+							<span>{profile.config_dir ?? "Default profile"}</span>
+							<span class={s.hint}>
+								{profile.trusted
+									? "Trusted: Claude does not ask about upload folders."
+									: "Not trusted: Claude asks about the upload folder at every start."}
+							</span>
+							<Show when={!profile.trusted}>
+								<Button
+									data-non-setting="Opens a terminal where you answer Claude's own trust prompt; nothing is saved by TUIC"
+									type="button"
+									onClick={() => void openAttachmentTrustTerminal(status()!, profile)}
+								>
+									Trust in a terminal
+								</Button>
+							</Show>
+						</div>
+					)}
+				</For>
+				<div class={a.actionsRow}>
+					<Button
+						data-non-setting="Re-reads Claude's trust state; changes nothing"
+						type="button"
+						onClick={() => void refresh()}
+					>
+						Re-check
+					</Button>
+					<span class={s.hint}>
+						Uploads reach Claude through a per-session folder under {status()!.root}. Trusting that parent once ends the
+						question for every session; Claude can still read only the folder it was given.
+					</span>
+				</div>
+			</div>
+		</Show>
+	);
+};
+
 /** Toggle for the native Claude Usage Dashboard feature */
 const ClaudeUsageToggle: Component = () => {
 	const [enabled, setEnabled] = createSignal(!isPluginDisabled("claude-usage"));
@@ -1548,6 +1617,7 @@ export const AgentRow: Component<{
 							<EnvFlagsSection agentType={props.agentType} />
 						</ExpertSetting>
 						<ClaudeUsageToggle />
+						<ClaudeAttachmentTrust />
 					</Show>
 				</div>
 			</Show>

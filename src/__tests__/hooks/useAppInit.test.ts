@@ -308,6 +308,7 @@ describe("initApp", () => {
 	});
 
 	afterEach(() => {
+		mockRpc.mockReset().mockResolvedValue(undefined);
 		vi.restoreAllMocks();
 		vi.useRealTimers();
 		repositoriesStore._testCancelPendingSave();
@@ -320,6 +321,10 @@ describe("initApp", () => {
 		vi.spyOn(appLogger, "debug").mockImplementation(() => {});
 		const errors = vi.spyOn(appLogger, "error").mockImplementation(() => {});
 		const warnings = vi.spyOn(appLogger, "warn").mockImplementation(() => {});
+		// The startup attachment-trust check needs a real-shaped answer, not the shared `undefined`.
+		mockRpc.mockImplementation(async (name: string) =>
+			name === "get_attachment_trust_status" ? { root: "", profiles: [] } : undefined,
+		);
 		await activityStore.hydrate();
 		const owners = [
 			(await import("../../stores/mcpPopup")).mcpPopupStore,

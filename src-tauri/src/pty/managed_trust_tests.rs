@@ -159,7 +159,25 @@ fn replay_managed_first_run(
     passes: usize,
     until_input: bool,
 ) -> Vec<u8> {
-    let capture = recorded_claude_first_run();
+    replay_managed_capture(
+        recorded_claude_first_run(),
+        state,
+        silence,
+        sid,
+        passes,
+        until_input,
+    )
+}
+
+#[cfg(unix)]
+fn replay_managed_capture(
+    capture: tuic_terminal::pty_capture::DecodedCapture,
+    state: &Arc<AppState>,
+    silence: &Arc<Mutex<SilenceState>>,
+    sid: &str,
+    passes: usize,
+    until_input: bool,
+) -> Vec<u8> {
     let (rows, cols) = capture.geometry.unwrap();
     state.config.write().progress_tracking = false;
     let written = insert_recording_session(state, sid);
@@ -298,5 +316,162 @@ async fn unanswered_first_run_dialog_reaches_the_parent_with_its_text() {
             prompt.contains(text),
             "dialog text {text:?} missing: {prompt:?}"
         );
+    }
+}
+
+// Recorded in an owned Python PTY with Claude Code 2.1.328, 41x80, on
+// 2026-11-20. See claude-add-dir-trust.md for provenance and SHA-256.
+fn recorded_claude_add_dir() -> tuic_terminal::pty_capture::DecodedCapture {
+    crate::pty_capture::decode_capture(&agent_prompt_fixture("claude-add-dir-trust.tcap")).unwrap()
+}
+
+/// The session id whose attachment directory the capture's `--add-dir` named.
+const ADD_DIR_FIXTURE_SESSION: &str = "add-dir-fixture";
+/// The data directory the capture was recorded under (never touched by a test).
+const ADD_DIR_FIXTURE_DATA_DIR: &str = "/Users/Shared/tuic-fixture";
+
+fn recorded_add_dir_screen() -> Vec<String> {
+    let capture = recorded_claude_add_dir();
+    let (rows, cols) = capture.geometry.unwrap();
+    let mut vt = VtLogBuffer::new(rows, cols, 2000);
+    for record in capture.records {
+        if record.direction == crate::pty_capture::CaptureDirection::Input {
+            break;
+        }
+        vt.process(&record.data);
+    }
+    vt.screen_rows()
+}
+
+// Catches: not recognizing the real dialog, or confirming a changed selection.
+#[test]
+fn recorded_add_dir_dialog_is_recognized_only_with_default_no_selected() {
+    let screen = recorded_add_dir_screen();
+    assert!(managed_claude_add_dir_dialog(&screen), "{screen:#?}");
+    let changed: Vec<String> = screen
+        .iter()
+        .map(|row| {
+            row.replace("❯ No, exit", "  No, exit")
+                .replace("  Yes, add it", "❯ Yes, add it")
+        })
+        .collect();
+    assert!(!managed_claude_add_dir_dialog(&changed));
+    let other: Vec<String> = screen
+        .iter()
+        .map(|row| row.replace("Adding a new directory:", "Something else:"))
+        .collect();
+    assert!(!managed_claude_add_dir_dialog(&other));
+}
+
+#[cfg(unix)]
+fn add_dir_state(sid: &str, data_dir: &str) -> (Arc<AppState>, Arc<Mutex<SilenceState>>) {
+    let (mut state, silence) = chunk_trace_state(sid);
+    Arc::get_mut(&mut state).unwrap().data_dir = std::path::PathBuf::from(data_dir);
+    (state, silence)
+}
+
+// Catches: a managed child blocking on its own attachment directory's trust
+// question, and a repaint of the answered dialog sending a second answer.
+#[cfg(unix)]
+#[test]
+fn managed_claude_answers_its_own_attachment_directory_once() {
+    let sid = ADD_DIR_FIXTURE_SESSION;
+    let (state, silence) = add_dir_state(sid, ADD_DIR_FIXTURE_DATA_DIR);
+    state.managed_first_run.insert(
+        sid.into(),
+        crate::state::ManagedFirstRun {
+            answer_trust: true,
+            ..Default::default()
+        },
+    );
+    let recorded: Vec<u8> = recorded_claude_add_dir()
+        .records
+        .into_iter()
+        .filter(|record| record.direction == crate::pty_capture::CaptureDirection::Input)
+        .flat_map(|record| record.data)
+        .collect();
+    assert_eq!(recorded, b"\x1b[B\r");
+    let written = replay_managed_capture(recorded_claude_add_dir(), &state, &silence, sid, 2, true);
+    close_pty_core(&state, sid, false);
+    assert_eq!(written, recorded);
+}
+
+// Catches: answering a directory TUIC did not grant (a different session's, or
+// any other path), and answering when trust acceptance is opted out.
+#[cfg(unix)]
+#[test]
+fn managed_claude_leaves_other_directories_and_the_opt_out_unanswered() {
+    for (name, sid, data_dir, answer_trust) in [
+        ("another session's directory", "someone-else", ADD_DIR_FIXTURE_DATA_DIR, true),
+        ("a different data directory", ADD_DIR_FIXTURE_SESSION, "/Users/Shared/other", true),
+        ("trust acceptance opted out", ADD_DIR_FIXTURE_SESSION, ADD_DIR_FIXTURE_DATA_DIR, false),
+    ] {
+        let (state, silence) = add_dir_state(sid, data_dir);
+        state.managed_first_run.insert(
+            sid.into(),
+            crate::state::ManagedFirstRun {
+                answer_trust,
+                ..Default::default()
+            },
+        );
+        let written =
+            replay_managed_capture(recorded_claude_add_dir(), &state, &silence, sid, 1, true);
+        close_pty_core(&state, sid, false);
+        assert!(written.is_empty(), "{name}: wrote {written:?}");
+    }
+}
+
+// Catches: a user-opened terminal (no managed policy) being answered.
+#[cfg(unix)]
+#[test]
+fn unmanaged_claude_attachment_directory_dialog_is_never_answered() {
+    let sid = ADD_DIR_FIXTURE_SESSION;
+    let (state, silence) = add_dir_state(sid, ADD_DIR_FIXTURE_DATA_DIR);
+    let written = replay_managed_capture(recorded_claude_add_dir(), &state, &silence, sid, 1, true);
+    close_pty_core(&state, sid, false);
+    assert!(written.is_empty(), "{written:?}");
+}
+
+// Catches: an unanswered "Adding a new directory" dialog (trust acceptance opted
+// out) raising no wait, so the parent never learns its child is blocked.
+#[cfg(unix)]
+#[tokio::test(flavor = "current_thread")]
+async fn unanswered_add_dir_dialog_reaches_the_parent_with_its_text() {
+    let sid = ADD_DIR_FIXTURE_SESSION;
+    let (state, silence) = add_dir_state(sid, ADD_DIR_FIXTURE_DATA_DIR);
+    crate::state::AppState::spawn_session_state_accumulator(state.clone());
+    state
+        .session_maps
+        .session_parent
+        .insert(sid.into(), "parent-1".into());
+    state.agent_inbox.entry("parent-1".into()).or_default();
+    state
+        .managed_first_run
+        .insert(sid.into(), crate::state::ManagedFirstRun::default());
+    let written = replay_managed_capture(recorded_claude_add_dir(), &state, &silence, sid, 1, true);
+    let mut notices = Vec::new();
+    for _ in 0..200 {
+        notices = state
+            .agent_inbox
+            .get("parent-1")
+            .map(|inbox| {
+                inbox
+                    .iter()
+                    .filter_map(|m| serde_json::from_str::<serde_json::Value>(&m.content).ok())
+                    .filter(|m| m["state"] == "awaiting_input")
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        if !notices.is_empty() {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+    }
+    close_pty_core(&state, sid, false);
+    assert!(written.is_empty(), "an unanswered dialog gets no keys");
+    assert_eq!(notices.len(), 1, "the parent must be told once: {notices:?}");
+    let prompt = notices[0]["prompt"].as_str().unwrap_or_default();
+    for text in ["Adding a new directory:", "pty-add-dir-fixture", "Yes, add it"] {
+        assert!(prompt.contains(text), "missing {text:?} in {prompt:?}");
     }
 }

@@ -2206,6 +2206,7 @@ export const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 
 	// --- MCP status ---
 	get_mcp_status: { map: () => ({ method: "GET", path: "/mcp/status" }) },
+	get_attachment_trust_status: { map: () => ({ method: "GET", path: "/attachments/trust" }) },
 	get_mcp_audit: { map: () => ({ method: "GET", path: "/mcp/audit" }) },
 	get_mcp_usage: { map: () => ({ method: "GET", path: "/mcp/usage" }) },
 

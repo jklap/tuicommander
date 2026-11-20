@@ -2401,6 +2401,14 @@ Legacy agents without a launch grant receive HTTP 409 with a new-session notice.
 Ego PTY and ACP receipts carry a notice because ego currently cannot accept extra
 read roots through invocation flags or ACP. Authentication matches the other shared HTTP routes.
 
+`GET /attachments/trust` (IPC: `get_attachment_trust_status`) reports whether Claude
+trusts the attachments root, read-only:
+`{ "root": "/abs/attachments", "profiles": [{ "config_dir": null | "/abs/profile", "config_file": "/abs/.claude.json", "trusted": bool }] }`.
+`config_dir` is the `CLAUDE_CONFIG_DIR` a non-default profile needs (`null` for the default profile).
+`trusted` is true when `projects[<root or any ancestor>].hasTrustDialogAccepted` is `true`. `profiles` is empty
+when the claude agent is not installed. The call creates the (empty) attachments root if absent and never writes
+any Claude file.
+
 ```
 GET  /fs/list?repoPath=/path/to/repo&subdir=src
 GET  /fs/search?repoPath=/path/to/repo&query=main&limit=50

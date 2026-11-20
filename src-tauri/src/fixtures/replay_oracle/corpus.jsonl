@@ -5,6 +5,7 @@
 {"fixture":"src-tauri/src/fixtures/agent_prompts/claude-2627-permission-accept.tcap","events":60}
 {"fixture":"src-tauri/src/fixtures/agent_prompts/claude-2627-permission-deny.tcap","events":59}
 {"fixture":"src-tauri/src/fixtures/agent_prompts/claude-2627-permission-escape.tcap","events":54}
+{"fixture":"src-tauri/src/fixtures/agent_prompts/claude-add-dir-trust.tcap","events":22}
 {"fixture":"src-tauri/src/fixtures/agent_prompts/claude-ask-multiselect-2634.tcap","events":109}
 {"fixture":"src-tauri/src/fixtures/agent_prompts/claude-askuser-esc-20260929.tcap","events":206}
 {"fixture":"src-tauri/src/fixtures/agent_prompts/claude-askuser-esc-21318-2839.tcap","events":101}
