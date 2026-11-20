@@ -158,6 +158,11 @@ pub(crate) struct ManagedFirstRun {
     /// Claude's "Adding a new directory" trust question for this session's own
     /// attachment directory (`--add-dir`), answered at most once.
     pub(crate) attachment_answered: bool,
+    /// When the policy was registered. TUIC answers first-run dialogs only inside
+    /// the startup window that opens here (and only before the first submitted
+    /// turn), so a dialog-shaped screen later in the session is never answered.
+    /// `None` (tests, hand-built policies) means no time bound.
+    pub(crate) registered_at: Option<std::time::Instant>,
 }
 
 /// A spawned child's initial prompt that has not reached its composer yet.

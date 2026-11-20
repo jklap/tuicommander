@@ -475,3 +475,38 @@ async fn unanswered_add_dir_dialog_reaches_the_parent_with_its_text() {
         assert!(prompt.contains(text), "missing {text:?} in {prompt:?}");
     }
 }
+
+// Catches: a dialog-shaped screen after the first submitted turn, or long after
+// startup, being answered with keystrokes (any process in the child can draw one).
+#[cfg(unix)]
+#[test]
+fn first_run_dialogs_are_not_answered_after_startup() {
+    let long_ago = std::time::Instant::now()
+        .checked_sub(std::time::Duration::from_secs(600))
+        .expect("monotonic clock far enough from its origin");
+    for (name, turn_epoch, registered_at) in [
+        ("after the first submitted turn", 1, None),
+        ("long after startup", 0, Some(long_ago)),
+    ] {
+        let sid = ADD_DIR_FIXTURE_SESSION;
+        let (state, silence) = add_dir_state(sid, ADD_DIR_FIXTURE_DATA_DIR);
+        state.managed_first_run.insert(
+            sid.into(),
+            crate::state::ManagedFirstRun {
+                answer_trust: true,
+                registered_at,
+                ..Default::default()
+            },
+        );
+        state
+            .session_maps
+            .session_states
+            .get_mut(sid)
+            .expect("the fixture registers a session state")
+            .turn_epoch = turn_epoch;
+        let written =
+            replay_managed_capture(recorded_claude_add_dir(), &state, &silence, sid, 1, true);
+        close_pty_core(&state, sid, false);
+        assert!(written.is_empty(), "{name}: wrote {written:?}");
+    }
+}

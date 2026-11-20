@@ -1683,6 +1683,7 @@ fn managed_first_run_dialog(
     screen: &[String],
 ) -> Option<String> {
     let mut managed = state.managed_first_run.get_mut(session_id)?;
+    let registered_at = managed.registered_at;
     let text = first_run_dialog_text(screen)?;
     let flat = text.replace('\n', " ");
     let claude = agent_type == Some("claude");
@@ -1716,6 +1717,12 @@ fn managed_first_run_dialog(
     if *answered {
         return None;
     }
+    // First-run dialogs exist only at startup. Later, a dialog-shaped screen is
+    // not one (any process in the child can draw one), so it is reported, not
+    // answered.
+    if !first_run_window_open(state, session_id, registered_at) {
+        return Some(text);
+    }
     // A changed selection is no longer the default this policy confirms.
     let default_selected = if trust {
         managed_claude_trust_dialog(screen)
@@ -1733,6 +1740,22 @@ fn managed_first_run_dialog(
         tracing::warn!(source = "terminal", session_id, %error, "Could not answer a managed first-run dialog");
     }
     None
+}
+
+/// Whether a managed child may still be answered: no turn has been submitted
+/// yet and it is within `STARTUP_GRACE_MAX` of its policy being registered. A
+/// missing session state fails closed.
+fn first_run_window_open(
+    state: &AppState,
+    session_id: &str,
+    registered_at: Option<std::time::Instant>,
+) -> bool {
+    let no_turn_yet = state
+        .session_maps
+        .session_states
+        .get(session_id)
+        .is_some_and(|session| session.turn_epoch == 0);
+    no_turn_yet && registered_at.is_none_or(|at| at.elapsed() < lifecycle::STARTUP_GRACE_MAX)
 }
 
 /// Whether the dialog's "Adding a new directory:" line names exactly this

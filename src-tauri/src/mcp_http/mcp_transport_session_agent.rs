@@ -3403,6 +3403,7 @@ pub(super) fn spawn_with_identity(
                 crate::state::ManagedFirstRun {
                     answer_trust: skip_trust_dialog
                         && effective_agent_type.as_deref() == Some("claude"),
+                    registered_at: Some(std::time::Instant::now()),
                     ..Default::default()
                 },
             );
