@@ -6,6 +6,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- Claude asks whether you trust the per-session uploads folder (`--add-dir`) at every start. TUIC now checks, read-only, whether each Claude profile (default, `~/.claude-private`, `CLAUDE_CONFIG_DIR`) already trusts TUIC's `attachments/` folder. If not, it shows one toast per launch and a status row in Settings > Agents > Claude, each with a **Trust now** / **Trust in a terminal** button that opens a terminal in that folder running `claude`, so you answer Claude's own prompt once. TUIC never writes Claude's trust. Trusting the parent silences the prompt but does not widen access: Claude still reads only the session folder it was given. New `get_attachment_trust_status` command and `GET /attachments/trust`.
+- A managed Claude child (`agent spawn`, workflow launch) now answers Claude's "Adding a new directory" question once, but only when the directory named is that session's own attachment folder (`attachments/pty-<session id>`) and workspace-trust acceptance is on. Any other directory's question, a user-opened terminal, and the opt-out stay unanswered and reach the parent as an `awaiting_input` wait. Recorded in `claude-add-dir-trust.tcap`.
+
 ## [2.1.1] - 2026-11-15
 
 ### Fixes
