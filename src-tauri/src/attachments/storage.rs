@@ -52,6 +52,13 @@ fn root(data_dir: &Path, create: bool) -> Result<PathBuf, String> {
     Ok(root)
 }
 
+/// The canonical attachments root, created (mode 0700) when absent. This is TUIC's own
+/// directory, so creating it is safe; the trust check and its "open a terminal here"
+/// button both need a real path.
+pub(crate) fn ensure_root(data_dir: &Path) -> Result<PathBuf, String> {
+    root(data_dir, true)
+}
+
 pub(crate) fn prepare(data_dir: &Path, kind: &str, id: &str) -> Result<PathBuf, String> {
     let name = leaf(kind, id)?;
     let path = root(data_dir, true)?.join(name);
@@ -69,6 +76,22 @@ pub(crate) fn prepare(data_dir: &Path, kind: &str, id: &str) -> Result<PathBuf, 
         Err(error) => return Err(format!("create attachment owner: {error}")),
     }
     Ok(path)
+}
+
+/// Every spelling of one session's directory a harness may print: the lexical
+/// join and the canonical one. Reads no directory and creates nothing.
+pub(crate) fn session_directory_candidates(data_dir: &Path, kind: &str, id: &str) -> Vec<PathBuf> {
+    let Ok(name) = leaf(kind, id) else {
+        return Vec::new();
+    };
+    let mut candidates = vec![data_dir.join("attachments").join(&name)];
+    if let Ok(canonical) = std::fs::canonicalize(data_dir) {
+        let canonical = canonical.join("attachments").join(&name);
+        if !candidates.contains(&canonical) {
+            candidates.push(canonical);
+        }
+    }
+    candidates
 }
 
 pub(crate) fn remove(data_dir: &Path, kind: &str, id: &str) {

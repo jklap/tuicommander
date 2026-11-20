@@ -20,6 +20,8 @@ Each terminal tab runs an independent PTY (pseudo-terminal) session with your sh
 
 Files uploaded through the mobile picker live in a session directory under TUICommander’s data directory. New Claude and Gemini sessions receive read access at launch. Closing the terminal or ending its process removes these uploads; resumed sessions need files uploaded again. Uploads leave your repository and Git excludes untouched. Old `.tuic/attachments/` directories can be removed by hand. Confined ego sessions need an existing user/profile read root; the picker shows an access notice.
 
+Claude asks whether you trust the uploads folder each time it starts. TUICommander checks whether your Claude profiles already trust TUICommander's `attachments` folder; if one does not, a toast appears once per launch and Settings > Agents > Claude shows a row with a **Trust in a terminal** button. It opens a terminal in that folder running `claude`: answer Claude's trust question once and exit, and it stops asking for every session. TUICommander never edits Claude's trust settings itself, and trusting the folder does not let Claude read other sessions' uploads.
+
 Accents sent separately from their base letters remain part of terminal text
 when you scroll, select, copy or search. Search matches the exact characters
 printed by the program: precomposed and decomposed spellings are not automatically

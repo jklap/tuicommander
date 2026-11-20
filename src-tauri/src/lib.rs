@@ -3384,6 +3384,7 @@ pub fn run(mut context: tauri::Context<tauri::Wry>) {
             agent_hook_commands::get_agent_native_status_signals,
             agent_hook_commands::set_agent_native_status_signals,
             agent_mcp::get_agent_mcp_status,
+            attachments::trust::get_attachment_trust_status,
             agent_mcp::install_agent_mcp,
             agent_mcp::remove_agent_mcp,
             agent_mcp::list_installed_mcp_integrations,

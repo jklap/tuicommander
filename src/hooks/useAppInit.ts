@@ -47,6 +47,7 @@ import { isTauri, rpc, subscribeEvents } from "../transport";
 import { getSessionConnection } from "../transportRuntime";
 import type { RepoChangeKind, SavedTerminal } from "../types";
 import { arrangeSwarmLayout } from "../utils/arrangeTmuxLayout";
+import { warnIfAttachmentsUntrusted } from "../utils/attachmentTrust";
 import { classifyFile, isImageFile } from "../utils/filePreview";
 import { navigateToTerminal } from "../utils/navigateToTerminal";
 import { assignTabToActiveGroup } from "../utils/paneTabAssign";
@@ -714,6 +715,8 @@ export async function initApp(deps: AppInitDeps) {
 
 	// Restore pane layout from disk (terminal tabs will be re-linked during terminal restore)
 	await paneLayoutStore.loadFromDisk();
+	// Read-only check; shows at most one toast per launch (see utils/attachmentTrust.ts).
+	void warnIfAttachmentsUntrusted();
 	ownSettingsSync(() => paneLayoutStore.startRemoteSync());
 
 	// Remove splash screen now that stores are hydrated — prevents flash of empty

@@ -858,6 +858,12 @@ describe("transport", () => {
 			expect(result.path).toBe("/mcp/audit");
 		});
 
+		it("maps the attachment trust status read to GET /attachments/trust", () => {
+			const result = mapCommandToHttp("get_attachment_trust_status", {});
+			expect(result.method).toBe("GET");
+			expect(result.path).toBe("/attachments/trust");
+		});
+
 		it("maps the MCP usage rollup read to GET /mcp/usage", () => {
 			const result = mapCommandToHttp("get_mcp_usage", {});
 			expect(result.method).toBe("GET");

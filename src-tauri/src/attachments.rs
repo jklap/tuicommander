@@ -3,9 +3,11 @@
 use std::path::PathBuf;
 
 mod storage;
+pub(crate) mod trust;
 use std::sync::Arc;
 pub(crate) use storage::{
     cleanup_orphans, prepare as prepare_session_directory, remove as cleanup_session,
+    session_directory_candidates,
 };
 
 use axum::Json;

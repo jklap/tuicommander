@@ -1691,9 +1691,21 @@ fn managed_first_run_dialog(
         && flat.contains("Quick safety check:")
         && flat.contains("Is this a project you created or one you trust?");
     let imports = claude && flat.contains("Allow external CLAUDE.md file imports?");
+    // Only this session's own attachment directory, which TUIC created and
+    // granted with `--add-dir`; any other directory's question stays a wait.
+    let attachment = claude
+        && managed.answer_trust
+        && flat.contains("Adding a new directory:")
+        && flat.contains("Is this a directory you created or one you trust?")
+        && dialog_names_session_attachment_dir(state, session_id, &text);
     let (answered, keys): (&mut bool, &[&[u8]]) = if trust {
         (
             &mut managed.trust_answered,
+            &[b"\x1b[B".as_slice(), b"\r".as_slice()],
+        )
+    } else if attachment {
+        (
+            &mut managed.attachment_answered,
             &[b"\x1b[B".as_slice(), b"\r".as_slice()],
         )
     } else if imports {
@@ -1707,6 +1719,8 @@ fn managed_first_run_dialog(
     // A changed selection is no longer the default this policy confirms.
     let default_selected = if trust {
         managed_claude_trust_dialog(screen)
+    } else if attachment {
+        managed_claude_add_dir_dialog(screen)
     } else {
         managed_claude_imports_dialog(screen)
     };
@@ -1719,6 +1733,44 @@ fn managed_first_run_dialog(
         tracing::warn!(source = "terminal", session_id, %error, "Could not answer a managed first-run dialog");
     }
     None
+}
+
+/// Whether the dialog's "Adding a new directory:" line names exactly this
+/// session's own attachment directory. Compared with every whitespace run
+/// removed, because the path wraps at the terminal width and may itself contain
+/// spaces ("Application Support"); the boundary words on both sides keep it an
+/// exact match, never a prefix of a longer path.
+fn dialog_names_session_attachment_dir(state: &AppState, session_id: &str, dialog: &str) -> bool {
+    let squeezed: String = dialog.split_whitespace().collect();
+    crate::attachments::session_directory_candidates(&state.data_dir, "pty", session_id)
+        .iter()
+        .any(|path| {
+            let path: String = path.to_string_lossy().split_whitespace().collect();
+            squeezed.contains(&format!("Addinganewdirectory:{path}Thissession"))
+        })
+}
+
+/// The "Adding a new directory" picker with its default `No, exit` still
+/// selected above `Yes, add it` (recorded in `claude-add-dir-trust.tcap`).
+fn managed_claude_add_dir_dialog(screen: &[String]) -> bool {
+    // The question wraps at narrow widths, so compare whitespace-normalized.
+    let text = screen
+        .join(" ")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    if !text.contains("Adding a new directory:")
+        || !text.contains("Is this a directory you created or one you trust?")
+    {
+        return false;
+    }
+    let yes = screen
+        .iter()
+        .position(|row| row.trim_start().starts_with("Yes, add it"));
+    let selected_no = screen
+        .iter()
+        .position(|row| selected_choice(row).is_some_and(|choice| choice.starts_with("No, exit")));
+    matches!((yes, selected_no), (Some(yes), Some(no)) if no < yes)
 }
 
 /// Only the first, default-No workspace trust picker of a managed Claude child.
