@@ -2656,6 +2656,16 @@ Unsupported actions are hidden. Menus close on outside tap or Escape and use
   image-content transport and do not need a filesystem grant.
 - Existing repository `.tuic/attachments/` directories and local excludes are
   untouched. You can remove these old directories and exclude entries by hand.
+- Claude-only trust helper: each session folder is new, so Claude asks "Is this a
+  directory you trust?" at every start. TUIC reads (never writes) every Claude
+  profile's `.claude.json` (default, `~/.claude-private`, `CLAUDE_CONFIG_DIR`) and
+  reports whether `attachments/` or an ancestor has `hasTrustDialogAccepted`. An
+  untrusted profile gets one toast per launch and a status row in Settings >
+  Agents > Claude. The button opens an unattached terminal in the folder running
+  `claude` (with `CLAUDE_CONFIG_DIR` for a non-default profile) so you answer
+  Claude's own prompt once. Trusting the parent only silences the prompt: the
+  read grant is still the per-session `--add-dir`, so one session cannot read a
+  sibling's uploads. No profile is reported when `claude` is not installed.
 - Installed Android Chrome PWAs accept shared files through the manifest share
   target and stage them in AI Chat. Safari on iOS has no Web Share Target support.
 - Web app manifest (`mobile-manifest.json`) with standalone display mode
