@@ -217,12 +217,21 @@ mod tests {
         }
         let template = std::env::var_os("GIT_TEMPLATE_DIR")
             .expect("the test harness must export GIT_TEMPLATE_DIR");
+        // The harness template holds an empty `hooks/` and git's one-line `info/exclude`;
+        // only the ~14 `hooks/*.sample` files are gone (that is what "skips the template" means).
+        let mut entries: Vec<String> = fs::read_dir(&template)
+            .expect("template dir exists")
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        entries.sort();
         assert!(
-            fs::read_dir(&template)
-                .expect("template dir exists")
-                .next()
-                .is_none(),
-            "GIT_TEMPLATE_DIR must be empty"
+            entries.iter().all(|name| name == "hooks" || name == "info"),
+            "GIT_TEMPLATE_DIR must hold only hooks/ and info/: {entries:?}"
+        );
+        let template_hooks = Path::new(&template).join("hooks");
+        assert!(
+            !template_hooks.exists() || fs::read_dir(&template_hooks).unwrap().next().is_none(),
+            "GIT_TEMPLATE_DIR/hooks must be empty"
         );
         let dir = TempDir::new().unwrap();
         let status = std::process::Command::new("git")
