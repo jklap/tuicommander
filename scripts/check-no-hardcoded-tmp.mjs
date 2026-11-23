@@ -75,6 +75,10 @@ const ALLOWED = new Map([
 	["src-tauri/crates/tuic-core/src/temp_paths.rs::recognized_temp_roots", "classifies ghost repo rows already in users' repositories.json (read-only)"],
 	["src-tauri/src/agent_mcp.rs::bridge_location_is_stable", "refuses to register a bridge exe living under a temp root (read-only)"],
 	["src-tauri/crates/tuic-cli/src/main.rs::disposable_roots", "refuses to register temp dirs as repos (read-only)"],
+	[
+		"src-tauri/crates/tuic-terminal/src/terminal_image_transmission.rs::temp_roots",
+		"Kitty t=t: the spec lets the terminal delete a client-created file only in known temp dirs; we never create files there",
+	],
 	["src-tauri/src/tunnels/agent.rs::launchd_socket", "macOS SSH_AUTH_SOCK discovery glob (connect only)"],
 	// Tests that assert a path is NOT under a shared temp dir.
 	[
